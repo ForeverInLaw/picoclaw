@@ -291,7 +291,17 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 	editMsg := tu.EditMessageText(tu.ID(cid), mid, htmlContent)
 	editMsg.ParseMode = telego.ModeHTML
 	_, err = c.bot.EditMessageText(ctx, editMsg)
+	if isTelegramMessageNotModified(err) {
+		return nil
+	}
 	return err
+}
+
+func isTelegramMessageNotModified(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "message is not modified")
 }
 
 // SendPlaceholder implements channels.PlaceholderCapable.

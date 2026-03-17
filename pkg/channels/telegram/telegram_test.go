@@ -253,6 +253,20 @@ func TestSend_NotRunning(t *testing.T) {
 	assert.Empty(t, caller.calls)
 }
 
+func TestEditMessage_MessageNotModifiedIsTreatedAsSuccess(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return nil, errors.New("Bad Request: message is not modified")
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	err := ch.EditMessage(context.Background(), "12345", "1", "same content")
+
+	assert.NoError(t, err)
+	assert.Len(t, caller.calls, 1)
+}
+
 func TestSend_InvalidChatID(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
