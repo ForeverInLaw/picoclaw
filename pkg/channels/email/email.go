@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	minPollIntervalMinutes = 5
+	minPollIntervalMinutes = 1
 	defaultPollInterval    = 30 * time.Minute
 	retryFloor             = 15 * time.Minute
 	retentionPeriod        = 30 * 24 * time.Hour
