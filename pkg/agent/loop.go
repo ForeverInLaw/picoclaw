@@ -186,13 +186,14 @@ func registerSharedTools(
 		// Message tool
 		if cfg.Tools.IsToolEnabled("message") {
 			messageTool := tools.NewMessageTool()
-			messageTool.SetSendCallback(func(channel, chatID, content string) error {
+			messageTool.SetSendCallback(func(toolCtx context.Context, channel, chatID, content string) error {
 				pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer pubCancel()
 				return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-					Channel: channel,
-					ChatID:  chatID,
-					Content: content,
+					Channel:          channel,
+					ChatID:           chatID,
+					Content:          content,
+					ReplyToMessageID: tools.ToolReplyToMessageID(toolCtx),
 				})
 			})
 			agent.Tools.Register(messageTool)
@@ -1341,8 +1342,9 @@ func (al *AgentLoop) runLLMIteration(
 					})
 				}
 
+				toolCtx := tools.WithToolReplyToMessageID(ctx, opts.ReplyToMessageID)
 				toolResult := agent.Tools.ExecuteWithContext(
-					ctx,
+					toolCtx,
 					tc.Name,
 					tc.Arguments,
 					opts.Channel,

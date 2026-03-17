@@ -10,7 +10,7 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	tool := NewMessageTool()
 
 	var sentChannel, sentChatID, sentContent string
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		sentChannel = channel
 		sentChatID = chatID
 		sentContent = content
@@ -61,7 +61,7 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	tool := NewMessageTool()
 
 	var sentChannel, sentChatID string
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		sentChannel = channel
 		sentChatID = chatID
 		return nil
@@ -92,11 +92,34 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	}
 }
 
+func TestMessageTool_Execute_PassesReplyToMessageIDViaContext(t *testing.T) {
+	tool := NewMessageTool()
+
+	var gotReplyTo string
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
+		gotReplyTo = ToolReplyToMessageID(ctx)
+		return nil
+	})
+
+	ctx := WithToolReplyToMessageID(
+		WithToolContext(context.Background(), "email", "sender@example.com"),
+		"<original@example.com>",
+	)
+	result := tool.Execute(ctx, map[string]any{"content": "reply"})
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if gotReplyTo != "<original@example.com>" {
+		t.Fatalf("expected reply-to message id to propagate, got %q", gotReplyTo)
+	}
+}
+
 func TestMessageTool_Execute_SendFailure(t *testing.T) {
 	tool := NewMessageTool()
 
 	sendErr := errors.New("network error")
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		return sendErr
 	})
 
@@ -149,7 +172,7 @@ func TestMessageTool_Execute_NoTargetChannel(t *testing.T) {
 	tool := NewMessageTool()
 	// No WithToolContext — channel/chatID are empty
 
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
 		return nil
 	})
 
