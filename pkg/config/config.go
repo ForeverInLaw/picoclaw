@@ -522,7 +522,19 @@ type DevicesConfig struct {
 }
 
 type VoiceConfig struct {
-	EchoTranscription bool `json:"echo_transcription" env:"PICOCLAW_VOICE_ECHO_TRANSCRIPTION"`
+	EchoTranscription bool            `json:"echo_transcription" env:"PICOCLAW_VOICE_ECHO_TRANSCRIPTION"`
+	Riva              RivaVoiceConfig `json:"riva"`
+}
+
+type RivaVoiceConfig struct {
+	Enabled                 bool   `json:"enabled"                   env:"PICOCLAW_VOICE_RIVA_ENABLED"`
+	Server                  string `json:"server"                    env:"PICOCLAW_VOICE_RIVA_SERVER"`
+	UseSSL                  bool   `json:"use_ssl"                   env:"PICOCLAW_VOICE_RIVA_USE_SSL"`
+	FunctionID              string `json:"function_id"               env:"PICOCLAW_VOICE_RIVA_FUNCTION_ID"`
+	LanguageCode            string `json:"language_code"             env:"PICOCLAW_VOICE_RIVA_LANGUAGE_CODE"`
+	CustomConfiguration     string `json:"custom_configuration"      env:"PICOCLAW_VOICE_RIVA_CUSTOM_CONFIGURATION"`
+	RequestTimeoutSeconds   int    `json:"request_timeout_seconds"   env:"PICOCLAW_VOICE_RIVA_REQUEST_TIMEOUT_SECONDS"`
+	MaxReceiveMessageLength int    `json:"max_receive_message_length" env:"PICOCLAW_VOICE_RIVA_MAX_RECEIVE_MESSAGE_LENGTH"`
 }
 
 type ProvidersConfig struct {
@@ -775,6 +787,7 @@ type ToolsConfig struct {
 	SpawnStatus     ToolConfig         `json:"spawn_status"                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
 	SPI             ToolConfig         `json:"spi"                                                      envPrefix:"PICOCLAW_TOOLS_SPI_"`
 	Subagent        ToolConfig         `json:"subagent"                                                 envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
+	TranscribeMedia ToolConfig         `json:"transcribe_media"                                         envPrefix:"PICOCLAW_TOOLS_TRANSCRIBE_MEDIA_"`
 	WebFetch        ToolConfig         `json:"web_fetch"                                                envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"                                               envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }
@@ -1140,6 +1153,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.SPI.Enabled
 	case "subagent":
 		return t.Subagent.Enabled
+	case "transcribe_media":
+		return t.TranscribeMedia.Enabled
 	case "web_fetch":
 		return t.WebFetch.Enabled
 	case "send_file":

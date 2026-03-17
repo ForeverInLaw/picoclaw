@@ -547,6 +547,9 @@ func DefaultConfig() *Config {
 			Subagent: ToolConfig{
 				Enabled: true,
 			},
+			TranscribeMedia: ToolConfig{
+				Enabled: true,
+			},
 			WebFetch: ToolConfig{
 				Enabled: true,
 			},
@@ -564,6 +567,16 @@ func DefaultConfig() *Config {
 		},
 		Voice: VoiceConfig{
 			EchoTranscription: false,
+			Riva: RivaVoiceConfig{
+				Enabled:                 false,
+				Server:                  "grpc.nvcf.nvidia.com:443",
+				UseSSL:                  true,
+				FunctionID:              "",
+				LanguageCode:            "multi",
+				CustomConfiguration:     "",
+				RequestTimeoutSeconds:   120,
+				MaxReceiveMessageLength: 64 * 1024 * 1024,
+			},
 		},
 		BuildInfo: BuildInfo{
 			Version:   Version,

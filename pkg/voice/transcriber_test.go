@@ -3,17 +3,23 @@ package voice
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+
 	"github.com/sipeed/picoclaw/pkg/config"
+	rivapb "github.com/sipeed/picoclaw/pkg/voice/rivapb"
 )
 
 // Ensure GroqTranscriber satisfies the Transcriber interface at compile time.
 var _ Transcriber = (*GroqTranscriber)(nil)
+var _ Transcriber = (*RivaTranscriber)(nil)
 
 func TestGroqTranscriberName(t *testing.T) {
 	tr := NewGroqTranscriber("sk-test")
@@ -33,6 +39,22 @@ func TestDetectTranscriber(t *testing.T) {
 			name:    "no config",
 			cfg:     &config.Config{},
 			wantNil: true,
+		},
+		{
+			name: "riva provider key",
+			cfg: &config.Config{
+				Providers: config.ProvidersConfig{
+					Nvidia: config.ProviderConfig{APIKey: "nvapi-test"},
+				},
+				Voice: config.VoiceConfig{
+					Riva: config.RivaVoiceConfig{
+						Enabled:    true,
+						Server:     "localhost:50051",
+						FunctionID: "fn-123",
+					},
+				},
+			},
+			wantName: "riva",
 		},
 		{
 			name: "groq provider key",
@@ -157,4 +179,114 @@ func TestTranscribe(t *testing.T) {
 			t.Fatal("expected error for missing file, got nil")
 		}
 	})
+}
+
+type testRivaSpeechRecognitionServer struct {
+	rivapb.UnimplementedRivaSpeechRecognitionServer
+	t *testing.T
+}
+
+func (s *testRivaSpeechRecognitionServer) Recognize(
+	ctx context.Context,
+	req *rivapb.RecognizeRequest,
+) (*rivapb.RecognizeResponse, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		s.t.Fatal("expected metadata")
+	}
+	if got := md.Get("function-id"); len(got) != 1 || got[0] != "fn-123" {
+		s.t.Fatalf("unexpected function-id metadata: %#v", got)
+	}
+	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer nvapi-test" {
+		s.t.Fatalf("unexpected authorization metadata: %#v", got)
+	}
+	if req.GetConfig().GetLanguageCode() != "multi" {
+		s.t.Fatalf("unexpected language code: %s", req.GetConfig().GetLanguageCode())
+	}
+	if req.GetConfig().GetCustomConfiguration()["task"] != "translate" {
+		s.t.Fatalf("unexpected custom configuration: %#v", req.GetConfig().GetCustomConfiguration())
+	}
+	if req.GetConfig().GetSampleRateHertz() != 16000 {
+		s.t.Fatalf("unexpected sample rate: %d", req.GetConfig().GetSampleRateHertz())
+	}
+	if req.GetConfig().GetAudioChannelCount() != 1 {
+		s.t.Fatalf("unexpected channel count: %d", req.GetConfig().GetAudioChannelCount())
+	}
+	if len(req.GetAudio()) == 0 {
+		s.t.Fatal("expected audio bytes")
+	}
+
+	return &rivapb.RecognizeResponse{
+		Results: []*rivapb.SpeechRecognitionResult{
+			{
+				AudioProcessed: 1.25,
+				Alternatives: []*rivapb.SpeechRecognitionAlternative{
+					{
+						Transcript:   "hello from riva",
+						LanguageCode: []string{"en-US"},
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func TestRivaTranscriberTranscribe(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error: %v", err)
+	}
+	defer lis.Close()
+
+	server := grpc.NewServer()
+	rivapb.RegisterRivaSpeechRecognitionServer(server, &testRivaSpeechRecognitionServer{t: t})
+	defer server.Stop()
+
+	go func() {
+		_ = server.Serve(lis)
+	}()
+
+	audioPath := filepath.Join(t.TempDir(), "sample.wav")
+	if err := os.WriteFile(audioPath, buildTestWAV(), 0o644); err != nil {
+		t.Fatalf("failed to write test wav: %v", err)
+	}
+
+	tr := NewRivaTranscriber("nvapi-test", config.RivaVoiceConfig{
+		Enabled:             true,
+		Server:              lis.Addr().String(),
+		UseSSL:              false,
+		FunctionID:          "fn-123",
+		LanguageCode:        "multi",
+		CustomConfiguration: "task:translate",
+	})
+
+	resp, err := tr.Transcribe(context.Background(), audioPath)
+	if err != nil {
+		t.Fatalf("Transcribe() error: %v", err)
+	}
+	if resp.Text != "hello from riva" {
+		t.Fatalf("Text = %q, want %q", resp.Text, "hello from riva")
+	}
+	if resp.Language != "en-US" {
+		t.Fatalf("Language = %q, want %q", resp.Language, "en-US")
+	}
+	if resp.Duration != 1.25 {
+		t.Fatalf("Duration = %v, want 1.25", resp.Duration)
+	}
+}
+
+func buildTestWAV() []byte {
+	return []byte{
+		'R', 'I', 'F', 'F', 40, 0, 0, 0,
+		'W', 'A', 'V', 'E',
+		'f', 'm', 't', ' ', 16, 0, 0, 0,
+		1, 0,
+		1, 0,
+		0x80, 0x3e, 0, 0,
+		0x00, 0x7d, 0, 0,
+		2, 0,
+		16, 0,
+		'd', 'a', 't', 'a', 4, 0, 0, 0,
+		0, 0, 0, 0,
+	}
 }

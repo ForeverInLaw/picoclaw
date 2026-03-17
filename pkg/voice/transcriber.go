@@ -166,6 +166,9 @@ func (t *GroqTranscriber) Name() string {
 // DetectTranscriber inspects cfg and returns the appropriate Transcriber, or
 // nil if no supported transcription provider is configured.
 func DetectTranscriber(cfg *config.Config) Transcriber {
+	if cfg.Voice.Riva.Enabled && cfg.Providers.Nvidia.APIKey != "" {
+		return NewRivaTranscriber(cfg.Providers.Nvidia.APIKey, cfg.Voice.Riva)
+	}
 	// Direct Groq provider config takes priority.
 	if key := cfg.Providers.Groq.APIKey; key != "" {
 		return NewGroqTranscriber(key)

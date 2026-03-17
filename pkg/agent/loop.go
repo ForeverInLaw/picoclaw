@@ -489,11 +489,30 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 			sf.SetMediaStore(s)
 		}
 	})
+
+	al.syncVoiceTools()
 }
 
 // SetTranscriber injects a voice transcriber for agent-level audio transcription.
 func (al *AgentLoop) SetTranscriber(t voice.Transcriber) {
 	al.transcriber = t
+	al.syncVoiceTools()
+}
+
+func (al *AgentLoop) syncVoiceTools() {
+	cfg := al.GetConfig()
+	if cfg == nil || !cfg.Tools.IsToolEnabled("transcribe_media") || al.transcriber == nil {
+		return
+	}
+
+	tool := tools.NewTranscribeMediaTool(
+		cfg.WorkspacePath(),
+		cfg.Agents.Defaults.RestrictToWorkspace,
+		al.mediaStore,
+		al.transcriber,
+		buildAllowReadPatterns(cfg),
+	)
+	al.RegisterTool(tool)
 }
 
 var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio)(?::[^\]]*)?\]`)
