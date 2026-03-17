@@ -1476,11 +1476,11 @@ func (al *AgentLoop) selectCandidates(
 				"agent_id":    agent.ID,
 				"image_model": agent.ImageModel,
 			})
-		return agent.ImageProvider, agent.ImageCandidates, agent.ImageModel
+		return agent.ImageProvider, agent.ImageCandidates, primaryCandidateModel(agent.ImageCandidates, agent.ImageModel)
 	}
 
 	if agent.Router == nil || len(agent.LightCandidates) == 0 {
-		return agent.Provider, agent.Candidates, agent.Model
+		return agent.Provider, agent.Candidates, primaryCandidateModel(agent.Candidates, agent.Model)
 	}
 
 	_, usedLight, score := agent.Router.SelectModel(userMsg, history, agent.Model)
@@ -1491,7 +1491,7 @@ func (al *AgentLoop) selectCandidates(
 				"score":     score,
 				"threshold": agent.Router.Threshold(),
 			})
-		return agent.Provider, agent.Candidates, agent.Model
+		return agent.Provider, agent.Candidates, primaryCandidateModel(agent.Candidates, agent.Model)
 	}
 
 	logger.InfoCF("agent", "Model routing: light model selected",
@@ -1501,7 +1501,7 @@ func (al *AgentLoop) selectCandidates(
 			"score":       score,
 			"threshold":   agent.Router.Threshold(),
 		})
-	return agent.Provider, agent.LightCandidates, agent.Router.LightModel()
+	return agent.Provider, agent.LightCandidates, primaryCandidateModel(agent.LightCandidates, agent.Router.LightModel())
 }
 
 func messageHasImageInput(messages []providers.Message) bool {
@@ -1518,6 +1518,13 @@ func messageHasImageInput(messages []providers.Message) bool {
 		return false
 	}
 	return false
+}
+
+func primaryCandidateModel(candidates []providers.FallbackCandidate, fallback string) string {
+	if len(candidates) > 0 && strings.TrimSpace(candidates[0].Model) != "" {
+		return candidates[0].Model
+	}
+	return fallback
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.

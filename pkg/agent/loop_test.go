@@ -81,13 +81,13 @@ func TestSelectCandidates_UsesImageModelForImageInput(t *testing.T) {
 	imageProvider := &recordingProvider{}
 	agent := &AgentInstance{
 		ID:            "main",
-		Model:         "text-model",
+		Model:         "text-alias",
 		Provider:      textProvider,
-		Candidates:    []providers.FallbackCandidate{{Provider: "openai", Model: "text-model"}},
-		ImageModel:    "vision-model",
+		Candidates:    []providers.FallbackCandidate{{Provider: "openai", Model: "resolved-text-model"}},
+		ImageModel:    "vision-alias",
 		ImageProvider: imageProvider,
 		ImageCandidates: []providers.FallbackCandidate{
-			{Provider: "openai", Model: "vision-model"},
+			{Provider: "openai", Model: "resolved-vision-model"},
 		},
 	}
 	messages := []providers.Message{
@@ -100,11 +100,11 @@ func TestSelectCandidates_UsesImageModelForImageInput(t *testing.T) {
 	if gotProvider != imageProvider {
 		t.Fatalf("provider = %T, want image provider", gotProvider)
 	}
-	if gotModel != "vision-model" {
-		t.Fatalf("model = %q, want %q", gotModel, "vision-model")
+	if gotModel != "resolved-vision-model" {
+		t.Fatalf("model = %q, want %q", gotModel, "resolved-vision-model")
 	}
-	if len(gotCandidates) != 1 || gotCandidates[0].Model != "vision-model" {
-		t.Fatalf("candidates = %#v, want vision-model", gotCandidates)
+	if len(gotCandidates) != 1 || gotCandidates[0].Model != "resolved-vision-model" {
+		t.Fatalf("candidates = %#v, want resolved-vision-model", gotCandidates)
 	}
 }
 
