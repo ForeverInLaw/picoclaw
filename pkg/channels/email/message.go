@@ -44,13 +44,16 @@ func parseIncomingMessage(uid uint32, raw []byte) (incomingMessage, error) {
 		return incomingMessage{}, err
 	}
 	bodyText = normalizeWhitespace(bodyText)
-	rawHeader := strings.Join([]string{
-		formatEnvelope(from, subject, date, messageID),
-		fmt.Sprintf("Auto-Submitted: %s", message.Header.Get("Auto-Submitted")),
-		fmt.Sprintf("Precedence: %s", message.Header.Get("Precedence")),
-		fmt.Sprintf("List-Id: %s", message.Header.Get("List-Id")),
-		fmt.Sprintf("X-Autoreply: %s", message.Header.Get("X-Autoreply")),
-	}, "\n")
+	rawHeader := formatFilterHeader(
+		from,
+		subject,
+		date,
+		messageID,
+		message.Header.Get("Auto-Submitted"),
+		message.Header.Get("Precedence"),
+		message.Header.Get("List-Id"),
+		message.Header.Get("X-Autoreply"),
+	)
 
 	return incomingMessage{
 		UID:        uid,

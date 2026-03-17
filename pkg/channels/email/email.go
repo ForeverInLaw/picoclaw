@@ -206,6 +206,9 @@ func (c *EmailChannel) pollOnce() {
 		logger.WarnCF("email", "Email poll failed", map[string]any{"error": err.Error()})
 		return
 	}
+	if maxMessageUID > 0 {
+		c.updateLastSeenUID(maxMessageUID)
+	}
 	if len(messages) == 0 {
 		return
 	}
@@ -219,9 +222,6 @@ func (c *EmailChannel) pollOnce() {
 			continue
 		}
 		c.publishIncoming(msg)
-	}
-	if maxMessageUID > 0 {
-		c.updateLastSeenUID(maxMessageUID)
 	}
 }
 

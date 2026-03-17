@@ -129,6 +129,33 @@ func formatEnvelope(from *stdmail.Address, subject string, date time.Time, messa
 	return strings.Join(lines, "\n")
 }
 
+func formatFilterHeader(
+	from *stdmail.Address,
+	subject string,
+	date time.Time,
+	messageID string,
+	autoSubmitted string,
+	precedence string,
+	listID string,
+	xAutoReply string,
+) string {
+	lines := []string{formatEnvelope(from, subject, date, messageID)}
+	appendIfPresent := func(label, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s", label, value))
+	}
+
+	appendIfPresent("Auto-Submitted", autoSubmitted)
+	appendIfPresent("Precedence", precedence)
+	appendIfPresent("List-Id", listID)
+	appendIfPresent("X-Autoreply", xAutoReply)
+
+	return strings.Join(lines, "\n")
+}
+
 func domainFromAddress(address string) string {
 	parts := strings.SplitN(strings.TrimSpace(address), "@", 2)
 	if len(parts) != 2 {
