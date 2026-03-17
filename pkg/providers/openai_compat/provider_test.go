@@ -613,6 +613,12 @@ func TestNormalizeModel_UsesAPIBase(t *testing.T) {
 	if got := normalizeModel("deepseek/deepseek-chat", "https://api.deepseek.com/v1"); got != "deepseek-chat" {
 		t.Fatalf("normalizeModel(deepseek) = %q, want %q", got, "deepseek-chat")
 	}
+	if got := normalizeModel("nvidia/nemotron-3-super-120b-a12b", "https://integrate.api.nvidia.com/v1"); got != "nemotron-3-super-120b-a12b" {
+		t.Fatalf("normalizeModel(nvidia official) = %q, want %q", got, "nemotron-3-super-120b-a12b")
+	}
+	if got := normalizeModel("nvidia/nemotron-3-super-120b-a12b", "https://aio.ooy.cz/api/ai/proxy"); got != "nvidia/nemotron-3-super-120b-a12b" {
+		t.Fatalf("normalizeModel(nvidia proxy) = %q, want %q", got, "nvidia/nemotron-3-super-120b-a12b")
+	}
 	if got := normalizeModel("openrouter/auto", "https://openrouter.ai/api/v1"); got != "openrouter/auto" {
 		t.Fatalf("normalizeModel(openrouter) = %q, want %q", got, "openrouter/auto")
 	}

@@ -151,15 +151,24 @@ func normalizeModel(model, apiBase string) string {
 		return model
 	}
 
-	if strings.Contains(strings.ToLower(apiBase), "openrouter.ai") {
+	lowerAPIBase := strings.ToLower(apiBase)
+	if strings.Contains(lowerAPIBase, "openrouter.ai") {
 		return model
 	}
 
 	prefix := strings.ToLower(before)
 	switch prefix {
-	case "litellm", "moonshot", "nvidia", "groq", "ollama", "deepseek", "google",
+	case "litellm", "moonshot", "groq", "ollama", "deepseek", "google",
 		"openrouter", "zhipu", "mistral", "vivgrid", "minimax":
 		return after
+	case "nvidia":
+		// NVIDIA-hosted endpoints expect the vendor prefix stripped, but
+		// custom OpenAI-compatible proxies may require the full nested model ID.
+		if strings.Contains(lowerAPIBase, "integrate.api.nvidia.com") ||
+			strings.Contains(lowerAPIBase, "grpc.nvcf.nvidia.com") {
+			return after
+		}
+		return model
 	default:
 		return model
 	}
