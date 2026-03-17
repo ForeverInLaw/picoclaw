@@ -184,6 +184,20 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// Always inject — tools validate what they require.
 	ctx = WithToolContext(ctx, channel, chatID)
 
+	// Email is an untrusted channel. Do not allow tool execution from inbound
+	// email except for the message tool used to send cautious acknowledgements
+	// and notifications.
+	if ToolChannel(ctx) == "email" && name != "message" {
+		result := ErrorResult("tool execution is disabled for email channel")
+		logger.ErrorCF("tool", "Tool execution blocked for email channel",
+			map[string]any{
+				"tool":    name,
+				"channel": channel,
+				"chat_id": chatID,
+			})
+		return result
+	}
+
 	// If tool implements AsyncExecutor and callback is provided, use ExecuteAsync.
 	// The callback is a call parameter, not mutable state on the tool instance.
 	var result *ToolResult

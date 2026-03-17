@@ -177,6 +177,43 @@ func TestToolRegistry_ExecuteWithContext_EmptyContext(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_ExecuteWithContext_BlocksNonMessageToolsForEmail(t *testing.T) {
+	r := NewToolRegistry()
+	ct := &mockContextAwareTool{
+		mockRegistryTool: *newMockTool("read_file", "reads files"),
+	}
+	r.Register(ct)
+
+	result := r.ExecuteWithContext(context.Background(), "read_file", nil, "email", "sender@example.com", nil)
+
+	if !result.IsError {
+		t.Fatal("expected email tool execution to be blocked")
+	}
+	if !strings.Contains(result.ForLLM, "disabled for email channel") {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if ct.lastCtx != nil {
+		t.Fatal("tool should not have executed for email channel")
+	}
+}
+
+func TestToolRegistry_ExecuteWithContext_AllowsMessageToolForEmail(t *testing.T) {
+	r := NewToolRegistry()
+	ct := &mockContextAwareTool{
+		mockRegistryTool: *newMockTool("message", "sends messages"),
+	}
+	r.Register(ct)
+
+	result := r.ExecuteWithContext(context.Background(), "message", nil, "email", "sender@example.com", nil)
+
+	if result.IsError {
+		t.Fatalf("expected message tool to be allowed, got error: %s", result.ForLLM)
+	}
+	if ct.lastCtx == nil {
+		t.Fatal("message tool should execute for email channel")
+	}
+}
+
 func TestToolRegistry_ExecuteWithContext_AsyncCallback(t *testing.T) {
 	r := NewToolRegistry()
 	at := &mockAsyncRegistryTool{
