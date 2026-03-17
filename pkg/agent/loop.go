@@ -60,6 +60,7 @@ type processOptions struct {
 	ChatID            string   // Target chat ID for tool execution
 	SenderID          string   // Current sender ID for dynamic context
 	SenderDisplayName string   // Current sender display name for dynamic context
+	ReplyToMessageID  string   // Original inbound message ID for threaded replies
 	UserMessage       string   // User message content (may include prefix)
 	Media             []string // media:// refs from inbound message
 	DefaultResponse   string   // Response when LLM returns empty
@@ -306,9 +307,10 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 				if !alreadySent {
 					al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: response,
+						Channel:          msg.Channel,
+						ChatID:           msg.ChatID,
+						Content:          response,
+						ReplyToMessageID: msg.MessageID,
 					})
 					logger.InfoCF("agent", "Published outbound response",
 						map[string]any{
@@ -751,6 +753,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		ChatID:            msg.ChatID,
 		SenderID:          msg.SenderID,
 		SenderDisplayName: msg.Sender.DisplayName,
+		ReplyToMessageID:  msg.MessageID,
 		UserMessage:       msg.Content,
 		Media:             msg.Media,
 		DefaultResponse:   defaultResponse,
@@ -933,9 +936,10 @@ func (al *AgentLoop) runAgentLoop(
 	// 7. Optional: send response via bus
 	if opts.SendResponse {
 		al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: finalContent,
+			Channel:          opts.Channel,
+			ChatID:           opts.ChatID,
+			Content:          finalContent,
+			ReplyToMessageID: opts.ReplyToMessageID,
 		})
 	}
 
