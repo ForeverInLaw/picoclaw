@@ -1046,7 +1046,10 @@ func (al *AgentLoop) runLLMIteration(
 	// selectCandidates evaluates routing once and the decision is sticky for
 	// all tool-follow-up iterations within the same turn so that a multi-step
 	// tool chain doesn't switch models mid-way through.
-	activeCandidates, activeModel := al.selectCandidates(agent, opts.UserMessage, messages)
+	activeProvider, activeCandidates, activeModel := al.selectCandidates(agent, opts.UserMessage, messages)
+	if activeProvider == nil {
+		activeProvider = agent.Provider
+	}
 
 	for iteration < agent.MaxIterations {
 		iteration++
@@ -1094,7 +1097,7 @@ func (al *AgentLoop) runLLMIteration(
 		// parseThinkingLevel guarantees ThinkingOff for empty/unknown values,
 		// so checking != ThinkingOff is sufficient.
 		if agent.ThinkingLevel != ThinkingOff {
-			if tc, ok := agent.Provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
+			if tc, ok := activeProvider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
 				llmOpts["thinking_level"] = string(agent.ThinkingLevel)
 			} else {
 				logger.WarnCF("agent", "thinking_level is set but current provider does not support it, ignoring",
@@ -1110,10 +1113,10 @@ func (al *AgentLoop) runLLMIteration(
 			defer streamUpdater.Flush()
 
 			callProvider := func(ctx context.Context, model string) (*providers.LLMResponse, error) {
-				if streamer, ok := agent.Provider.(providers.StreamingLLMProvider); ok && streamUpdater != nil {
+				if streamer, ok := activeProvider.(providers.StreamingLLMProvider); ok && streamUpdater != nil {
 					return streamer.ChatStream(ctx, messages, providerToolDefs, model, llmOpts, streamUpdater.Offer)
 				}
-				return agent.Provider.Chat(ctx, messages, providerToolDefs, model, llmOpts)
+				return activeProvider.Chat(ctx, messages, providerToolDefs, model, llmOpts)
 			}
 
 			if len(activeCandidates) > 1 && al.fallback != nil {
@@ -1466,9 +1469,18 @@ func (al *AgentLoop) selectCandidates(
 	agent *AgentInstance,
 	userMsg string,
 	history []providers.Message,
-) (candidates []providers.FallbackCandidate, model string) {
+) (provider providers.LLMProvider, candidates []providers.FallbackCandidate, model string) {
+	if messageHasImageInput(history) && agent.ImageProvider != nil && len(agent.ImageCandidates) > 0 {
+		logger.InfoCF("agent", "Model routing: image model selected",
+			map[string]any{
+				"agent_id":    agent.ID,
+				"image_model": agent.ImageModel,
+			})
+		return agent.ImageProvider, agent.ImageCandidates, agent.ImageModel
+	}
+
 	if agent.Router == nil || len(agent.LightCandidates) == 0 {
-		return agent.Candidates, agent.Model
+		return agent.Provider, agent.Candidates, agent.Model
 	}
 
 	_, usedLight, score := agent.Router.SelectModel(userMsg, history, agent.Model)
@@ -1479,7 +1491,7 @@ func (al *AgentLoop) selectCandidates(
 				"score":     score,
 				"threshold": agent.Router.Threshold(),
 			})
-		return agent.Candidates, agent.Model
+		return agent.Provider, agent.Candidates, agent.Model
 	}
 
 	logger.InfoCF("agent", "Model routing: light model selected",
@@ -1489,7 +1501,23 @@ func (al *AgentLoop) selectCandidates(
 			"score":       score,
 			"threshold":   agent.Router.Threshold(),
 		})
-	return agent.LightCandidates, agent.Router.LightModel()
+	return agent.Provider, agent.LightCandidates, agent.Router.LightModel()
+}
+
+func messageHasImageInput(messages []providers.Message) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "user" {
+			continue
+		}
+		for _, mediaRef := range msg.Media {
+			if strings.HasPrefix(mediaRef, "data:image/") {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.

@@ -25,6 +25,8 @@ type AgentInstance struct {
 	Name                      string
 	Model                     string
 	Fallbacks                 []string
+	ImageModel                string
+	ImageFallbacks            []string
 	Workspace                 string
 	MaxIterations             int
 	MaxTokens                 int
@@ -40,6 +42,8 @@ type AgentInstance struct {
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
 	Candidates                []providers.FallbackCandidate
+	ImageProvider             providers.LLMProvider
+	ImageCandidates           []providers.FallbackCandidate
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -62,6 +66,8 @@ func NewAgentInstance(
 
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
+	imageModel := strings.TrimSpace(defaults.ImageModel)
+	imageFallbacks := append([]string(nil), defaults.ImageModelFallbacks...)
 
 	restrict := defaults.RestrictToWorkspace
 	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
@@ -196,6 +202,32 @@ func NewAgentInstance(
 
 	candidates := providers.ResolveCandidatesWithLookup(modelCfg, defaults.Provider, resolveFromModelList)
 
+	var imageProvider providers.LLMProvider
+	var imageCandidates []providers.FallbackCandidate
+	if imageModel != "" {
+		imageModelCfg := providers.ModelConfig{
+			Primary:   imageModel,
+			Fallbacks: imageFallbacks,
+		}
+		imageCandidates = providers.ResolveCandidatesWithLookup(imageModelCfg, defaults.Provider, resolveFromModelList)
+		if imageModel == model {
+			imageProvider = provider
+		} else if mc, err := cfg.GetModelConfig(imageModel); err != nil {
+			log.Printf("image routing: image_model %q not found in model_list for agent %q: %v",
+				imageModel, agentID, err)
+		} else {
+			imageProvider, _, err = providers.CreateProviderFromConfig(mc)
+			if err != nil {
+				log.Printf("image routing: failed to create provider for image_model %q for agent %q: %v",
+					imageModel, agentID, err)
+				imageCandidates = nil
+			}
+		}
+		if imageProvider == nil {
+			imageCandidates = nil
+		}
+	}
+
 	// Model routing setup: pre-resolve light model candidates at creation time
 	// to avoid repeated model_list lookups on every incoming message.
 	var router *routing.Router
@@ -220,6 +252,8 @@ func NewAgentInstance(
 		Name:                      agentName,
 		Model:                     model,
 		Fallbacks:                 fallbacks,
+		ImageModel:                imageModel,
+		ImageFallbacks:            imageFallbacks,
 		Workspace:                 workspace,
 		MaxIterations:             maxIter,
 		MaxTokens:                 maxTokens,
@@ -235,6 +269,8 @@ func NewAgentInstance(
 		Subagents:                 subagents,
 		SkillsFilter:              skillsFilter,
 		Candidates:                candidates,
+		ImageProvider:             imageProvider,
+		ImageCandidates:           imageCandidates,
 		Router:                    router,
 		LightCandidates:           lightCandidates,
 	}

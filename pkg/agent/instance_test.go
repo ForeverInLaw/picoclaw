@@ -9,6 +9,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
@@ -162,6 +163,51 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 				t.Fatalf("candidate model = %q, want %q", agent.Candidates[0].Model, tt.wantModel)
 			}
 		})
+	}
+}
+
+func TestNewAgentInstance_ConfiguresImageProviderFromModelList(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:   tmpDir,
+				ModelName:   "text-model",
+				ImageModel:  "vision-model",
+				MaxTokens:   1024,
+				Temperature: nil,
+			},
+		},
+		ModelList: []config.ModelConfig{
+			{
+				ModelName: "text-model",
+				Model:     "openai/plain-text-model",
+				APIKey:    "text-key",
+				APIBase:   "https://text.example/v1",
+			},
+			{
+				ModelName: "vision-model",
+				Model:     "openai/vision-model",
+				APIKey:    "vision-key",
+				APIBase:   "https://vision.example/v1",
+			},
+		},
+	}
+
+	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if agent.ImageModel != "vision-model" {
+		t.Fatalf("ImageModel = %q, want %q", agent.ImageModel, "vision-model")
+	}
+	if agent.ImageProvider == nil {
+		t.Fatal("ImageProvider = nil, want configured provider")
+	}
+	if len(agent.ImageCandidates) != 1 {
+		t.Fatalf("len(ImageCandidates) = %d, want 1", len(agent.ImageCandidates))
+	}
+	if agent.ImageCandidates[0] != (providers.FallbackCandidate{Provider: "openai", Model: "vision-model"}) {
+		t.Fatalf("ImageCandidates[0] = %#v, want openai/vision-model", agent.ImageCandidates[0])
 	}
 }
 

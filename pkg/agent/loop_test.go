@@ -76,6 +76,38 @@ func newTestAgentLoop(
 	return al, cfg, msgBus, provider, func() { os.RemoveAll(tmpDir) }
 }
 
+func TestSelectCandidates_UsesImageModelForImageInput(t *testing.T) {
+	textProvider := &mockProvider{}
+	imageProvider := &recordingProvider{}
+	agent := &AgentInstance{
+		ID:            "main",
+		Model:         "text-model",
+		Provider:      textProvider,
+		Candidates:    []providers.FallbackCandidate{{Provider: "openai", Model: "text-model"}},
+		ImageModel:    "vision-model",
+		ImageProvider: imageProvider,
+		ImageCandidates: []providers.FallbackCandidate{
+			{Provider: "openai", Model: "vision-model"},
+		},
+	}
+	messages := []providers.Message{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: "what is in this image?", Media: []string{"data:image/png;base64,abc"}},
+	}
+
+	gotProvider, gotCandidates, gotModel := (&AgentLoop{}).selectCandidates(agent, "what is in this image?", messages)
+
+	if gotProvider != imageProvider {
+		t.Fatalf("provider = %T, want image provider", gotProvider)
+	}
+	if gotModel != "vision-model" {
+		t.Fatalf("model = %q, want %q", gotModel, "vision-model")
+	}
+	if len(gotCandidates) != 1 || gotCandidates[0].Model != "vision-model" {
+		t.Fatalf("candidates = %#v, want vision-model", gotCandidates)
+	}
+}
+
 func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
