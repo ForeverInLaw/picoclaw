@@ -12,6 +12,18 @@ import (
 	"github.com/sipeed/picoclaw/pkg/cron"
 )
 
+type stubJobExecutor struct {
+	response string
+	err      error
+}
+
+func (s *stubJobExecutor) ProcessDirectWithChannel(
+	ctx context.Context,
+	content, sessionKey, channel, chatID string,
+) (string, error) {
+	return s.response, s.err
+}
+
 func newTestCronToolWithConfig(t *testing.T, cfg *config.Config) *CronTool {
 	t.Helper()
 	storePath := filepath.Join(t.TempDir(), "cron.json")
@@ -187,7 +199,7 @@ func TestCronTool_NonCommandJobAllowedFromRemoteChannel(t *testing.T) {
 	}
 }
 
-func TestCronTool_NonCommandJobDefaultsDeliverToFalse(t *testing.T) {
+func TestCronTool_NonCommandJobDefaultsDeliverToTrue(t *testing.T) {
 	tool := newTestCronTool(t)
 	ctx := WithToolContext(context.Background(), "telegram", "chat-1")
 	result := tool.Execute(ctx, map[string]any{
@@ -204,8 +216,8 @@ func TestCronTool_NonCommandJobDefaultsDeliverToFalse(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}
-	if jobs[0].Payload.Deliver {
-		t.Fatal("expected deliver=false by default for non-command jobs")
+	if !jobs[0].Payload.Deliver {
+		t.Fatal("expected deliver=true by default for non-command jobs")
 	}
 }
 
@@ -226,11 +238,56 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	msg, ok := tool.msgBus.SubscribeOutbound(ctx)
-	if !ok {
+	var (
+		msg bus.OutboundMessage
+		ok  bool
+	)
+	select {
+	case msg, ok = <-tool.msgBus.OutboundChan():
+	case <-ctx.Done():
 		t.Fatal("expected outbound message")
+	}
+	if !ok {
+		t.Fatal("expected outbound channel to remain open")
 	}
 	if !strings.Contains(msg.Content, "command execution is disabled") {
 		t.Fatalf("expected exec disabled message, got: %s", msg.Content)
+	}
+}
+
+func TestCronTool_ExecuteJobPublishesAgentResponseWhenDeliverDisabled(t *testing.T) {
+	tool := newTestCronTool(t)
+	tool.executor = &stubJobExecutor{response: "reminder fired"}
+
+	job := &cron.CronJob{}
+	job.Payload.Channel = "telegram"
+	job.Payload.To = "chat-1"
+	job.Payload.Message = "⏰ reminder"
+	job.Payload.Deliver = false
+
+	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var (
+		msg bus.OutboundMessage
+		ok  bool
+	)
+	select {
+	case msg, ok = <-tool.msgBus.OutboundChan():
+	case <-ctx.Done():
+		t.Fatal("expected outbound message")
+	}
+	if !ok {
+		t.Fatal("expected outbound channel to remain open")
+	}
+	if msg.Channel != "telegram" || msg.ChatID != "chat-1" {
+		t.Fatalf("unexpected outbound target: %s:%s", msg.Channel, msg.ChatID)
+	}
+	if msg.Content != "reminder fired" {
+		t.Fatalf("unexpected outbound content: %s", msg.Content)
 	}
 }

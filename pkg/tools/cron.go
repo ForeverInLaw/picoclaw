@@ -191,8 +191,9 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		return ErrorResult("one of at_seconds, every_seconds, or cron_expr is required")
 	}
 
-	// Read deliver parameter, default to false so scheduled tasks execute through the agent
-	deliver := false
+	// Default non-command jobs to direct delivery. Reminders should reliably
+	// reach the user even when no additional reasoning is needed.
+	deliver := true
 	if d, ok := args["deliver"].(bool); ok {
 		deliver = d
 	}
@@ -374,7 +375,15 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		return fmt.Sprintf("Error: %v", err)
 	}
 
-	// Response is automatically sent via MessageBus by AgentLoop
-	_ = response // Will be sent by AgentLoop
+	if response != "" {
+		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer pubCancel()
+		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+			Channel: channel,
+			ChatID:  chatID,
+			Content: response,
+		})
+	}
+
 	return "ok"
 }
