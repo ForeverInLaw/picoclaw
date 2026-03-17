@@ -93,7 +93,9 @@ You are picoclaw, a helpful AI assistant.
 Your workspace is at: %s
 - Memory: %s/memory/MEMORY.md
 - Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
+- Learnings: %s/.learnings/{LEARNINGS.md,ERRORS.md,FEATURE_REQUESTS.md}
 - Skills: %s/skills/{skill-name}/SKILL.md
+- Tools Notes: %s/TOOLS.md
 
 ## Important Rules
 
@@ -106,7 +108,16 @@ Your workspace is at: %s
 4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
 
 %s`,
-		version, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, toolDiscovery)
+		version,
+		workspacePath,
+		workspacePath,
+		workspacePath,
+		workspacePath,
+		workspacePath,
+		workspacePath,
+		workspacePath,
+		toolDiscovery,
+	)
 }
 
 func (cb *ContextBuilder) getDiscoveryRule() string {
@@ -225,6 +236,7 @@ func (cb *ContextBuilder) sourcePaths() []string {
 	return []string{
 		filepath.Join(cb.workspace, "AGENTS.md"),
 		filepath.Join(cb.workspace, "SOUL.md"),
+		filepath.Join(cb.workspace, "TOOLS.md"),
 		filepath.Join(cb.workspace, "USER.md"),
 		filepath.Join(cb.workspace, "IDENTITY.md"),
 		filepath.Join(cb.workspace, "memory", "MEMORY.md"),
@@ -435,6 +447,7 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	bootstrapFiles := []string{
 		"AGENTS.md",
 		"SOUL.md",
+		"TOOLS.md",
 		"USER.md",
 		"IDENTITY.md",
 	}

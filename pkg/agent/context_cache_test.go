@@ -105,6 +105,12 @@ func TestSingleSystemMessage(t *testing.T) {
 			if !strings.Contains(sys, "picoclaw") {
 				t.Error("system message missing identity")
 			}
+			if !strings.Contains(sys, ".learnings/") {
+				t.Error("system message missing learnings workspace path")
+			}
+			if !strings.Contains(sys, "Tools Notes:") {
+				t.Error("system message missing tools notes workspace path")
+			}
 			if !strings.Contains(sys, "Current Time") {
 				t.Error("system message missing dynamic time context")
 			}
@@ -213,6 +219,13 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 			contentV1:  "# Memory\nUser likes Go.",
 			contentV2:  "# Memory\nUser likes Rust.",
 			checkField: "User likes Rust",
+		},
+		{
+			name:       "tools file change",
+			file:       "TOOLS.md",
+			contentV1:  "# Tools\nUse rg first.",
+			contentV2:  "# Tools\nUse rg first.\nLog durable tool gotchas here.",
+			checkField: "Log durable tool gotchas here",
 		},
 	}
 
@@ -353,6 +366,12 @@ func TestNewFileCreationInvalidatesCache(t *testing.T) {
 			content:    "# Memory\nUser prefers dark mode.",
 			checkField: "User prefers dark mode",
 		},
+		{
+			name:       "new tools file",
+			file:       "TOOLS.md",
+			content:    "# Tools\nDocument environment gotchas here.",
+			checkField: "Document environment gotchas here",
+		},
 	}
 
 	for _, tt := range tests {
@@ -450,6 +469,8 @@ Updated content.`
 func TestGlobalSkillFileContentChange(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+	t.Setenv("PICOCLAW_HOME", filepath.Join(tmpHome, ".picoclaw"))
 
 	tmpDir := setupWorkspace(t, nil)
 	defer os.RemoveAll(tmpDir)
@@ -507,6 +528,8 @@ description: global-v2
 func TestBuiltinSkillFileContentChange(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+	t.Setenv("PICOCLAW_HOME", filepath.Join(tmpHome, ".picoclaw"))
 
 	tmpDir := setupWorkspace(t, nil)
 	defer os.RemoveAll(tmpDir)
