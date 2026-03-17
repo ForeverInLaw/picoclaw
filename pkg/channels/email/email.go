@@ -221,6 +221,12 @@ func (c *EmailChannel) pollOnce() {
 			})
 			continue
 		}
+		if err := c.notifyInboundMessage(msg); err != nil {
+			logger.WarnCF("email", "Failed to notify Telegram about inbound email", map[string]any{
+				"message_id": msg.MessageID,
+				"error":      err.Error(),
+			})
+		}
 		c.publishIncoming(msg)
 	}
 }

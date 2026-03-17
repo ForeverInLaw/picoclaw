@@ -169,6 +169,10 @@ func (c *BaseChannel) ReasoningChannelID() string {
 	return c.reasoningChannelID
 }
 
+func (c *BaseChannel) PublishOutbound(ctx context.Context, msg bus.OutboundMessage) error {
+	return c.bus.PublishOutbound(ctx, msg)
+}
+
 func (c *BaseChannel) IsRunning() bool {
 	return c.running.Load()
 }

@@ -507,6 +507,7 @@ type EmailConfig struct {
 	SMTPTLS            bool                `json:"smtp_tls"             env:"PICOCLAW_CHANNELS_EMAIL_SMTP_TLS"`
 	PollInterval       int                 `json:"poll_interval"        env:"PICOCLAW_CHANNELS_EMAIL_POLL_INTERVAL"`
 	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"PICOCLAW_CHANNELS_EMAIL_ALLOW_FROM"`
+	NotifyTelegramIDs  FlexibleStringSlice `json:"notify_telegram_ids"  env:"PICOCLAW_CHANNELS_EMAIL_NOTIFY_TELEGRAM_IDS"`
 	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_EMAIL_REASONING_CHANNEL_ID"`
 }
 
