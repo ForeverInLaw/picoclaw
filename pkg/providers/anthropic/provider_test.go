@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -318,6 +319,57 @@ func TestProvider_ChatStreamingRoundTrip(t *testing.T) {
 	}
 	if resp.Usage.CompletionTokens != 5 {
 		t.Errorf("CompletionTokens = %d, want 5", resp.Usage.CompletionTokens)
+	}
+}
+
+func TestProvider_ChatStream_EmitsSnapshots(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+
+		events := []string{
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stream\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-6\",\"stop_reason\":null,\"usage\":{\"input_tokens\":12,\"output_tokens\":0}}}\n\n",
+			"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n",
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" world\"}}\n\n",
+			"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+			"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n",
+			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		}
+		for _, e := range events {
+			w.Write([]byte(e))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	p := NewProviderWithBaseURL("test-token", server.URL)
+
+	var snapshots []string
+	resp, err := p.ChatStream(
+		t.Context(),
+		[]Message{{Role: "user", Content: "Hello"}},
+		nil,
+		"claude-sonnet-4.6",
+		map[string]any{},
+		func(content string) { snapshots = append(snapshots, content) },
+	)
+	if err != nil {
+		t.Fatalf("ChatStream() error: %v", err)
+	}
+	if resp.Content != "Hello world" {
+		t.Fatalf("Content = %q, want %q", resp.Content, "Hello world")
+	}
+	want := []string{"Hello", "Hello world"}
+	if !slices.Equal(snapshots, want) {
+		t.Fatalf("snapshots = %#v, want %#v", snapshots, want)
 	}
 }
 

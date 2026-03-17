@@ -1190,3 +1190,36 @@ func TestManager_SendPlaceholder(t *testing.T) {
 		t.Error("expected SendPlaceholder to fail for unknown channel")
 	}
 }
+
+func TestManager_UpdatePlaceholder(t *testing.T) {
+	mgr := &Manager{
+		channels:     make(map[string]Channel),
+		workers:      make(map[string]*channelWorker),
+		placeholders: sync.Map{},
+	}
+
+	var edited struct {
+		chatID    string
+		messageID string
+		content   string
+	}
+
+	ch := &mockMessageEditor{
+		mockChannel: mockChannel{},
+		editFn: func(_ context.Context, chatID, messageID, content string) error {
+			edited.chatID = chatID
+			edited.messageID = messageID
+			edited.content = content
+			return nil
+		},
+	}
+	mgr.channels["mock"] = ch
+	mgr.RecordPlaceholder("mock", "chat-1", "ph-1")
+
+	if ok := mgr.UpdatePlaceholder(context.Background(), "mock", "chat-1", "partial"); !ok {
+		t.Fatal("expected UpdatePlaceholder to succeed")
+	}
+	if edited.chatID != "chat-1" || edited.messageID != "ph-1" || edited.content != "partial" {
+		t.Fatalf("unexpected edit payload: %+v", edited)
+	}
+}

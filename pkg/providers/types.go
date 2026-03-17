@@ -32,6 +32,20 @@ type LLMProvider interface {
 	GetDefaultModel() string
 }
 
+// StreamingLLMProvider is an optional capability for providers that can
+// surface incremental text snapshots while a response is being generated.
+// onUpdate receives the full accumulated text so far, not a raw delta.
+type StreamingLLMProvider interface {
+	ChatStream(
+		ctx context.Context,
+		messages []Message,
+		tools []ToolDefinition,
+		model string,
+		options map[string]any,
+		onUpdate func(content string),
+	) (*LLMResponse, error)
+}
+
 type StatefulProvider interface {
 	LLMProvider
 	Close()

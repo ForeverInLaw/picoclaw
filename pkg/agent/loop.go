@@ -1087,12 +1087,22 @@ func (al *AgentLoop) runLLMIteration(
 			al.activeRequests.Add(1)
 			defer al.activeRequests.Done()
 
+			streamUpdater := newPartialReplyUpdater(al.channelManager, opts.Channel, opts.ChatID)
+			defer streamUpdater.Flush()
+
+			callProvider := func(ctx context.Context, model string) (*providers.LLMResponse, error) {
+				if streamer, ok := agent.Provider.(providers.StreamingLLMProvider); ok && streamUpdater != nil {
+					return streamer.ChatStream(ctx, messages, providerToolDefs, model, llmOpts, streamUpdater.Offer)
+				}
+				return agent.Provider.Chat(ctx, messages, providerToolDefs, model, llmOpts)
+			}
+
 			if len(activeCandidates) > 1 && al.fallback != nil {
 				fbResult, fbErr := al.fallback.Execute(
 					ctx,
 					activeCandidates,
 					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
-						return agent.Provider.Chat(ctx, messages, providerToolDefs, model, llmOpts)
+						return callProvider(ctx, model)
 					},
 				)
 				if fbErr != nil {
@@ -1108,7 +1118,7 @@ func (al *AgentLoop) runLLMIteration(
 				}
 				return fbResult.Response, nil
 			}
-			return agent.Provider.Chat(ctx, messages, providerToolDefs, activeModel, llmOpts)
+			return callProvider(ctx, activeModel)
 		}
 
 		// Retry loop for context/token errors

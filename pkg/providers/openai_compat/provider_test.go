@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -364,6 +365,54 @@ func TestProviderChat_SuccessResponseUsesStreamingDecoder(t *testing.T) {
 	}
 	if out.Content != content {
 		t.Fatalf("Content = %q, want %q", out.Content, content)
+	}
+}
+
+func TestProviderChatStream_EmitsSnapshots(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		var reqBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if reqBody["stream"] != true {
+			http.Error(w, "expected stream=true", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+
+	var snapshots []string
+	out, err := p.ChatStream(
+		t.Context(),
+		[]Message{{Role: "user", Content: "hi"}},
+		nil,
+		"gpt-4o",
+		nil,
+		func(content string) { snapshots = append(snapshots, content) },
+	)
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if out.Content != "Hello world" {
+		t.Fatalf("Content = %q, want %q", out.Content, "Hello world")
+	}
+	want := []string{"Hello", "Hello world"}
+	if !slices.Equal(snapshots, want) {
+		t.Fatalf("snapshots = %#v, want %#v", snapshots, want)
 	}
 }
 

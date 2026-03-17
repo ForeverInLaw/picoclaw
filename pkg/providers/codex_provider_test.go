@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/openai/openai-go/v3"
@@ -367,6 +368,69 @@ func TestCodexProvider_ChatRoundTrip(t *testing.T) {
 	}
 	if resp.Usage.TotalTokens != 18 {
 		t.Errorf("TotalTokens = %d, want 18", resp.Usage.TotalTokens)
+	}
+}
+
+func TestCodexProvider_ChatStream_EmitsSnapshots(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "not found: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: response.output_text.delta\n")
+		fmt.Fprint(
+			w,
+			"data: {\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello\"}\n\n",
+		)
+		fmt.Fprint(w, "event: response.output_text.delta\n")
+		fmt.Fprint(
+			w,
+			"data: {\"type\":\"response.output_text.delta\",\"sequence_number\":2,\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\" world\"}\n\n",
+		)
+
+		resp := map[string]any{
+			"id":     "resp_test",
+			"object": "response",
+			"status": "completed",
+			"output": []map[string]any{
+				{
+					"id":     "msg_1",
+					"type":   "message",
+					"role":   "assistant",
+					"status": "completed",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "Hello world"},
+					},
+				},
+			},
+		}
+		writeCompletedSSE(w, resp)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+
+	var snapshots []string
+	resp, err := provider.ChatStream(
+		t.Context(),
+		[]Message{{Role: "user", Content: "Hello"}},
+		nil,
+		"gpt-4o",
+		map[string]any{},
+		func(content string) { snapshots = append(snapshots, content) },
+	)
+	if err != nil {
+		t.Fatalf("ChatStream() error: %v", err)
+	}
+	if resp.Content != "Hello world" {
+		t.Fatalf("Content = %q, want %q", resp.Content, "Hello world")
+	}
+	want := []string{"Hello", "Hello world"}
+	if !slices.Equal(snapshots, want) {
+		t.Fatalf("snapshots = %#v, want %#v", snapshots, want)
 	}
 }
 

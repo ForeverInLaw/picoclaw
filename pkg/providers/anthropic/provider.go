@@ -96,7 +96,7 @@ func (p *Provider) Chat(
 
 	// OAuth/setup-tokens require streaming; API keys use non-streaming.
 	if p.tokenSource != nil {
-		return p.chatStreaming(ctx, params, opts)
+		return p.chatStreaming(ctx, params, opts, nil)
 	}
 
 	resp, err := p.client.Messages.New(ctx, params, opts...)
@@ -107,17 +107,54 @@ func (p *Provider) Chat(
 	return parseResponse(resp), nil
 }
 
+func (p *Provider) ChatStream(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onUpdate func(content string),
+) (*LLMResponse, error) {
+	var opts []option.RequestOption
+	if p.tokenSource != nil {
+		tok, err := p.tokenSource()
+		if err != nil {
+			return nil, fmt.Errorf("refreshing token: %w", err)
+		}
+		opts = append(opts,
+			option.WithAuthToken(tok),
+			option.WithHeader("anthropic-beta", anthropicBetaHeader),
+		)
+	}
+
+	params, err := buildParams(messages, tools, model, options)
+	if err != nil {
+		return nil, err
+	}
+
+	return p.chatStreaming(ctx, params, opts, onUpdate)
+}
+
 func (p *Provider) chatStreaming(
 	ctx context.Context,
 	params anthropic.MessageNewParams,
 	opts []option.RequestOption,
+	onUpdate func(content string),
 ) (*LLMResponse, error) {
 	stream := p.client.Messages.NewStreaming(ctx, params, opts...)
 	defer stream.Close()
 
 	var msg anthropic.Message
+	var partial strings.Builder
 	for stream.Next() {
 		event := stream.Current()
+		if event.Type == "content_block_delta" {
+			delta := event.AsContentBlockDelta().Delta
+			if delta.Type == "text_delta" && delta.Text != "" && onUpdate != nil {
+				partial.WriteString(delta.Text)
+				onUpdate(partial.String())
+			}
+		}
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
 		}

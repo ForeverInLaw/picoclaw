@@ -51,6 +51,20 @@ func (p *ClaudeProvider) Chat(
 	return resp, nil
 }
 
+func (p *ClaudeProvider) ChatStream(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onUpdate func(content string),
+) (*LLMResponse, error) {
+	if streamer, ok := any(p.delegate).(StreamingLLMProvider); ok {
+		return streamer.ChatStream(ctx, messages, tools, model, options, onUpdate)
+	}
+	return p.Chat(ctx, messages, tools, model, options)
+}
+
 func (p *ClaudeProvider) GetDefaultModel() string {
 	return p.delegate.GetDefaultModel()
 }
