@@ -108,6 +108,23 @@ func TestSelectCandidates_UsesImageModelForImageInput(t *testing.T) {
 	}
 }
 
+func TestSameTargetReplyToMessageID_OnlyForSameChannelAndChat(t *testing.T) {
+	ctx := tools.WithToolReplyToMessageID(
+		tools.WithToolContext(context.Background(), "telegram", "6669548787"),
+		"12345",
+	)
+
+	if got := sameTargetReplyToMessageID(ctx, "telegram", "6669548787"); got != "12345" {
+		t.Fatalf("same target reply-to = %q, want %q", got, "12345")
+	}
+	if got := sameTargetReplyToMessageID(ctx, "telegram", "480546776"); got != "" {
+		t.Fatalf("cross-chat reply-to = %q, want empty", got)
+	}
+	if got := sameTargetReplyToMessageID(ctx, "email", "6669548787"); got != "" {
+		t.Fatalf("cross-channel reply-to = %q, want empty", got)
+	}
+}
+
 func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {

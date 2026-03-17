@@ -189,11 +189,12 @@ func registerSharedTools(
 			messageTool.SetSendCallback(func(toolCtx context.Context, channel, chatID, content string) error {
 				pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer pubCancel()
+				replyToMessageID := sameTargetReplyToMessageID(toolCtx, channel, chatID)
 				return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 					Channel:          channel,
 					ChatID:           chatID,
 					Content:          content,
-					ReplyToMessageID: tools.ToolReplyToMessageID(toolCtx),
+					ReplyToMessageID: replyToMessageID,
 				})
 			})
 			agent.Tools.Register(messageTool)
@@ -1525,6 +1526,16 @@ func primaryCandidateModel(candidates []providers.FallbackCandidate, fallback st
 		return candidates[0].Model
 	}
 	return fallback
+}
+
+func sameTargetReplyToMessageID(ctx context.Context, channel, chatID string) string {
+	if strings.TrimSpace(channel) != strings.TrimSpace(tools.ToolChannel(ctx)) {
+		return ""
+	}
+	if strings.TrimSpace(chatID) != strings.TrimSpace(tools.ToolChatID(ctx)) {
+		return ""
+	}
+	return tools.ToolReplyToMessageID(ctx)
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
