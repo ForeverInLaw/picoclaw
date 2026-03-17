@@ -273,6 +273,7 @@ type ChannelsConfig struct {
 	WeComAIBot WeComAIBotConfig `json:"wecom_aibot"`
 	Pico       PicoConfig       `json:"pico"`
 	IRC        IRCConfig        `json:"irc"`
+	Email      EmailConfig      `json:"email"`
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
@@ -490,6 +491,23 @@ type IRCConfig struct {
 	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
 	Typing             TypingConfig        `json:"typing,omitempty"`
 	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_IRC_REASONING_CHANNEL_ID"`
+}
+
+type EmailConfig struct {
+	Enabled            bool                `json:"enabled"              env:"PICOCLAW_CHANNELS_EMAIL_ENABLED"`
+	Address            string              `json:"address"              env:"PICOCLAW_CHANNELS_EMAIL_ADDRESS"`
+	Username           string              `json:"username"             env:"PICOCLAW_CHANNELS_EMAIL_USERNAME"`
+	Password           string              `json:"password"             env:"PICOCLAW_CHANNELS_EMAIL_PASSWORD"`
+	Folder             string              `json:"folder"               env:"PICOCLAW_CHANNELS_EMAIL_FOLDER"`
+	IMAPHost           string              `json:"imap_host"            env:"PICOCLAW_CHANNELS_EMAIL_IMAP_HOST"`
+	IMAPPort           int                 `json:"imap_port"            env:"PICOCLAW_CHANNELS_EMAIL_IMAP_PORT"`
+	IMAPTLS            bool                `json:"imap_tls"             env:"PICOCLAW_CHANNELS_EMAIL_IMAP_TLS"`
+	SMTPHost           string              `json:"smtp_host"            env:"PICOCLAW_CHANNELS_EMAIL_SMTP_HOST"`
+	SMTPPort           int                 `json:"smtp_port"            env:"PICOCLAW_CHANNELS_EMAIL_SMTP_PORT"`
+	SMTPTLS            bool                `json:"smtp_tls"             env:"PICOCLAW_CHANNELS_EMAIL_SMTP_TLS"`
+	PollInterval       int                 `json:"poll_interval"        env:"PICOCLAW_CHANNELS_EMAIL_POLL_INTERVAL"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"PICOCLAW_CHANNELS_EMAIL_ALLOW_FROM"`
+	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_EMAIL_REASONING_CHANNEL_ID"`
 }
 
 type HeartbeatConfig struct {

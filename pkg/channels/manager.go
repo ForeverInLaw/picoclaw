@@ -307,6 +307,13 @@ func (m *Manager) initChannels() error {
 		m.initChannel("irc", "IRC")
 	}
 
+	if m.config.Channels.Email.Enabled &&
+		m.config.Channels.Email.Address != "" &&
+		m.config.Channels.Email.IMAPHost != "" &&
+		m.config.Channels.Email.SMTPHost != "" {
+		m.initChannel("email", "Email")
+	}
+
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
 		"enabled_channels": len(m.channels),
 	})
