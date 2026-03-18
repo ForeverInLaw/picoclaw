@@ -12,6 +12,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/memory"
+	"github.com/sipeed/picoclaw/pkg/memoryindex"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -44,6 +45,7 @@ type AgentInstance struct {
 	Candidates                []providers.FallbackCandidate
 	ImageProvider             providers.LLMProvider
 	ImageCandidates           []providers.FallbackCandidate
+	MemoryIndex               *memoryindex.Index
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -105,6 +107,7 @@ func NewAgentInstance(
 
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessions := initSessionStore(sessionsDir)
+	memIndex := initMemoryIndex(defaults, workspace, sessionsDir)
 
 	mcpDiscoveryActive := cfg.Tools.MCP.Enabled && cfg.Tools.MCP.Discovery.Enabled
 	contextBuilder := NewContextBuilder(workspace).WithToolDiscovery(
@@ -271,6 +274,7 @@ func NewAgentInstance(
 		Candidates:                candidates,
 		ImageProvider:             imageProvider,
 		ImageCandidates:           imageCandidates,
+		MemoryIndex:               memIndex,
 		Router:                    router,
 		LightCandidates:           lightCandidates,
 	}
@@ -343,6 +347,9 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store.
 func (a *AgentInstance) Close() error {
+	if a.MemoryIndex != nil {
+		_ = a.MemoryIndex.Close()
+	}
 	if a.Sessions != nil {
 		return a.Sessions.Close()
 	}
@@ -372,6 +379,27 @@ func initSessionStore(dir string) session.SessionStore {
 	}
 
 	return session.NewJSONLBackend(store)
+}
+
+func initMemoryIndex(defaults *config.AgentDefaults, workspace, sessionsDir string) *memoryindex.Index {
+	if defaults == nil || !defaults.MemoryIndex.Enabled {
+		return nil
+	}
+
+	dbPath := filepath.Join(workspace, "memory", "index.sqlite")
+	idx, err := memoryindex.Open(dbPath, memoryindex.Config{
+		MaxResults:      defaults.MemoryIndex.MaxResults,
+		MaxSnippetChars: defaults.MemoryIndex.MaxSnippetChars,
+		MinQueryChars:   defaults.MemoryIndex.MinQueryChars,
+	})
+	if err != nil {
+		log.Printf("memoryindex: init failed: %v", err)
+		return nil
+	}
+	if err := idx.BootstrapSessions(context.Background(), sessionsDir); err != nil {
+		log.Printf("memoryindex: bootstrap failed: %v", err)
+	}
+	return idx
 }
 
 func expandHome(path string) string {
