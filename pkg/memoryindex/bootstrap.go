@@ -13,7 +13,8 @@ import (
 )
 
 type sessionMeta struct {
-	Key string `json:"key"`
+	Key     string `json:"key"`
+	Summary string `json:"summary"`
 }
 
 func (i *Index) BootstrapSessions(ctx context.Context, sessionsDir string) error {
@@ -96,6 +97,19 @@ func (i *Index) bootstrapSessionFile(ctx context.Context, sessionsDir, metaName 
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("memoryindex: scan session jsonl: %w", err)
+	}
+
+	if summary := strings.TrimSpace(meta.Summary); summary != "" {
+		if err := i.AddObservation(ctx, Observation{
+			SessionKey: meta.Key,
+			Channel:    channel,
+			ChatID:     chatID,
+			Role:       "assistant",
+			SenderID:   "summary",
+			Content:    "[session_summary]\n\n" + summary,
+		}); err != nil {
+			return err
+		}
 	}
 
 	return nil

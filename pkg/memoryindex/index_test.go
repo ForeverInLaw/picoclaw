@@ -95,3 +95,54 @@ func TestIndex_BootstrapSessionsImportsExistingHistory(t *testing.T) {
 		t.Fatal("expected bootstrapped hit")
 	}
 }
+
+func TestIndex_BootstrapWorkspaceFilesImportsDurableMemory(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, ".learnings"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.learnings) error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, "memory"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(memory) error: %v", err)
+	}
+
+	memoryDoc := "# Long-term Memory\n\n## Preferences\n\nUser prefers SQLite-first infrastructure decisions.\n"
+	if err := os.WriteFile(filepath.Join(workspace, "memory", "MEMORY.md"), []byte(memoryDoc), 0o644); err != nil {
+		t.Fatalf("WriteFile(MEMORY.md) error: %v", err)
+	}
+
+	learningDoc := "# Learnings\n\n## [LRN-20260318-001] insight\n\n### Summary\nHybrid search can wait until lexical retrieval is insufficient.\n\n### Details\nStart with SQLite FTS5 because it is simpler to operate locally.\n"
+	if err := os.WriteFile(filepath.Join(workspace, ".learnings", "LEARNINGS.md"), []byte(learningDoc), 0o644); err != nil {
+		t.Fatalf("WriteFile(LEARNINGS.md) error: %v", err)
+	}
+
+	idx, err := Open(filepath.Join(root, "memory", "index.sqlite"), Config{
+		MaxResults:      5,
+		MaxSnippetChars: 200,
+		MinQueryChars:   3,
+	})
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer idx.Close()
+
+	if err := idx.BootstrapWorkspaceFiles(context.Background(), workspace); err != nil {
+		t.Fatalf("BootstrapWorkspaceFiles() error: %v", err)
+	}
+
+	hits, err := idx.Search(context.Background(), SearchRequest{Query: "SQLite-first infrastructure decisions"})
+	if err != nil {
+		t.Fatalf("Search(memory doc) error: %v", err)
+	}
+	if len(hits) == 0 || !strings.Contains(hits[0].Content, "SQLite-first infrastructure decisions") {
+		t.Fatalf("expected workspace memory hit, got %#v", hits)
+	}
+
+	hits, err = idx.Search(context.Background(), SearchRequest{Query: "SQLite FTS5"})
+	if err != nil {
+		t.Fatalf("Search(learning doc) error: %v", err)
+	}
+	if len(hits) == 0 || !strings.Contains(hits[0].Content, "SQLite FTS5") {
+		t.Fatalf("expected learning hit, got %#v", hits)
+	}
+}
