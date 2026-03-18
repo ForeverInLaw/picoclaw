@@ -40,6 +40,15 @@ func DefaultConfig() *Config {
 					MaxResults:      5,
 					MaxSnippetChars: 280,
 					MinQueryChars:   12,
+					Embeddings: MemoryEmbeddingConfig{
+						Enabled:         false,
+						MaxBatch:        16,
+						MinContentChars: 24,
+					},
+					Rollups: MemoryRollupConfig{
+						Enabled:          true,
+						HourlySampleSize: 8,
+					},
 				},
 			},
 		},

@@ -58,6 +58,8 @@ type processOptions struct {
 	SessionKey        string // Session identifier for history/context
 	Channel           string // Target channel for tool execution
 	ChatID            string // Target chat ID for tool execution
+	PeerKind          string
+	ChatLabel         string
 	Sender            bus.SenderInfo
 	SenderID          string   // Current sender ID for dynamic context
 	SenderDisplayName string   // Current sender display name for dynamic context
@@ -773,6 +775,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	if routeErr != nil {
 		return "", routeErr
 	}
+	observeChatMemoryInbound(ctx, agent, msg)
 
 	// Reset message-tool state for this round so we don't skip publishing due to a previous round.
 	if tool, ok := agent.Tools.Get("message"); ok {
@@ -799,6 +802,8 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		SessionKey:        sessionKey,
 		Channel:           msg.Channel,
 		ChatID:            msg.ChatID,
+		PeerKind:          strings.TrimSpace(msg.Peer.Kind),
+		ChatLabel:         strings.TrimSpace(msg.Metadata["chat_label"]),
 		Sender:            msg.Sender,
 		SenderID:          msg.SenderID,
 		SenderDisplayName: msg.Sender.DisplayName,
@@ -943,7 +948,7 @@ func (al *AgentLoop) runAgentLoop(
 		}
 		history = agent.Sessions.GetHistory(opts.SessionKey)
 		summary = agent.Sessions.GetSummary(opts.SessionKey)
-		retrievedMemory = lookupRetrievedMemories(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.UserMessage)
+		retrievedMemory = lookupRetrievedMemories(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.PeerKind, opts.SenderID, opts.UserMessage)
 	}
 	messages := agent.ContextBuilder.BuildMessages(
 		history,
@@ -964,7 +969,7 @@ func (al *AgentLoop) runAgentLoop(
 
 	// 2. Save user message to session
 	agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
-	recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, "user", opts.SenderID, opts.UserMessage)
+	recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.PeerKind, opts.ChatLabel, "user", opts.SenderID, opts.UserMessage)
 
 	// 3. Run LLM iteration loop
 	finalContent, iteration, err := al.runLLMIteration(ctx, agent, messages, opts)
@@ -990,13 +995,15 @@ func (al *AgentLoop) runAgentLoop(
 				opts.SessionKey,
 				opts.Channel,
 				opts.ChatID,
+				opts.PeerKind,
+				opts.ChatLabel,
 				mt.DeliveredInRound(),
 			)
 		}
 	}
 	if !savedDeliveredReply {
 		agent.Sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
-		recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, "assistant", "", finalContent)
+		recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.PeerKind, opts.ChatLabel, "assistant", "", finalContent)
 	}
 	agent.Sessions.Save(opts.SessionKey)
 

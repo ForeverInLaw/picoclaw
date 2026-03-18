@@ -12,7 +12,7 @@ import (
 func recordMemoryObservation(
 	ctx context.Context,
 	agent *AgentInstance,
-	sessionKey, channel, chatID, role, senderID, content string,
+	sessionKey, channel, chatID, peerKind, chatLabel, role, senderID, content string,
 ) {
 	if agent == nil || agent.MemoryIndex == nil || strings.TrimSpace(content) == "" {
 		return
@@ -22,6 +22,8 @@ func recordMemoryObservation(
 		SessionKey: sessionKey,
 		Channel:    channel,
 		ChatID:     chatID,
+		PeerKind:   peerKind,
+		ChatLabel:  chatLabel,
 		Role:       role,
 		SenderID:   senderID,
 		Content:    content,
@@ -31,7 +33,7 @@ func recordMemoryObservation(
 func recordDeliveredAssistantMessages(
 	ctx context.Context,
 	agent *AgentInstance,
-	sessionKey, sourceChannel, sourceChatID string,
+	sessionKey, sourceChannel, sourceChatID, sourcePeerKind, sourceChatLabel string,
 	delivered []tools.DeliveredMessage,
 ) bool {
 	if agent == nil || len(delivered) == 0 {
@@ -47,13 +49,13 @@ func recordDeliveredAssistantMessages(
 
 		if msg.Channel == sourceChannel && msg.ChatID == sourceChatID {
 			agent.Sessions.AddMessage(sessionKey, "assistant", content)
-			recordMemoryObservation(ctx, agent, sessionKey, msg.Channel, msg.ChatID, "assistant", "", content)
+			recordMemoryObservation(ctx, agent, sessionKey, msg.Channel, msg.ChatID, sourcePeerKind, sourceChatLabel, "assistant", "", content)
 			sameTargetDelivered = true
 			continue
 		}
 
 		targetSessionKey := fmt.Sprintf("outbound:%s:%s", msg.Channel, msg.ChatID)
-		recordMemoryObservation(ctx, agent, targetSessionKey, msg.Channel, msg.ChatID, "assistant", "", content)
+		recordMemoryObservation(ctx, agent, targetSessionKey, msg.Channel, msg.ChatID, "", "", "assistant", "", content)
 	}
 
 	return sameTargetDelivered

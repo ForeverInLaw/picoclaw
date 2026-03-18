@@ -52,7 +52,7 @@ func TestLookupRetrievedMemories_FormatsHits(t *testing.T) {
 	}
 
 	agent := &AgentInstance{MemoryIndex: idx}
-	got := lookupRetrievedMemories(t.Context(), agent, "agent:main:telegram:direct:1", "telegram", "1", "sqlite retrieval")
+	got := lookupRetrievedMemories(t.Context(), agent, "agent:main:telegram:direct:1", "telegram", "1", "direct", "telegram:1", "sqlite retrieval")
 	if !strings.Contains(got, "RETRIEVED_MEMORY:") {
 		t.Fatalf("lookupRetrievedMemories() missing header: %q", got)
 	}

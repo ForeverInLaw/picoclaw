@@ -661,6 +661,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		"username":     user.Username,
 		"first_name":   user.FirstName,
 		"sender_label": senderLabel,
+		"chat_label":   strings.TrimSpace(message.Chat.Title),
 		"is_group":     fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
 	if alias := c.resolveParticipantAlias(user); alias != "" {

@@ -240,10 +240,34 @@ type AgentDefaults struct {
 }
 
 type MemoryIndexConfig struct {
-	Enabled         bool `json:"enabled"            env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_ENABLED"`
-	MaxResults      int  `json:"max_results"        env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_MAX_RESULTS"`
-	MaxSnippetChars int  `json:"max_snippet_chars"  env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_MAX_SNIPPET_CHARS"`
-	MinQueryChars   int  `json:"min_query_chars"    env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_MIN_QUERY_CHARS"`
+	Enabled         bool                    `json:"enabled"            env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_ENABLED"`
+	MaxResults      int                     `json:"max_results"        env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_MAX_RESULTS"`
+	MaxSnippetChars int                     `json:"max_snippet_chars"  env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_MAX_SNIPPET_CHARS"`
+	MinQueryChars   int                     `json:"min_query_chars"    env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_MIN_QUERY_CHARS"`
+	Embeddings      MemoryEmbeddingConfig   `json:"embeddings,omitempty"`
+	ChatAliases     []MemoryChatAliasConfig `json:"chat_aliases,omitempty"`
+	Rollups         MemoryRollupConfig      `json:"rollups,omitempty"`
+}
+
+type MemoryEmbeddingConfig struct {
+	Enabled         bool   `json:"enabled,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_ENABLED"`
+	ModelName       string `json:"model_name,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MODEL_NAME"`
+	Dimensions      int    `json:"dimensions,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_DIMENSIONS"`
+	MaxBatch        int    `json:"max_batch,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MAX_BATCH"`
+	MinContentChars int    `json:"min_content_chars,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MIN_CONTENT_CHARS"`
+}
+
+type MemoryRollupConfig struct {
+	Enabled          bool `json:"enabled,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_ROLLUPS_ENABLED"`
+	HourlySampleSize int  `json:"hourly_sample_size,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_ROLLUPS_HOURLY_SAMPLE_SIZE"`
+}
+
+type MemoryChatAliasConfig struct {
+	Alias             string              `json:"alias"`
+	Channel           string              `json:"channel"`
+	ChatID            string              `json:"chat_id"`
+	Label             string              `json:"label,omitempty"`
+	AllowedRequesters FlexibleStringSlice `json:"allowed_requesters,omitempty"`
 }
 
 const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB

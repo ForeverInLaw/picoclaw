@@ -39,6 +39,8 @@ func TestRecordDeliveredAssistantMessages_SameTargetToSessionAndMemory(t *testin
 		"agent:main:telegram:direct:42",
 		"telegram",
 		"42",
+		"direct",
+		"Tester",
 		[]tools.DeliveredMessage{{Channel: "telegram", ChatID: "42", Content: "visible reply"}},
 	)
 	if !saved {
