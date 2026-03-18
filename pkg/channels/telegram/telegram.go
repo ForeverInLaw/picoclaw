@@ -543,6 +543,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		}
 		content = cleaned
 	}
+	content = prependQuotedTelegramReply(message, content)
 
 	// For forum topics, embed the thread ID as "chatID/threadID" so replies
 	// route to the correct topic and each topic gets its own session.
@@ -576,6 +577,9 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		"username":   user.Username,
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
+	}
+	if message.ReplyToMessage != nil {
+		metadata["reply_to_message_id"] = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
 	}
 
 	// Set parent_peer metadata for per-topic agent binding.
@@ -821,6 +825,46 @@ func (c *TelegramChannel) isReplyToBot(message *telego.Message) bool {
 	default:
 		return true
 	}
+}
+
+func prependQuotedTelegramReply(message *telego.Message, content string) string {
+	if message == nil || message.ReplyToMessage == nil {
+		return content
+	}
+
+	replyText := strings.TrimSpace(telegramMessageText(message.ReplyToMessage))
+	if replyText == "" {
+		return content
+	}
+
+	author := telegramMessageAuthor(message.ReplyToMessage)
+	return fmt.Sprintf("[quoted message from %s]: %s\n\n%s", author, replyText, content)
+}
+
+func telegramMessageText(message *telego.Message) string {
+	if message == nil {
+		return ""
+	}
+	if strings.TrimSpace(message.Text) != "" {
+		return message.Text
+	}
+	if strings.TrimSpace(message.Caption) != "" {
+		return message.Caption
+	}
+	return ""
+}
+
+func telegramMessageAuthor(message *telego.Message) string {
+	if message == nil || message.From == nil {
+		return "unknown"
+	}
+	if strings.TrimSpace(message.From.Username) != "" {
+		return message.From.Username
+	}
+	if strings.TrimSpace(message.From.FirstName) != "" {
+		return message.From.FirstName
+	}
+	return "unknown"
 }
 
 func telegramEntityTextAndList(message *telego.Message) (string, []telego.MessageEntity) {

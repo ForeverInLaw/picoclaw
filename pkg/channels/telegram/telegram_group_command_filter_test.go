@@ -231,3 +231,57 @@ func TestHandleMessage_GroupMentionOnly_ReplyToHumanIgnored(t *testing.T) {
 		t.Fatalf("expected reply-to-human message to be ignored, got %+v", inbound)
 	}
 }
+
+func TestHandleMessage_GroupMentionReply_IncludesQuotedContext(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "@testbot согласен",
+		MessageID: 45,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		Entities: []telego.MessageEntity{{
+			Type:   telego.EntityTypeMention,
+			Offset: 0,
+			Length: len("@testbot"),
+		}},
+		From: &telego.User{
+			ID:        10,
+			FirstName: "Dave",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 41,
+			Text:      "исходное сообщение",
+			From: &telego.User{
+				ID:        77,
+				Username:  "alice",
+				FirstName: "Alice",
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Microsecond)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for mention reply to be forwarded")
+	case inbound, ok := <-messageBus.InboundChan():
+		if !ok {
+			t.Fatal("expected inbound message to be forwarded")
+		}
+		wantContent := "[quoted message from alice]: исходное сообщение\n\nсогласен"
+		if inbound.Content != wantContent {
+			t.Fatalf("content=%q want=%q", inbound.Content, wantContent)
+		}
+		if got := inbound.Metadata["reply_to_message_id"]; got != "41" {
+			t.Fatalf("reply_to_message_id=%q want=%q", got, "41")
+		}
+	}
+}
