@@ -74,6 +74,7 @@ func (i *Index) LoadObservationEmbeddings(
 	scopes []ChatScope,
 	modelName string,
 	since time.Time,
+	until time.Time,
 	limit int,
 ) ([]EmbeddingRow, error) {
 	if i == nil || i.db == nil || strings.TrimSpace(modelName) == "" {
@@ -95,6 +96,10 @@ func (i *Index) LoadObservationEmbeddings(
 	if !since.IsZero() {
 		query += ` AND o.created_at_ms >= ?`
 		args = append(args, since.UnixMilli())
+	}
+	if !until.IsZero() {
+		query += ` AND o.created_at_ms <= ?`
+		args = append(args, until.UnixMilli())
 	}
 	query += ` ORDER BY o.created_at_ms DESC`
 	if limit > 0 {

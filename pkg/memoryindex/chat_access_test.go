@@ -59,6 +59,9 @@ func TestIndex_ListAccessibleChats_UsesParticipantsAndAliasAllowlist(t *testing.
 	if len(participantChats) != 1 || participantChats[0].ChatID != "-1001" {
 		t.Fatalf("participant chats = %#v, want only -1001", participantChats)
 	}
+	if participantChats[0].Alias != "тестовая группа" {
+		t.Fatalf("participant chat alias = %q, want configured alias", participantChats[0].Alias)
+	}
 
 	allowedChats, err := idx.ListAccessibleChats(t.Context(), "telegram:77")
 	if err != nil {

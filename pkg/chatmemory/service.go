@@ -61,6 +61,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		return nil, err
 	}
 	window := s.resolveWindow(req.SinceHours, req.UntilHours)
+	limit := resolveSearchLimit(req.Limit, s.cfg.MaxResults)
 	lexicalHits, err := s.index.Search(ctx, memoryindex.SearchRequest{
 		Query:      req.Query,
 		Channel:    req.CurrentChannel,
@@ -68,7 +69,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		ChatScopes: scopes,
 		Since:      window.Start,
 		Until:      window.End,
-		Limit:      max(req.Limit, s.cfg.MaxResults),
+		Limit:      limit,
 	})
 	if err != nil {
 		return nil, err
@@ -83,7 +84,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		return lexicalHits, nil
 	}
 
-	embeddingRows, err := s.index.LoadObservationEmbeddings(ctx, scopes, s.embedder.ModelName(), window.Start, 512)
+	embeddingRows, err := s.index.LoadObservationEmbeddings(ctx, scopes, s.embedder.ModelName(), window.Start, window.End, 512)
 	if err != nil || len(embeddingRows) == 0 {
 		return lexicalHits, nil
 	}
@@ -115,7 +116,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		}
 	})
 
-	merged := make([]memoryindex.Hit, 0, max(req.Limit, s.cfg.MaxResults))
+	merged := make([]memoryindex.Hit, 0, limit)
 	seen := make(map[string]struct{})
 	for _, hit := range lexicalHits {
 		key := hitKey(hit)
@@ -123,7 +124,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		merged = append(merged, hit)
 	}
 	for _, candidate := range scored {
-		if len(merged) >= max(req.Limit, s.cfg.MaxResults) {
+		if len(merged) >= limit {
 			break
 		}
 		key := hitKey(candidate.hit)
@@ -134,6 +135,16 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		merged = append(merged, candidate.hit)
 	}
 	return merged, nil
+}
+
+func resolveSearchLimit(requested, fallback int) int {
+	if requested > 0 {
+		return requested
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 5
 }
 
 func (s *Service) Summarize(ctx context.Context, req SummaryRequest) (string, error) {

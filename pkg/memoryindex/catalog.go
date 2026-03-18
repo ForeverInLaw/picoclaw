@@ -216,18 +216,22 @@ func (i *Index) ListAccessibleChats(ctx context.Context, requesterID string) ([]
 		if err := json.Unmarshal([]byte(requestersJSON), &requesters); err != nil {
 			return nil, fmt.Errorf("memoryindex: decode chat alias requesters: %w", err)
 		}
-		if !slices.Contains(requesters, requesterID) {
-			continue
-		}
 		key := channel + "\x00" + chatID
-		entry, ok := entriesByKey[key]
+		entry, ok := accessible[key]
+		allowlisted := slices.Contains(requesters, requesterID)
 		if !ok {
-			entry = ChatAccessEntry{
-				ChatCatalogEntry: ChatCatalogEntry{
-					Channel: channel,
-					ChatID:  chatID,
-					Label:   label,
-				},
+			if !allowlisted {
+				continue
+			}
+			entry, ok = entriesByKey[key]
+			if !ok {
+				entry = ChatAccessEntry{
+					ChatCatalogEntry: ChatCatalogEntry{
+						Channel: channel,
+						ChatID:  chatID,
+						Label:   label,
+					},
+				}
 			}
 		}
 		if entry.Label == "" {
