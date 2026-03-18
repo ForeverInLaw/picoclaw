@@ -109,7 +109,8 @@ func (i *Index) AddObservation(ctx context.Context, obs Observation) error {
 	if i == nil || i.db == nil || content == "" {
 		return nil
 	}
-	if obs.Role != "user" && obs.Role != "assistant" {
+	obs.Content = content
+	if !ShouldIndexObservation(obs) {
 		return nil
 	}
 	if obs.CreatedAt.IsZero() {
@@ -125,7 +126,7 @@ func (i *Index) AddObservation(ctx context.Context, obs Observation) error {
 		obs.ChatID,
 		obs.Role,
 		obs.SenderID,
-		content,
+		obs.Content,
 		obs.CreatedAt.UnixMilli(),
 	)
 	if err != nil {

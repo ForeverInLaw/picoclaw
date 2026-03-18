@@ -1827,6 +1827,7 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 
 	if finalSummary != "" {
 		agent.Sessions.SetSummary(sessionKey, finalSummary)
+		recordMemorySummary(ctx, agent, sessionKey, finalSummary)
 		agent.Sessions.TruncateHistory(sessionKey, 4)
 		agent.Sessions.Save(sessionKey)
 	}
