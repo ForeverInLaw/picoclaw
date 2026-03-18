@@ -283,5 +283,14 @@ func TestHandleMessage_GroupMentionReply_IncludesQuotedContext(t *testing.T) {
 		if got := inbound.Metadata["reply_to_message_id"]; got != "41" {
 			t.Fatalf("reply_to_message_id=%q want=%q", got, "41")
 		}
+		if got := inbound.Metadata["reply_to_user_id"]; got != "77" {
+			t.Fatalf("reply_to_user_id=%q want=%q", got, "77")
+		}
+		if got := inbound.Metadata["reply_to_username"]; got != "alice" {
+			t.Fatalf("reply_to_username=%q want=%q", got, "alice")
+		}
+		if got := inbound.Metadata["reply_to_first_name"]; got != "Alice" {
+			t.Fatalf("reply_to_first_name=%q want=%q", got, "Alice")
+		}
 	}
 }

@@ -580,6 +580,11 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	}
 	if message.ReplyToMessage != nil {
 		metadata["reply_to_message_id"] = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
+		if replyAuthor := message.ReplyToMessage.From; replyAuthor != nil {
+			metadata["reply_to_user_id"] = fmt.Sprintf("%d", replyAuthor.ID)
+			metadata["reply_to_username"] = replyAuthor.Username
+			metadata["reply_to_first_name"] = replyAuthor.FirstName
+		}
 	}
 
 	// Set parent_peer metadata for per-topic agent binding.
