@@ -15,12 +15,11 @@ import (
 type stubJobExecutor struct {
 	response string
 	err      error
+	lastReq  ScheduledRequest
 }
 
-func (s *stubJobExecutor) ProcessDirectWithChannel(
-	ctx context.Context,
-	content, sessionKey, channel, chatID string,
-) (string, error) {
+func (s *stubJobExecutor) ProcessScheduled(ctx context.Context, req ScheduledRequest) (string, error) {
+	s.lastReq = req
 	return s.response, s.err
 }
 
@@ -221,6 +220,48 @@ func TestCronTool_NonCommandJobDefaultsDeliverToTrue(t *testing.T) {
 	}
 }
 
+func TestCronTool_AddJobPersistsRequesterIdentity(t *testing.T) {
+	tool := newTestCronTool(t)
+	ctx := WithToolSender(
+		WithToolContext(context.Background(), "telegram", "group-1"),
+		bus.SenderInfo{
+			Platform:    "telegram",
+			PlatformID:  "6669548787",
+			CanonicalID: "telegram:6669548787",
+			Username:    "nevermore",
+			DisplayName: "Сер",
+		},
+	)
+
+	result := tool.Execute(ctx, map[string]any{
+		"action":     "add",
+		"message":    "⏰ Напоминание!",
+		"at_seconds": float64(60),
+	})
+	if result.IsError {
+		t.Fatalf("expected reminder scheduling to succeed, got: %s", result.ForLLM)
+	}
+
+	jobs := tool.cronService.ListJobs(false)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+
+	payload := jobs[0].Payload
+	if payload.RequesterCanonicalID != "telegram:6669548787" {
+		t.Fatalf("requester canonical id = %q", payload.RequesterCanonicalID)
+	}
+	if payload.RequesterPlatformID != "6669548787" {
+		t.Fatalf("requester platform id = %q", payload.RequesterPlatformID)
+	}
+	if payload.RequesterUsername != "nevermore" {
+		t.Fatalf("requester username = %q", payload.RequesterUsername)
+	}
+	if payload.RequesterDisplayName != "Сер" {
+		t.Fatalf("requester display name = %q", payload.RequesterDisplayName)
+	}
+}
+
 func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.Enabled = false
@@ -257,13 +298,18 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 
 func TestCronTool_ExecuteJobPublishesAgentResponseWhenDeliverDisabled(t *testing.T) {
 	tool := newTestCronTool(t)
-	tool.executor = &stubJobExecutor{response: "reminder fired"}
+	executor := &stubJobExecutor{response: "reminder fired"}
+	tool.executor = executor
 
 	job := &cron.CronJob{}
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "⏰ reminder"
 	job.Payload.Deliver = false
+	job.Payload.RequesterCanonicalID = "telegram:6669548787"
+	job.Payload.RequesterPlatformID = "6669548787"
+	job.Payload.RequesterDisplayName = "Сер"
+	job.Payload.RequesterUsername = "nevermore"
 
 	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
@@ -289,5 +335,40 @@ func TestCronTool_ExecuteJobPublishesAgentResponseWhenDeliverDisabled(t *testing
 	}
 	if msg.Content != "reminder fired" {
 		t.Fatalf("unexpected outbound content: %s", msg.Content)
+	}
+	if executor.lastReq.Sender.CanonicalID != "telegram:6669548787" {
+		t.Fatalf("unexpected requester sender id: %s", executor.lastReq.Sender.CanonicalID)
+	}
+	if !strings.Contains(executor.lastReq.Content, "requested_by: Сер") {
+		t.Fatalf("expected requester label in scheduled content, got: %s", executor.lastReq.Content)
+	}
+}
+
+func TestCronTool_ExecuteJobPublishesMentionForTelegramReminder(t *testing.T) {
+	tool := newTestCronTool(t)
+
+	job := &cron.CronJob{}
+	job.Payload.Channel = "telegram"
+	job.Payload.To = "group-1"
+	job.Payload.Message = "⏰ Напоминание!"
+	job.Payload.Deliver = true
+	job.Payload.RequesterPlatformID = "6669548787"
+	job.Payload.RequesterDisplayName = "Сер"
+
+	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	select {
+	case msg := <-tool.msgBus.OutboundChan():
+		want := "[Сер](tg://user?id=6669548787), ⏰ Напоминание!"
+		if msg.Content != want {
+			t.Fatalf("content=%q want=%q", msg.Content, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("expected outbound reminder message")
 	}
 }

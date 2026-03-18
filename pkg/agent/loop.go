@@ -55,9 +55,10 @@ type AgentLoop struct {
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	SessionKey        string   // Session identifier for history/context
-	Channel           string   // Target channel for tool execution
-	ChatID            string   // Target chat ID for tool execution
+	SessionKey        string // Session identifier for history/context
+	Channel           string // Target channel for tool execution
+	ChatID            string // Target chat ID for tool execution
+	Sender            bus.SenderInfo
 	SenderID          string   // Current sender ID for dynamic context
 	SenderDisplayName string   // Current sender display name for dynamic context
 	ReplyToMessageID  string   // Original inbound message ID for threaded replies
@@ -687,6 +688,32 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	return al.processMessage(ctx, msg)
 }
 
+func (al *AgentLoop) ProcessScheduled(ctx context.Context, req tools.ScheduledRequest) (string, error) {
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		return "", err
+	}
+
+	sender := req.Sender
+	senderID := sender.CanonicalID
+	if senderID == "" {
+		senderID = "cron"
+	}
+	if sender.DisplayName == "" {
+		sender.DisplayName = senderID
+	}
+
+	msg := bus.InboundMessage{
+		Channel:    req.Channel,
+		SenderID:   senderID,
+		Sender:     sender,
+		ChatID:     req.ChatID,
+		Content:    req.Content,
+		SessionKey: req.SessionKey,
+	}
+
+	return al.processMessage(ctx, msg)
+}
+
 // ProcessHeartbeat processes a heartbeat request without session history.
 // Each heartbeat is independent and doesn't accumulate context.
 func (al *AgentLoop) ProcessHeartbeat(
@@ -772,10 +799,11 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		SessionKey:        sessionKey,
 		Channel:           msg.Channel,
 		ChatID:            msg.ChatID,
+		Sender:            msg.Sender,
 		SenderID:          msg.SenderID,
 		SenderDisplayName: msg.Sender.DisplayName,
 		ReplyToMessageID:  msg.MessageID,
-		UserMessage:       msg.Content,
+		UserMessage:       buildConversationUserMessage(msg),
 		Media:             msg.Media,
 		DefaultResponse:   defaultResponse,
 		EnableSummary:     true,
@@ -1375,7 +1403,8 @@ func (al *AgentLoop) runLLMIteration(
 					})
 				}
 
-				toolCtx := tools.WithToolReplyToMessageID(ctx, opts.ReplyToMessageID)
+				toolCtx := tools.WithToolSender(ctx, opts.Sender)
+				toolCtx = tools.WithToolReplyToMessageID(toolCtx, opts.ReplyToMessageID)
 				toolResult := agent.Tools.ExecuteWithContext(
 					toolCtx,
 					tc.Name,

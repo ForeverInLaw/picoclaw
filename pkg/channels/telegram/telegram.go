@@ -428,12 +428,13 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	}
 
 	platformID := fmt.Sprintf("%d", user.ID)
+	senderLabel := c.resolveParticipantLabel(user)
 	sender := bus.SenderInfo{
 		Platform:    "telegram",
 		PlatformID:  platformID,
 		CanonicalID: identity.BuildCanonicalID("telegram", platformID),
 		Username:    user.Username,
-		DisplayName: user.FirstName,
+		DisplayName: senderLabel,
 	}
 
 	// check allowlist to avoid downloading attachments for rejected users
@@ -573,10 +574,14 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	messageID := fmt.Sprintf("%d", message.MessageID)
 
 	metadata := map[string]string{
-		"user_id":    fmt.Sprintf("%d", user.ID),
-		"username":   user.Username,
-		"first_name": user.FirstName,
-		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
+		"user_id":      fmt.Sprintf("%d", user.ID),
+		"username":     user.Username,
+		"first_name":   user.FirstName,
+		"sender_label": senderLabel,
+		"is_group":     fmt.Sprintf("%t", message.Chat.Type != "private"),
+	}
+	if alias := c.resolveParticipantAlias(user); alias != "" {
+		metadata["sender_alias"] = alias
 	}
 	if message.ReplyToMessage != nil {
 		metadata["reply_to_message_id"] = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
@@ -584,6 +589,11 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 			metadata["reply_to_user_id"] = fmt.Sprintf("%d", replyAuthor.ID)
 			metadata["reply_to_username"] = replyAuthor.Username
 			metadata["reply_to_first_name"] = replyAuthor.FirstName
+			metadata["reply_to_sender_id"] = telegramCanonicalID(replyAuthor)
+			metadata["reply_to_label"] = c.resolveParticipantLabel(replyAuthor)
+			if alias := c.resolveParticipantAlias(replyAuthor); alias != "" {
+				metadata["reply_to_alias"] = alias
+			}
 		}
 	}
 

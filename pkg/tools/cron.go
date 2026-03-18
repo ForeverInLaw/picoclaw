@@ -13,9 +13,17 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
-// JobExecutor is the interface for executing cron jobs through the agent
+type ScheduledRequest struct {
+	Content    string
+	SessionKey string
+	Channel    string
+	ChatID     string
+	Sender     bus.SenderInfo
+}
+
+// JobExecutor is the interface for executing cron jobs through the agent.
 type JobExecutor interface {
-	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error)
+	ProcessScheduled(ctx context.Context, req ScheduledRequest) (string, error)
 }
 
 // CronTool provides scheduling capabilities for the agent
@@ -146,6 +154,7 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult {
 	channel := ToolChannel(ctx)
 	chatID := ToolChatID(ctx)
+	sender := ToolSender(ctx)
 
 	if channel == "" || chatID == "" {
 		return ErrorResult("no session context (channel/chat_id not set). Use this tool in an active conversation.")
@@ -234,6 +243,13 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	if command != "" {
 		job.Payload.Command = command
 		// Need to save the updated payload
+		t.cronService.UpdateJob(job)
+	}
+	if sender.CanonicalID != "" || sender.PlatformID != "" || sender.DisplayName != "" || sender.Username != "" {
+		job.Payload.RequesterCanonicalID = sender.CanonicalID
+		job.Payload.RequesterPlatformID = sender.PlatformID
+		job.Payload.RequesterUsername = sender.Username
+		job.Payload.RequesterDisplayName = sender.DisplayName
 		t.cronService.UpdateJob(job)
 	}
 
@@ -350,12 +366,13 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 
 	// If deliver=true, send message directly without agent processing
 	if job.Payload.Deliver {
+		content := reminderContent(job.Payload)
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
 		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 			Channel: channel,
 			ChatID:  chatID,
-			Content: job.Payload.Message,
+			Content: content,
 		})
 		return "ok"
 	}
@@ -363,14 +380,14 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	// For deliver=false, process through agent (for complex tasks)
 	sessionKey := fmt.Sprintf("cron-%s", job.ID)
 
-	// Call agent with job's message
-	response, err := t.executor.ProcessDirectWithChannel(
-		ctx,
-		job.Payload.Message,
-		sessionKey,
-		channel,
-		chatID,
-	)
+	req := ScheduledRequest{
+		Content:    buildScheduledTriggerMessage(job.Payload.Message, requesterSender(job.Payload)),
+		SessionKey: sessionKey,
+		Channel:    channel,
+		ChatID:     chatID,
+		Sender:     requesterSender(job.Payload),
+	}
+	response, err := t.executor.ProcessScheduled(ctx, req)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
@@ -386,4 +403,63 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	}
 
 	return "ok"
+}
+
+func requesterSender(payload cron.CronPayload) bus.SenderInfo {
+	sender := bus.SenderInfo{
+		Platform:    payload.Channel,
+		PlatformID:  payload.RequesterPlatformID,
+		CanonicalID: payload.RequesterCanonicalID,
+		Username:    payload.RequesterUsername,
+		DisplayName: payload.RequesterDisplayName,
+	}
+	if sender.CanonicalID == "" {
+		sender.CanonicalID = "cron"
+	}
+	if sender.DisplayName == "" {
+		sender.DisplayName = firstNonEmpty(payload.RequesterUsername, payload.RequesterPlatformID, "cron")
+	}
+	return sender
+}
+
+func reminderContent(payload cron.CronPayload) string {
+	label := strings.TrimSpace(payload.RequesterDisplayName)
+	if label == "" {
+		return payload.Message
+	}
+
+	if payload.Channel == "telegram" && payload.RequesterPlatformID != "" {
+		return fmt.Sprintf("[%s](tg://user?id=%s), %s", label, payload.RequesterPlatformID, payload.Message)
+	}
+	return fmt.Sprintf("%s, %s", label, payload.Message)
+}
+
+func buildScheduledTriggerMessage(message string, sender bus.SenderInfo) string {
+	var sb strings.Builder
+	sb.WriteString("[scheduled_reminder_trigger]\n")
+	sb.WriteString("requested_by: ")
+	sb.WriteString(firstNonEmpty(sender.DisplayName, sender.Username, sender.CanonicalID, "unknown"))
+	sb.WriteString("\n")
+	if sender.CanonicalID != "" {
+		sb.WriteString("requester_id: ")
+		sb.WriteString(sender.CanonicalID)
+		sb.WriteString("\n")
+	}
+	if sender.Username != "" {
+		sb.WriteString("requester_username: ")
+		sb.WriteString(sender.Username)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
+	sb.WriteString(strings.TrimSpace(message))
+	return sb.String()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

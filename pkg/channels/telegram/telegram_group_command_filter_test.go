@@ -45,11 +45,17 @@ func newGroupMentionOnlyChannel(t *testing.T, botUsername string) (*TelegramChan
 	t.Helper()
 
 	messageBus := bus.NewMessageBus()
+	cfg := config.DefaultConfig()
+	cfg.Channels.Telegram.ParticipantAliases = map[string]string{
+		"10": "Сер",
+		"77": "Визард",
+	}
 	ch := &TelegramChannel{
 		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil,
 			channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: true}),
 		),
 		bot:     newTestTelegramBot(t, botUsername),
+		config:  cfg,
 		chatIDs: make(map[string]int64),
 		ctx:     context.Background(),
 	}
@@ -280,17 +286,35 @@ func TestHandleMessage_GroupMentionReply_IncludesQuotedContext(t *testing.T) {
 		if inbound.Content != wantContent {
 			t.Fatalf("content=%q want=%q", inbound.Content, wantContent)
 		}
+		if got := inbound.Sender.DisplayName; got != "Сер" {
+			t.Fatalf("sender display name=%q want=%q", got, "Сер")
+		}
+		if got := inbound.Metadata["sender_label"]; got != "Сер" {
+			t.Fatalf("sender_label=%q want=%q", got, "Сер")
+		}
+		if got := inbound.Metadata["sender_alias"]; got != "Сер" {
+			t.Fatalf("sender_alias=%q want=%q", got, "Сер")
+		}
 		if got := inbound.Metadata["reply_to_message_id"]; got != "41" {
 			t.Fatalf("reply_to_message_id=%q want=%q", got, "41")
 		}
 		if got := inbound.Metadata["reply_to_user_id"]; got != "77" {
 			t.Fatalf("reply_to_user_id=%q want=%q", got, "77")
 		}
+		if got := inbound.Metadata["reply_to_sender_id"]; got != "telegram:77" {
+			t.Fatalf("reply_to_sender_id=%q want=%q", got, "telegram:77")
+		}
 		if got := inbound.Metadata["reply_to_username"]; got != "alice" {
 			t.Fatalf("reply_to_username=%q want=%q", got, "alice")
 		}
 		if got := inbound.Metadata["reply_to_first_name"]; got != "Alice" {
 			t.Fatalf("reply_to_first_name=%q want=%q", got, "Alice")
+		}
+		if got := inbound.Metadata["reply_to_label"]; got != "Визард" {
+			t.Fatalf("reply_to_label=%q want=%q", got, "Визард")
+		}
+		if got := inbound.Metadata["reply_to_alias"]; got != "Визард" {
+			t.Fatalf("reply_to_alias=%q want=%q", got, "Визард")
 		}
 	}
 }

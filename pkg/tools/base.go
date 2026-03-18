@@ -1,6 +1,10 @@
 package tools
 
-import "context"
+import (
+	"context"
+
+	"github.com/sipeed/picoclaw/pkg/bus"
+)
 
 // Tool is the interface that all tools must implement.
 type Tool interface {
@@ -24,6 +28,7 @@ var (
 	ctxKeyChannel   = &toolCtxKey{"channel"}
 	ctxKeyChatID    = &toolCtxKey{"chatID"}
 	ctxKeyReplyToID = &toolCtxKey{"replyToMessageID"}
+	ctxKeySender    = &toolCtxKey{"sender"}
 )
 
 // WithToolContext returns a child context carrying channel and chatID.
@@ -36,6 +41,11 @@ func WithToolContext(ctx context.Context, channel, chatID string) context.Contex
 // WithToolReplyToMessageID returns a child context carrying the inbound message ID.
 func WithToolReplyToMessageID(ctx context.Context, replyToMessageID string) context.Context {
 	return context.WithValue(ctx, ctxKeyReplyToID, replyToMessageID)
+}
+
+// WithToolSender returns a child context carrying structured sender identity.
+func WithToolSender(ctx context.Context, sender bus.SenderInfo) context.Context {
+	return context.WithValue(ctx, ctxKeySender, sender)
 }
 
 // ToolChannel extracts the channel from ctx, or "" if unset.
@@ -53,6 +63,12 @@ func ToolChatID(ctx context.Context) string {
 // ToolReplyToMessageID extracts the inbound reply-to message ID from ctx, or "" if unset.
 func ToolReplyToMessageID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyReplyToID).(string)
+	return v
+}
+
+// ToolSender extracts structured sender identity from ctx, or a zero-value sender if unset.
+func ToolSender(ctx context.Context) bus.SenderInfo {
+	v, _ := ctx.Value(ctxKeySender).(bus.SenderInfo)
 	return v
 }
 
