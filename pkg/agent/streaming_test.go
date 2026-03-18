@@ -56,6 +56,13 @@ func TestPartialReplyUpdater_DisabledForNonTelegram(t *testing.T) {
 	}
 }
 
+func TestPartialReplyUpdater_DisabledForTypedNilManager(t *testing.T) {
+	var fake *fakePlaceholderUpdater
+	if updater := newPartialReplyUpdater(fake, "telegram", "123"); updater != nil {
+		t.Fatal("expected nil updater for typed-nil manager")
+	}
+}
+
 func TestPartialReplyUpdater_RespectsThrottleWindow(t *testing.T) {
 	fake := &fakePlaceholderUpdater{}
 	updater := newPartialReplyUpdater(fake, "telegram", "123")

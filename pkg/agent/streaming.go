@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +32,7 @@ type placeholderUpdater interface {
 }
 
 func newPartialReplyUpdater(manager placeholderUpdater, channel, chatID string) *partialReplyUpdater {
-	if manager == nil || channel != "telegram" || chatID == "" || constants.IsInternalChannel(channel) {
+	if isNilPlaceholderUpdater(manager) || channel != "telegram" || chatID == "" || constants.IsInternalChannel(channel) {
 		return nil
 	}
 	return &partialReplyUpdater{
@@ -94,6 +95,10 @@ func (u *partialReplyUpdater) Flush() {
 }
 
 func (u *partialReplyUpdater) apply(content string) {
+	if u == nil || isNilPlaceholderUpdater(u.manager) {
+		return
+	}
+
 	editCtx, cancel := context.WithTimeout(context.Background(), streamUpdateTimeout)
 	defer cancel()
 
@@ -101,6 +106,20 @@ func (u *partialReplyUpdater) apply(content string) {
 		u.mu.Lock()
 		u.disabled = true
 		u.mu.Unlock()
+	}
+}
+
+func isNilPlaceholderUpdater(manager placeholderUpdater) bool {
+	if manager == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(manager)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
