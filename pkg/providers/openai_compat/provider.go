@@ -159,7 +159,7 @@ func normalizeModel(model, apiBase string) string {
 	prefix := strings.ToLower(before)
 	switch prefix {
 	case "litellm", "moonshot", "groq", "ollama", "deepseek", "google",
-		"openrouter", "zhipu", "mistral", "vivgrid", "minimax":
+		"openrouter", "zhipu", "mistral", "vivgrid", "minimax", "novita":
 		return after
 	case "nvidia":
 		// NVIDIA-hosted endpoints expect the vendor prefix stripped, but
@@ -200,8 +200,11 @@ func (p *Provider) buildRequestBody(
 		"messages": common.SerializeMessages(messages),
 	}
 
-	if len(tools) > 0 {
-		requestBody["tools"] = tools
+	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
+	nativeSearch, _ := options["native_search"].(bool)
+	nativeSearch = nativeSearch && isNativeSearchHost(p.apiBase)
+	if len(tools) > 0 || nativeSearch {
+		requestBody["tools"] = buildToolsList(tools, nativeSearch)
 		requestBody["tool_choice"] = "auto"
 	}
 
@@ -433,4 +436,31 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 		FinishReason:     finishReason,
 		Usage:            usage,
 	}, nil
+}
+
+func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {
+	result := make([]any, 0, len(tools)+1)
+	for _, t := range tools {
+		if nativeSearch && strings.EqualFold(t.Function.Name, "web_search") {
+			continue
+		}
+		result = append(result, t)
+	}
+	if nativeSearch {
+		result = append(result, map[string]any{"type": "web_search_preview"})
+	}
+	return result
+}
+
+func (p *Provider) SupportsNativeSearch() bool {
+	return isNativeSearchHost(p.apiBase)
+}
+
+func isNativeSearchHost(apiBase string) bool {
+	u, err := url.Parse(apiBase)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
 }
