@@ -61,13 +61,74 @@ func (i *Index) init(ctx context.Context) error {
 			session_key TEXT NOT NULL,
 			channel TEXT NOT NULL,
 			chat_id TEXT NOT NULL,
+			peer_kind TEXT NOT NULL DEFAULT '',
+			chat_label TEXT NOT NULL DEFAULT '',
 			role TEXT NOT NULL,
 			sender_id TEXT NOT NULL,
+			source_kind TEXT NOT NULL DEFAULT '',
+			source_key TEXT NOT NULL DEFAULT '',
 			content TEXT NOT NULL,
 			created_at_ms INTEGER NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_session ON observations(session_key);`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_chat ON observations(channel, chat_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_observations_chat_time ON observations(channel, chat_id, created_at_ms DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source_kind, source_key);`,
+		`CREATE TABLE IF NOT EXISTS chat_catalog (
+			channel TEXT NOT NULL,
+			chat_id TEXT NOT NULL,
+			peer_kind TEXT NOT NULL DEFAULT '',
+			label TEXT NOT NULL DEFAULT '',
+			last_seen_ms INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(channel, chat_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS chat_aliases (
+			alias TEXT PRIMARY KEY,
+			channel TEXT NOT NULL,
+			chat_id TEXT NOT NULL,
+			label TEXT NOT NULL DEFAULT '',
+			allowed_requesters_json TEXT NOT NULL DEFAULT '[]'
+		);`,
+		`CREATE TABLE IF NOT EXISTS chat_participants (
+			channel TEXT NOT NULL,
+			chat_id TEXT NOT NULL,
+			sender_id TEXT NOT NULL,
+			label TEXT NOT NULL DEFAULT '',
+			last_seen_ms INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(channel, chat_id, sender_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS observation_embeddings (
+			observation_id INTEGER PRIMARY KEY,
+			model_name TEXT NOT NULL,
+			dims INTEGER NOT NULL,
+			vector_json TEXT NOT NULL,
+			updated_at_ms INTEGER NOT NULL,
+			FOREIGN KEY(observation_id) REFERENCES observations(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS chat_rollups (
+			channel TEXT NOT NULL,
+			chat_id TEXT NOT NULL,
+			window_start_ms INTEGER NOT NULL,
+			window_end_ms INTEGER NOT NULL,
+			source_count INTEGER NOT NULL DEFAULT 0,
+			last_observation_ms INTEGER NOT NULL DEFAULT 0,
+			summary TEXT NOT NULL,
+			created_at_ms INTEGER NOT NULL,
+			updated_at_ms INTEGER NOT NULL,
+			PRIMARY KEY(channel, chat_id, window_start_ms, window_end_ms)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_rollups_window ON chat_rollups(channel, chat_id, window_start_ms DESC);`,
+		`CREATE TABLE IF NOT EXISTS chat_rollup_embeddings (
+			channel TEXT NOT NULL,
+			chat_id TEXT NOT NULL,
+			window_start_ms INTEGER NOT NULL,
+			window_end_ms INTEGER NOT NULL,
+			model_name TEXT NOT NULL,
+			dims INTEGER NOT NULL,
+			vector_json TEXT NOT NULL,
+			updated_at_ms INTEGER NOT NULL,
+			PRIMARY KEY(channel, chat_id, window_start_ms, window_end_ms)
+		);`,
 		`CREATE TABLE IF NOT EXISTS memory_meta (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
@@ -79,6 +140,16 @@ func (i *Index) init(ctx context.Context) error {
 			return fmt.Errorf("memoryindex: init schema: %w", err)
 		}
 	}
+	for _, stmt := range []string{
+		`ALTER TABLE observations ADD COLUMN source_kind TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE observations ADD COLUMN source_key TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE observations ADD COLUMN peer_kind TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE observations ADD COLUMN chat_label TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := i.db.ExecContext(ctx, stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return fmt.Errorf("memoryindex: migrate schema: %w", err)
+		}
+	}
 
 	if _, err := i.db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(content, content='observations', content_rowid='id', tokenize='unicode61');`); err == nil {
 		i.hasFTS = true
@@ -88,6 +159,7 @@ func (i *Index) init(ctx context.Context) error {
 			END;`,
 			`CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
 				INSERT INTO observations_fts(observations_fts, rowid, content) VALUES('delete', old.id, old.content);
+				DELETE FROM observation_embeddings WHERE observation_id = old.id;
 			END;`,
 			`CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
 				INSERT INTO observations_fts(observations_fts, rowid, content) VALUES('delete', old.id, old.content);
@@ -117,15 +189,27 @@ func (i *Index) AddObservation(ctx context.Context, obs Observation) error {
 		obs.CreatedAt = time.Now()
 	}
 
-	_, err := i.db.ExecContext(
+	return i.insertObservation(ctx, i.db, obs)
+}
+
+type execContexter interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func (i *Index) insertObservation(ctx context.Context, execer execContexter, obs Observation) error {
+	_, err := execer.ExecContext(
 		ctx,
-		`INSERT INTO observations(session_key, channel, chat_id, role, sender_id, content, created_at_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO observations(session_key, channel, chat_id, peer_kind, chat_label, role, sender_id, source_kind, source_key, content, created_at_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		obs.SessionKey,
 		obs.Channel,
 		obs.ChatID,
+		obs.PeerKind,
+		obs.ChatLabel,
 		obs.Role,
 		obs.SenderID,
+		obs.SourceKind,
+		obs.SourceKey,
 		obs.Content,
 		obs.CreatedAt.UnixMilli(),
 	)
@@ -162,24 +246,23 @@ func (i *Index) searchFTS(ctx context.Context, req SearchRequest, limit int) ([]
 		return nil, nil
 	}
 
-	rows, err := i.db.QueryContext(
-		ctx,
-		`SELECT o.session_key, o.channel, o.chat_id, o.role, o.sender_id, o.content, o.created_at_ms
-		   FROM observations_fts f
-		   JOIN observations o ON o.id = f.rowid
-		  WHERE observations_fts MATCH ?
-		  ORDER BY
-		    CASE WHEN o.session_key = ? THEN 0 ELSE 1 END,
-		    CASE WHEN o.channel = ? AND o.chat_id = ? THEN 0 ELSE 1 END,
-		    bm25(observations_fts),
-		    o.created_at_ms DESC
-		  LIMIT ?`,
-		matchQuery,
-		req.SessionKey,
-		req.Channel,
-		req.ChatID,
-		limit,
-	)
+	query := `SELECT o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
+		FROM observations_fts f
+		JOIN observations o ON o.id = f.rowid`
+	whereParts := []string{"observations_fts MATCH ?"}
+	args := []any{matchQuery}
+	whereParts, args = appendSearchFilters(whereParts, args, req)
+	query += " WHERE " + strings.Join(whereParts, " AND ")
+	query += `
+		ORDER BY
+			CASE WHEN o.session_key = ? THEN 0 ELSE 1 END,
+			CASE WHEN o.channel = ? AND o.chat_id = ? THEN 0 ELSE 1 END,
+			bm25(observations_fts),
+			o.created_at_ms DESC
+		LIMIT ?`
+	args = append(args, req.SessionKey, req.Channel, req.ChatID, limit)
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "fts5") {
 			i.hasFTS = false
@@ -194,22 +277,21 @@ func (i *Index) searchFTS(ctx context.Context, req SearchRequest, limit int) ([]
 
 func (i *Index) searchLike(ctx context.Context, req SearchRequest, limit int) ([]Hit, error) {
 	pattern := "%" + req.Query + "%"
-	rows, err := i.db.QueryContext(
-		ctx,
-		`SELECT session_key, channel, chat_id, role, sender_id, content, created_at_ms
-		   FROM observations
-		  WHERE content LIKE ?
-		  ORDER BY
-		    CASE WHEN session_key = ? THEN 0 ELSE 1 END,
-		    CASE WHEN channel = ? AND chat_id = ? THEN 0 ELSE 1 END,
-		    created_at_ms DESC
-		  LIMIT ?`,
-		pattern,
-		req.SessionKey,
-		req.Channel,
-		req.ChatID,
-		limit,
-	)
+	query := `SELECT o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
+		FROM observations o`
+	whereParts := []string{"content LIKE ?"}
+	args := []any{pattern}
+	whereParts, args = appendSearchFilters(whereParts, args, req)
+	query += " WHERE " + strings.Join(whereParts, " AND ")
+	query += `
+		ORDER BY
+			CASE WHEN session_key = ? THEN 0 ELSE 1 END,
+			CASE WHEN channel = ? AND chat_id = ? THEN 0 ELSE 1 END,
+			created_at_ms DESC
+		LIMIT ?`
+	args = append(args, req.SessionKey, req.Channel, req.ChatID, limit)
+
+	rows, err := i.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("memoryindex: like search: %w", err)
 	}
@@ -229,6 +311,8 @@ func scanHits(rows *sql.Rows, maxSnippetChars int) ([]Hit, error) {
 			&hit.SessionKey,
 			&hit.Channel,
 			&hit.ChatID,
+			&hit.PeerKind,
+			&hit.ChatLabel,
 			&hit.Role,
 			&hit.SenderID,
 			&hit.Content,
@@ -244,6 +328,41 @@ func scanHits(rows *sql.Rows, maxSnippetChars int) ([]Hit, error) {
 		return nil, fmt.Errorf("memoryindex: rows: %w", err)
 	}
 	return hits, nil
+}
+
+func appendSearchFilters(whereParts []string, args []any, req SearchRequest) ([]string, []any) {
+	scopes := compactScopes(req)
+	if len(scopes) > 0 {
+		clauses := make([]string, 0, len(scopes))
+		for _, scope := range scopes {
+			clauses = append(clauses, "(o.channel = ? AND o.chat_id = ?)")
+			args = append(args, scope.Channel, scope.ChatID)
+		}
+		whereParts = append(whereParts, "("+strings.Join(clauses, " OR ")+")")
+	} else if strings.TrimSpace(req.Channel) != "" && strings.TrimSpace(req.ChatID) != "" {
+		whereParts = append(whereParts, "o.channel = ?", "o.chat_id = ?")
+		args = append(args, req.Channel, req.ChatID)
+	}
+
+	if !req.Since.IsZero() {
+		whereParts = append(whereParts, "o.created_at_ms >= ?")
+		args = append(args, req.Since.UnixMilli())
+	}
+	if !req.Until.IsZero() {
+		whereParts = append(whereParts, "o.created_at_ms <= ?")
+		args = append(args, req.Until.UnixMilli())
+	}
+	return whereParts, args
+}
+
+func compactScopes(req SearchRequest) []ChatScope {
+	if len(req.ChatScopes) > 0 {
+		return req.ChatScopes
+	}
+	if strings.TrimSpace(req.Channel) == "" || strings.TrimSpace(req.ChatID) == "" {
+		return nil
+	}
+	return []ChatScope{{Channel: req.Channel, ChatID: req.ChatID}}
 }
 
 func buildFTSQuery(query string) string {
@@ -294,6 +413,61 @@ func (i *Index) setMeta(ctx context.Context, key, value string) error {
 	_, err := i.db.ExecContext(ctx, `INSERT INTO memory_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	if err != nil {
 		return fmt.Errorf("memoryindex: set meta: %w", err)
+	}
+	return nil
+}
+
+func (i *Index) metaString(ctx context.Context, key string) (string, error) {
+	var value string
+	err := i.db.QueryRowContext(ctx, `SELECT value FROM memory_meta WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("memoryindex: read meta: %w", err)
+	}
+	return value, nil
+}
+
+func (i *Index) ReplaceSourceObservations(ctx context.Context, sourceKind, sourceKey string, observations []Observation) error {
+	if i == nil || i.db == nil {
+		return nil
+	}
+	sourceKind = strings.TrimSpace(sourceKind)
+	sourceKey = strings.TrimSpace(sourceKey)
+	if sourceKind == "" || sourceKey == "" {
+		return fmt.Errorf("memoryindex: source_kind and source_key are required")
+	}
+
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("memoryindex: begin replace source tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM observations WHERE source_kind = ? AND source_key = ?`, sourceKind, sourceKey); err != nil {
+		return fmt.Errorf("memoryindex: delete source observations: %w", err)
+	}
+
+	for _, obs := range observations {
+		obs.SourceKind = sourceKind
+		obs.SourceKey = sourceKey
+		if content := strings.TrimSpace(obs.Content); content != "" {
+			obs.Content = content
+		}
+		if !ShouldIndexObservation(obs) {
+			continue
+		}
+		if obs.CreatedAt.IsZero() {
+			obs.CreatedAt = time.Now()
+		}
+		if err := i.insertObservation(ctx, tx, obs); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("memoryindex: commit replace source tx: %w", err)
 	}
 	return nil
 }

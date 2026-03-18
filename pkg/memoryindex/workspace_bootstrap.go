@@ -2,6 +2,8 @@ package memoryindex
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,42 +14,56 @@ import (
 var learningEntryHeader = regexp.MustCompile(`(?m)^## \[[A-Z]+-\d{8}-[A-Z0-9]+\] .+$`)
 
 type workspaceDocument struct {
-	Label string
-	Path  string
+	Label     string
+	Path      string
+	SourceKey string
 }
 
 func (i *Index) BootstrapWorkspaceFiles(ctx context.Context, workspace string) error {
-	bootstrapped, err := i.metaBool(ctx, "bootstrapped_workspace")
-	if err != nil {
-		return err
-	}
-	if bootstrapped {
-		return nil
-	}
+	return i.SyncWorkspaceFiles(ctx, workspace)
+}
 
+func (i *Index) SyncWorkspaceFiles(ctx context.Context, workspace string) error {
 	docs := []workspaceDocument{
-		{Label: "memory", Path: filepath.Join(workspace, "memory", "MEMORY.md")},
-		{Label: "learning", Path: filepath.Join(workspace, ".learnings", "LEARNINGS.md")},
-		{Label: "error", Path: filepath.Join(workspace, ".learnings", "ERRORS.md")},
-		{Label: "feature_request", Path: filepath.Join(workspace, ".learnings", "FEATURE_REQUESTS.md")},
+		{Label: "memory", Path: filepath.Join(workspace, "memory", "MEMORY.md"), SourceKey: "memory/MEMORY.md"},
+		{Label: "learning", Path: filepath.Join(workspace, ".learnings", "LEARNINGS.md"), SourceKey: ".learnings/LEARNINGS.md"},
+		{Label: "error", Path: filepath.Join(workspace, ".learnings", "ERRORS.md"), SourceKey: ".learnings/ERRORS.md"},
+		{Label: "feature_request", Path: filepath.Join(workspace, ".learnings", "FEATURE_REQUESTS.md"), SourceKey: ".learnings/FEATURE_REQUESTS.md"},
 	}
 
 	for _, doc := range docs {
-		if err := i.bootstrapWorkspaceDocument(ctx, doc); err != nil {
+		if err := i.syncWorkspaceDocument(ctx, doc); err != nil {
 			return err
 		}
 	}
 
-	return i.setMeta(ctx, "bootstrapped_workspace", "1")
+	return nil
 }
 
-func (i *Index) bootstrapWorkspaceDocument(ctx context.Context, doc workspaceDocument) error {
+func (i *Index) syncWorkspaceDocument(ctx context.Context, doc workspaceDocument) error {
+	metaKey := "workspace_doc_hash:" + doc.SourceKey
+	prevHash, err := i.metaString(ctx, metaKey)
+	if err != nil {
+		return err
+	}
+
 	data, err := os.ReadFile(doc.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if prevHash != "" {
+				if err := i.ReplaceSourceObservations(ctx, "workspace_doc", doc.SourceKey, nil); err != nil {
+					return err
+				}
+				return i.setMeta(ctx, metaKey, "")
+			}
 			return nil
 		}
 		return fmt.Errorf("memoryindex: read workspace doc: %w", err)
+	}
+
+	currentHash := sha256Hex(data)
+	if currentHash == prevHash {
+		return nil
 	}
 
 	var chunks []string
@@ -58,19 +74,26 @@ func (i *Index) bootstrapWorkspaceDocument(ctx context.Context, doc workspaceDoc
 		chunks = extractLearningEntries(string(data))
 	}
 
+	observations := make([]Observation, 0, len(chunks))
 	for _, chunk := range chunks {
-		if err := i.AddObservation(ctx, Observation{
+		observations = append(observations, Observation{
 			Channel:  "memory",
 			ChatID:   doc.Label,
 			Role:     "assistant",
 			SenderID: doc.Label,
 			Content:  chunk,
-		}); err != nil {
-			return err
-		}
+		})
 	}
 
-	return nil
+	if err := i.ReplaceSourceObservations(ctx, "workspace_doc", doc.SourceKey, observations); err != nil {
+		return err
+	}
+	return i.setMeta(ctx, metaKey, currentHash)
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func extractMemorySections(content string) []string {

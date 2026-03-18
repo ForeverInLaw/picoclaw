@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/chatmemory"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/memory"
@@ -46,6 +47,7 @@ type AgentInstance struct {
 	ImageProvider             providers.LLMProvider
 	ImageCandidates           []providers.FallbackCandidate
 	MemoryIndex               *memoryindex.Index
+	ChatMemory                *chatmemory.Service
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -107,13 +109,17 @@ func NewAgentInstance(
 
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessions := initSessionStore(sessionsDir)
-	memIndex := initMemoryIndex(defaults, workspace, sessionsDir)
+	memIndex := initMemoryIndex(cfg, defaults, workspace, sessionsDir)
 
 	mcpDiscoveryActive := cfg.Tools.MCP.Enabled && cfg.Tools.MCP.Discovery.Enabled
 	contextBuilder := NewContextBuilder(workspace).WithToolDiscovery(
 		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
 		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
 	)
+	chatMemoryService := initChatMemoryService(cfg, defaults, memIndex)
+	if chatMemoryService != nil {
+		toolsRegistry.Register(tools.NewChatMemoryTool(chatMemoryService))
+	}
 
 	agentID := routing.DefaultAgentID
 	agentName := ""
@@ -275,6 +281,7 @@ func NewAgentInstance(
 		ImageProvider:             imageProvider,
 		ImageCandidates:           imageCandidates,
 		MemoryIndex:               memIndex,
+		ChatMemory:                chatMemoryService,
 		Router:                    router,
 		LightCandidates:           lightCandidates,
 	}
@@ -381,7 +388,7 @@ func initSessionStore(dir string) session.SessionStore {
 	return session.NewJSONLBackend(store)
 }
 
-func initMemoryIndex(defaults *config.AgentDefaults, workspace, sessionsDir string) *memoryindex.Index {
+func initMemoryIndex(cfg *config.Config, defaults *config.AgentDefaults, workspace, sessionsDir string) *memoryindex.Index {
 	if defaults == nil || !defaults.MemoryIndex.Enabled {
 		return nil
 	}
@@ -399,10 +406,44 @@ func initMemoryIndex(defaults *config.AgentDefaults, workspace, sessionsDir stri
 	if err := idx.BootstrapSessions(context.Background(), sessionsDir); err != nil {
 		log.Printf("memoryindex: bootstrap failed: %v", err)
 	}
-	if err := idx.BootstrapWorkspaceFiles(context.Background(), workspace); err != nil {
+	if err := idx.SyncWorkspaceFiles(context.Background(), workspace); err != nil {
 		log.Printf("memoryindex: workspace bootstrap failed: %v", err)
 	}
+	if cfg != nil {
+		aliases := make([]memoryindex.ChatAliasRecord, 0, len(defaults.MemoryIndex.ChatAliases))
+		for _, alias := range defaults.MemoryIndex.ChatAliases {
+			aliases = append(aliases, memoryindex.ChatAliasRecord{
+				Alias:             alias.Alias,
+				Channel:           alias.Channel,
+				ChatID:            alias.ChatID,
+				Label:             alias.Label,
+				AllowedRequesters: alias.AllowedRequesters,
+			})
+		}
+		if err := idx.SyncChatAliases(context.Background(), aliases); err != nil {
+			log.Printf("memoryindex: chat alias sync failed: %v", err)
+		}
+	}
 	return idx
+}
+
+func initChatMemoryService(
+	cfg *config.Config,
+	defaults *config.AgentDefaults,
+	idx *memoryindex.Index,
+) *chatmemory.Service {
+	if cfg == nil || defaults == nil || idx == nil {
+		return nil
+	}
+	var embedder *chatmemory.Embedder
+	if defaults.MemoryIndex.Embeddings.Enabled && defaults.MemoryIndex.Embeddings.ModelName != "" {
+		if modelCfg, err := cfg.GetModelConfig(defaults.MemoryIndex.Embeddings.ModelName); err == nil {
+			embedder = chatmemory.NewEmbedder(modelCfg, defaults.MemoryIndex.Embeddings)
+		} else {
+			log.Printf("chatmemory: embedding model %q not found: %v", defaults.MemoryIndex.Embeddings.ModelName, err)
+		}
+	}
+	return chatmemory.New(idx, defaults.MemoryIndex, embedder)
 }
 
 func expandHome(path string) string {
