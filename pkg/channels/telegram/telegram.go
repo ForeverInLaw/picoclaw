@@ -532,10 +532,12 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	// In group chats, apply unified group trigger filtering
 	if message.Chat.Type != "private" {
 		isMentioned := c.isBotMentioned(message)
+		isReplyToBot := c.isReplyToBot(message)
+		isAddressedToBot := isMentioned || isReplyToBot
 		if isMentioned {
 			content = c.stripBotMention(content)
 		}
-		respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
+		respond, cleaned := c.ShouldRespondInGroup(isAddressedToBot, content)
 		if !respond {
 			return nil
 		}
@@ -793,6 +795,32 @@ func (c *TelegramChannel) isBotMentioned(message *telego.Message) bool {
 		}
 	}
 	return false
+}
+
+// isReplyToBot reports whether the incoming message is replying to a message
+// sent by this bot. In group chats this should count as addressing the bot,
+// even without an explicit @mention.
+func (c *TelegramChannel) isReplyToBot(message *telego.Message) bool {
+	if message == nil || message.ReplyToMessage == nil || message.ReplyToMessage.From == nil {
+		return false
+	}
+
+	replyAuthor := message.ReplyToMessage.From
+	if !replyAuthor.IsBot {
+		return false
+	}
+
+	botUsername := ""
+	if c.bot != nil {
+		botUsername = c.bot.Username()
+	}
+
+	switch {
+	case botUsername != "" && replyAuthor.Username != "":
+		return strings.EqualFold(replyAuthor.Username, botUsername)
+	default:
+		return true
+	}
 }
 
 func telegramEntityTextAndList(message *telego.Message) (string, []telego.MessageEntity) {

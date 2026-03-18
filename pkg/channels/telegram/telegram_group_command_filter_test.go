@@ -147,3 +147,87 @@ func TestIsBotMentioned_MentionEntityUnaffected(t *testing.T) {
 		t.Fatal("expected mention entity to be treated as bot mention")
 	}
 }
+
+func TestHandleMessage_GroupMentionOnly_ReplyToBot(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "без упоминания, но ответ боту",
+		MessageID: 43,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        8,
+			FirstName: "Bob",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 42,
+			From: &telego.User{
+				ID:       1,
+				Username: "testbot",
+				IsBot:    true,
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Microsecond)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for reply-to-bot message to be forwarded")
+	case inbound, ok := <-messageBus.InboundChan():
+		if !ok {
+			t.Fatal("expected inbound message to be forwarded")
+		}
+		if inbound.Content != msg.Text {
+			t.Fatalf("content=%q want=%q", inbound.Content, msg.Text)
+		}
+	}
+}
+
+func TestHandleMessage_GroupMentionOnly_ReplyToHumanIgnored(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "ответ не боту",
+		MessageID: 44,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        9,
+			FirstName: "Carol",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 41,
+			From: &telego.User{
+				ID:        77,
+				Username:  "alice",
+				FirstName: "Alice",
+				IsBot:     false,
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Microsecond)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		return
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("expected reply-to-human message to be ignored, got %+v", inbound)
+	}
+}
