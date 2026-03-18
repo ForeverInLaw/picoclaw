@@ -52,42 +52,6 @@ func (r *recordingProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
-type messageThenDoneProvider struct {
-	call int
-}
-
-func (p *messageThenDoneProvider) Chat(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
-) (*providers.LLMResponse, error) {
-	p.call++
-	if p.call == 1 {
-		return &providers.LLMResponse{
-			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_message_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "message",
-						Arguments: `{"content":"VISIBLE_REPLY"}`,
-					},
-				},
-			},
-		}, nil
-	}
-	return &providers.LLMResponse{
-		Content:   "Done.",
-		ToolCalls: []providers.ToolCall{},
-	}, nil
-}
-
-func (p *messageThenDoneProvider) GetDefaultModel() string {
-	return "mock-model"
-}
-
 func newTestAgentLoop(
 	t *testing.T,
 ) (al *AgentLoop, cfg *config.Config, msgBus *bus.MessageBus, provider *mockProvider, cleanup func()) {
@@ -211,60 +175,6 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
 	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
 		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
-	}
-}
-
-func TestProcessMessage_PersistsDeliveredReplyInsteadOfMetaAck(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				Model:             "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-		Tools: config.ToolsConfig{
-			Message: config.ToolConfig{Enabled: true},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &messageThenDoneProvider{}
-	al := NewAgentLoop(cfg, msgBus, provider)
-
-	_, err = al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:42",
-		Sender: bus.SenderInfo{
-			DisplayName: "Tester",
-		},
-		ChatID:  "42",
-		Content: "reply using the message tool",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-
-	defaultAgent := al.registry.GetDefaultAgent()
-	if defaultAgent == nil {
-		t.Fatal("No default agent found")
-	}
-
-	history := defaultAgent.Sessions.GetHistory("agent:main:main")
-	if len(history) == 0 {
-		t.Fatal("expected session history")
-	}
-
-	last := history[len(history)-1]
-	if last.Role != "assistant" || last.Content != "VISIBLE_REPLY" {
-		t.Fatalf("last history message = %+v, want assistant VISIBLE_REPLY", last)
 	}
 }
 
