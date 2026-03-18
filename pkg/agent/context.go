@@ -507,6 +507,7 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderD
 func (cb *ContextBuilder) BuildMessages(
 	history []providers.Message,
 	summary string,
+	retrievedMemory string,
 	currentMessage string,
 	media []string,
 	channel, chatID, senderID, senderDisplayName string,
@@ -550,6 +551,10 @@ func (cb *ContextBuilder) BuildMessages(
 			summary)
 		stringParts = append(stringParts, summaryText)
 		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: summaryText})
+	}
+	if retrievedMemory != "" {
+		stringParts = append(stringParts, retrievedMemory)
+		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: retrievedMemory})
 	}
 
 	fullSystemPrompt := strings.Join(stringParts, "\n\n---\n\n")

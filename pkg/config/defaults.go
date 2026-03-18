@@ -35,6 +35,12 @@ func DefaultConfig() *Config {
 				MaxToolIterations:         50,
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
+				MemoryIndex: MemoryIndexConfig{
+					Enabled:         false,
+					MaxResults:      5,
+					MaxSnippetChars: 280,
+					MinQueryChars:   12,
+				},
 			},
 		},
 		Bindings: []AgentBinding{},

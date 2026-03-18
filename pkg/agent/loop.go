@@ -936,13 +936,16 @@ func (al *AgentLoop) runAgentLoop(
 	// 1. Build messages (skip history for heartbeat)
 	var history []providers.Message
 	var summary string
+	var retrievedMemory string
 	if !opts.NoHistory {
 		history = agent.Sessions.GetHistory(opts.SessionKey)
 		summary = agent.Sessions.GetSummary(opts.SessionKey)
+		retrievedMemory = lookupRetrievedMemories(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.UserMessage)
 	}
 	messages := agent.ContextBuilder.BuildMessages(
 		history,
 		summary,
+		retrievedMemory,
 		opts.UserMessage,
 		opts.Media,
 		opts.Channel,
@@ -958,6 +961,7 @@ func (al *AgentLoop) runAgentLoop(
 
 	// 2. Save user message to session
 	agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
+	recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, "user", opts.SenderID, opts.UserMessage)
 
 	// 3. Run LLM iteration loop
 	finalContent, iteration, err := al.runLLMIteration(ctx, agent, messages, opts)
@@ -975,6 +979,7 @@ func (al *AgentLoop) runAgentLoop(
 
 	// 5. Save final assistant message to session
 	agent.Sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
+	recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, "assistant", "", finalContent)
 	agent.Sessions.Save(opts.SessionKey)
 
 	// 6. Optional: summarization
@@ -1251,6 +1256,7 @@ func (al *AgentLoop) runLLMIteration(
 				newSummary := agent.Sessions.GetSummary(opts.SessionKey)
 				messages = agent.ContextBuilder.BuildMessages(
 					newHistory, newSummary, "",
+					"",
 					nil, opts.Channel, opts.ChatID, opts.SenderID, opts.SenderDisplayName,
 				)
 				continue
