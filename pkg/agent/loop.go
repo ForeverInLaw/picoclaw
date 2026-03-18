@@ -938,6 +938,9 @@ func (al *AgentLoop) runAgentLoop(
 	var summary string
 	var retrievedMemory string
 	if !opts.NoHistory {
+		if agent.MemoryIndex != nil {
+			_ = agent.MemoryIndex.SyncWorkspaceFiles(ctx, agent.Workspace)
+		}
 		history = agent.Sessions.GetHistory(opts.SessionKey)
 		summary = agent.Sessions.GetSummary(opts.SessionKey)
 		retrievedMemory = lookupRetrievedMemories(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.UserMessage)
@@ -977,9 +980,24 @@ func (al *AgentLoop) runAgentLoop(
 		finalContent = opts.DefaultResponse
 	}
 
-	// 5. Save final assistant message to session
-	agent.Sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
-	recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, "assistant", "", finalContent)
+	// 5. Save assistant-visible output to session/memory.
+	savedDeliveredReply := false
+	if tool, ok := agent.Tools.Get("message"); ok {
+		if mt, ok := tool.(*tools.MessageTool); ok {
+			savedDeliveredReply = recordDeliveredAssistantMessages(
+				ctx,
+				agent,
+				opts.SessionKey,
+				opts.Channel,
+				opts.ChatID,
+				mt.DeliveredInRound(),
+			)
+		}
+	}
+	if !savedDeliveredReply {
+		agent.Sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
+		recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, "assistant", "", finalContent)
+	}
 	agent.Sessions.Save(opts.SessionKey)
 
 	// 6. Optional: summarization

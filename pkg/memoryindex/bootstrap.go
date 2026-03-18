@@ -106,6 +106,8 @@ func (i *Index) bootstrapSessionFile(ctx context.Context, sessionsDir, metaName 
 			ChatID:     chatID,
 			Role:       "assistant",
 			SenderID:   "summary",
+			SourceKind: "session_summary",
+			SourceKey:  meta.Key,
 			Content:    "[session_summary]\n\n" + summary,
 		}); err != nil {
 			return err

@@ -92,6 +92,35 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	}
 }
 
+func TestMessageTool_DeliveredInRound_TracksAndResets(t *testing.T) {
+	tool := NewMessageTool()
+	tool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
+		return nil
+	})
+
+	ctx := WithToolContext(context.Background(), "telegram", "42")
+	result := tool.Execute(ctx, map[string]any{"content": "hello"})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	delivered := tool.DeliveredInRound()
+	if len(delivered) != 1 {
+		t.Fatalf("expected 1 delivered message, got %d", len(delivered))
+	}
+	if delivered[0].Content != "hello" || delivered[0].Channel != "telegram" || delivered[0].ChatID != "42" {
+		t.Fatalf("unexpected delivered message: %#v", delivered[0])
+	}
+
+	tool.ResetSentInRound()
+	if tool.HasSentInRound() {
+		t.Fatal("expected sentInRound to be reset")
+	}
+	if got := tool.DeliveredInRound(); len(got) != 0 {
+		t.Fatalf("expected delivered messages to be cleared, got %#v", got)
+	}
+}
+
 func TestMessageTool_Execute_PassesReplyToMessageIDViaContext(t *testing.T) {
 	tool := NewMessageTool()
 

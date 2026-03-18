@@ -146,3 +146,56 @@ func TestIndex_BootstrapWorkspaceFilesImportsDurableMemory(t *testing.T) {
 		t.Fatalf("expected learning hit, got %#v", hits)
 	}
 }
+
+func TestIndex_SyncWorkspaceFiles_ReplacesUpdatedDocumentContent(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, "memory"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(memory) error: %v", err)
+	}
+
+	docPath := filepath.Join(workspace, "memory", "MEMORY.md")
+	initial := "# Long-term Memory\n\n## Preferences\n\nALPHA-SHARD-91.\n"
+	if err := os.WriteFile(docPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile(initial) error: %v", err)
+	}
+
+	idx, err := Open(filepath.Join(root, "memory", "index.sqlite"), Config{
+		MaxResults:      5,
+		MaxSnippetChars: 200,
+		MinQueryChars:   3,
+	})
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer idx.Close()
+
+	if err := idx.SyncWorkspaceFiles(context.Background(), workspace); err != nil {
+		t.Fatalf("SyncWorkspaceFiles(initial) error: %v", err)
+	}
+
+	updated := "# Long-term Memory\n\n## Preferences\n\nOMEGA-TRACE-27.\n"
+	if err := os.WriteFile(docPath, []byte(updated), 0o644); err != nil {
+		t.Fatalf("WriteFile(updated) error: %v", err)
+	}
+
+	if err := idx.SyncWorkspaceFiles(context.Background(), workspace); err != nil {
+		t.Fatalf("SyncWorkspaceFiles(updated) error: %v", err)
+	}
+
+	oldHits, err := idx.Search(context.Background(), SearchRequest{Query: "ALPHA-SHARD-91"})
+	if err != nil {
+		t.Fatalf("Search(old) error: %v", err)
+	}
+	if len(oldHits) != 0 {
+		t.Fatalf("expected old content to be removed, got %#v", oldHits)
+	}
+
+	newHits, err := idx.Search(context.Background(), SearchRequest{Query: "OMEGA-TRACE-27"})
+	if err != nil {
+		t.Fatalf("Search(new) error: %v", err)
+	}
+	if len(newHits) == 0 || !strings.Contains(newHits[0].Content, "OMEGA-TRACE-27") {
+		t.Fatalf("expected updated content hit, got %#v", newHits)
+	}
+}

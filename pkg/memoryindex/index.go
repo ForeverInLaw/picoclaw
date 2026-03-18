@@ -63,11 +63,14 @@ func (i *Index) init(ctx context.Context) error {
 			chat_id TEXT NOT NULL,
 			role TEXT NOT NULL,
 			sender_id TEXT NOT NULL,
+			source_kind TEXT NOT NULL DEFAULT '',
+			source_key TEXT NOT NULL DEFAULT '',
 			content TEXT NOT NULL,
 			created_at_ms INTEGER NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_session ON observations(session_key);`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_chat ON observations(channel, chat_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source_kind, source_key);`,
 		`CREATE TABLE IF NOT EXISTS memory_meta (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
@@ -77,6 +80,14 @@ func (i *Index) init(ctx context.Context) error {
 	for _, stmt := range stmts {
 		if _, err := i.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("memoryindex: init schema: %w", err)
+		}
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE observations ADD COLUMN source_kind TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE observations ADD COLUMN source_key TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := i.db.ExecContext(ctx, stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return fmt.Errorf("memoryindex: migrate schema: %w", err)
 		}
 	}
 
@@ -117,15 +128,25 @@ func (i *Index) AddObservation(ctx context.Context, obs Observation) error {
 		obs.CreatedAt = time.Now()
 	}
 
-	_, err := i.db.ExecContext(
+	return i.insertObservation(ctx, i.db, obs)
+}
+
+type execContexter interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func (i *Index) insertObservation(ctx context.Context, execer execContexter, obs Observation) error {
+	_, err := execer.ExecContext(
 		ctx,
-		`INSERT INTO observations(session_key, channel, chat_id, role, sender_id, content, created_at_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO observations(session_key, channel, chat_id, role, sender_id, source_kind, source_key, content, created_at_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		obs.SessionKey,
 		obs.Channel,
 		obs.ChatID,
 		obs.Role,
 		obs.SenderID,
+		obs.SourceKind,
+		obs.SourceKey,
 		obs.Content,
 		obs.CreatedAt.UnixMilli(),
 	)
@@ -294,6 +315,61 @@ func (i *Index) setMeta(ctx context.Context, key, value string) error {
 	_, err := i.db.ExecContext(ctx, `INSERT INTO memory_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	if err != nil {
 		return fmt.Errorf("memoryindex: set meta: %w", err)
+	}
+	return nil
+}
+
+func (i *Index) metaString(ctx context.Context, key string) (string, error) {
+	var value string
+	err := i.db.QueryRowContext(ctx, `SELECT value FROM memory_meta WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("memoryindex: read meta: %w", err)
+	}
+	return value, nil
+}
+
+func (i *Index) ReplaceSourceObservations(ctx context.Context, sourceKind, sourceKey string, observations []Observation) error {
+	if i == nil || i.db == nil {
+		return nil
+	}
+	sourceKind = strings.TrimSpace(sourceKind)
+	sourceKey = strings.TrimSpace(sourceKey)
+	if sourceKind == "" || sourceKey == "" {
+		return fmt.Errorf("memoryindex: source_kind and source_key are required")
+	}
+
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("memoryindex: begin replace source tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM observations WHERE source_kind = ? AND source_key = ?`, sourceKind, sourceKey); err != nil {
+		return fmt.Errorf("memoryindex: delete source observations: %w", err)
+	}
+
+	for _, obs := range observations {
+		obs.SourceKind = sourceKind
+		obs.SourceKey = sourceKey
+		if content := strings.TrimSpace(obs.Content); content != "" {
+			obs.Content = content
+		}
+		if !ShouldIndexObservation(obs) {
+			continue
+		}
+		if obs.CreatedAt.IsZero() {
+			obs.CreatedAt = time.Now()
+		}
+		if err := i.insertObservation(ctx, tx, obs); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("memoryindex: commit replace source tx: %w", err)
 	}
 	return nil
 }

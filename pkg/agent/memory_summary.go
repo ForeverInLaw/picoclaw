@@ -13,14 +13,14 @@ func recordMemorySummary(ctx context.Context, agent *AgentInstance, sessionKey, 
 	}
 
 	channel, chatID := parseMemorySessionSource(sessionKey)
-	_ = agent.MemoryIndex.AddObservation(ctx, memoryindex.Observation{
+	_ = agent.MemoryIndex.ReplaceSourceObservations(ctx, "session_summary", sessionKey, []memoryindex.Observation{{
 		SessionKey: sessionKey,
 		Channel:    channel,
 		ChatID:     chatID,
 		Role:       "assistant",
 		SenderID:   "summary",
 		Content:    "[session_summary]\n\n" + strings.TrimSpace(summary),
-	})
+	}})
 }
 
 func parseMemorySessionSource(sessionKey string) (channel, chatID string) {

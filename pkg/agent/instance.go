@@ -399,7 +399,7 @@ func initMemoryIndex(defaults *config.AgentDefaults, workspace, sessionsDir stri
 	if err := idx.BootstrapSessions(context.Background(), sessionsDir); err != nil {
 		log.Printf("memoryindex: bootstrap failed: %v", err)
 	}
-	if err := idx.BootstrapWorkspaceFiles(context.Background(), workspace); err != nil {
+	if err := idx.SyncWorkspaceFiles(context.Background(), workspace); err != nil {
 		log.Printf("memoryindex: workspace bootstrap failed: %v", err)
 	}
 	return idx

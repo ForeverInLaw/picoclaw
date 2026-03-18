@@ -14,6 +14,8 @@ type Observation struct {
 	ChatID     string
 	Role       string
 	SenderID   string
+	SourceKind string
+	SourceKey  string
 	Content    string
 	CreatedAt  time.Time
 }
