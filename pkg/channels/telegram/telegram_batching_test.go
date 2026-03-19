@@ -228,7 +228,7 @@ func TestDispatchInboundCandidate_BatchesTelegramMediaGroup(t *testing.T) {
 		media:         []string{"media://photo-1"},
 		metadata:      map[string]string{"media_group_id": "album-1"},
 		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
-		batchKey:      "123|telegram:42|album:album-1",
+		batchKey:      "123|telegram:42",
 		batchEligible: true,
 		mediaGroupID:  "album-1",
 	}
@@ -241,7 +241,7 @@ func TestDispatchInboundCandidate_BatchesTelegramMediaGroup(t *testing.T) {
 		media:         []string{"media://photo-2"},
 		metadata:      map[string]string{"media_group_id": "album-1"},
 		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
-		batchKey:      "123|telegram:42|album:album-1",
+		batchKey:      "123|telegram:42",
 		batchEligible: true,
 		mediaGroupID:  "album-1",
 	}
@@ -268,5 +268,83 @@ func TestDispatchInboundCandidate_BatchesTelegramMediaGroup(t *testing.T) {
 	}
 	if strings.Count(inbound.Content, "[image: photo]") != 2 {
 		t.Fatalf("content=%q want two image markers", inbound.Content)
+	}
+}
+
+func TestDispatchInboundCandidate_BatchesCommentWithTelegramMediaGroup(t *testing.T) {
+	ch, messageBus := newBatchingTestChannel(t, 30)
+
+	comment := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "601",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "что думаешь об этом?",
+		metadata:      map[string]string{},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42",
+		batchEligible: true,
+	}
+	imageOnly := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "602",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "[forwarded from chan]: [image: photo]",
+		media:         []string{"media://photo-1"},
+		metadata:      map[string]string{"media_group_id": "album-2"},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42",
+		batchEligible: true,
+		mediaGroupID:  "album-2",
+	}
+	caption := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "603",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "[forwarded from chan]: полный текст поста\n[image: photo]",
+		media:         []string{"media://photo-2"},
+		metadata:      map[string]string{"media_group_id": "album-2"},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42",
+		batchEligible: true,
+		mediaGroupID:  "album-2",
+	}
+
+	if err := ch.dispatchInboundCandidate(context.Background(), comment); err != nil {
+		t.Fatalf("dispatchInboundCandidate(comment) error: %v", err)
+	}
+	if err := ch.dispatchInboundCandidate(context.Background(), imageOnly); err != nil {
+		t.Fatalf("dispatchInboundCandidate(imageOnly) error: %v", err)
+	}
+	if err := ch.dispatchInboundCandidate(context.Background(), caption); err != nil {
+		t.Fatalf("dispatchInboundCandidate(caption) error: %v", err)
+	}
+
+	inbound := recvInbound(t, messageBus.InboundChan(), 250*time.Millisecond)
+	if got := inbound.Metadata["media_group_id"]; got != "album-2" {
+		t.Fatalf("media_group_id=%q want=album-2", got)
+	}
+	if got := inbound.Metadata["batch_count"]; got != "3" {
+		t.Fatalf("batch_count=%q want=3", got)
+	}
+	if !strings.Contains(inbound.Content, "что думаешь об этом?") {
+		t.Fatalf("content=%q missing user comment", inbound.Content)
+	}
+	if !strings.Contains(inbound.Content, "полный текст поста") {
+		t.Fatalf("content=%q missing caption text", inbound.Content)
+	}
+	commentIdx := strings.Index(inbound.Content, "что думаешь об этом?")
+	captionIdx := strings.Index(inbound.Content, "полный текст поста")
+	imageIdx := strings.Index(inbound.Content, "[forwarded from chan]: [image: photo]")
+	if commentIdx == -1 || captionIdx == -1 || imageIdx == -1 {
+		t.Fatalf("unexpected content order: %q", inbound.Content)
+	}
+	if imageIdx < commentIdx || imageIdx < captionIdx {
+		t.Fatalf("content=%q want image-only segment after text segments", inbound.Content)
+	}
+	if len(inbound.Media) != 2 {
+		t.Fatalf("len(media)=%d want=2", len(inbound.Media))
 	}
 }

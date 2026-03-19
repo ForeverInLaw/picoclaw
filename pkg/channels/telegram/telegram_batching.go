@@ -246,9 +246,6 @@ func (c *TelegramChannel) buildInboundCandidate(
 		(len(mediaPaths) == 0 || mediaGroupID != "")
 
 	batchKey := compositeChatID + "|" + sender.CanonicalID
-	if mediaGroupID != "" {
-		batchKey += "|album:" + mediaGroupID
-	}
 
 	return &telegramInboundCandidate{
 		peer:             bus.Peer{Kind: peerKind, ID: peerID},
@@ -335,6 +332,9 @@ func (c *TelegramChannel) enqueueTelegramBatch(
 		return
 	}
 
+	if existing.mediaGroupID == "" && candidate.mediaGroupID != "" {
+		existing.mediaGroupID = candidate.mediaGroupID
+	}
 	existing.contents = append(existing.contents, candidate.content)
 	existing.media = append(existing.media, candidate.media...)
 	existing.messageIDs = append(existing.messageIDs, candidate.messageID)
@@ -350,9 +350,18 @@ func telegramBatchCompatible(batch *telegramInboundBatch, candidate telegramInbo
 	}
 	return batch.observeOnly == candidate.observeOnly &&
 		batch.replyToMessageID == candidate.replyToMessageID &&
-		batch.mediaGroupID == candidate.mediaGroupID &&
+		telegramMediaGroupCompatible(batch.mediaGroupID, candidate.mediaGroupID) &&
 		batch.chatID == candidate.chatID &&
 		batch.sender.CanonicalID == candidate.sender.CanonicalID
+}
+
+func telegramMediaGroupCompatible(existing, incoming string) bool {
+	existing = strings.TrimSpace(existing)
+	incoming = strings.TrimSpace(incoming)
+	if existing == "" || incoming == "" {
+		return true
+	}
+	return existing == incoming
 }
 
 func (c *TelegramChannel) flushBatchByKey(ctx context.Context, key string) {
@@ -395,6 +404,9 @@ func (c *TelegramChannel) publishAggregatedBatch(ctx context.Context, batch *tel
 		return
 	}
 	metadata := cloneStringMap(batch.metadata)
+	if batch.mediaGroupID != "" {
+		metadata["media_group_id"] = batch.mediaGroupID
+	}
 	if len(batch.messageIDs) > 0 {
 		metadata["batch_message_ids"] = strings.Join(batch.messageIDs, ",")
 		metadata["batch_count"] = fmt.Sprintf("%d", len(batch.messageIDs))
@@ -407,7 +419,7 @@ func (c *TelegramChannel) publishAggregatedBatch(ctx context.Context, batch *tel
 		messageID:        batch.messageID,
 		senderID:         batch.senderID,
 		chatID:           batch.chatID,
-		content:          strings.Join(batch.contents, "\n\n"),
+		content:          strings.Join(normalizeTelegramBatchContents(batch.contents, batch.mediaGroupID != ""), "\n\n"),
 		media:            append([]string(nil), batch.media...),
 		metadata:         metadata,
 		sender:           batch.sender,
@@ -482,6 +494,46 @@ func telegramForwardOriginLabel(origin telego.MessageOrigin) string {
 		return "channel"
 	default:
 		return ""
+	}
+}
+
+func normalizeTelegramBatchContents(contents []string, preferTextFirst bool) []string {
+	if !preferTextFirst || len(contents) < 2 {
+		return contents
+	}
+	textual := make([]string, 0, len(contents))
+	mediaOnly := make([]string, 0, len(contents))
+	for _, content := range contents {
+		if isTelegramMediaOnlySegment(content) {
+			mediaOnly = append(mediaOnly, content)
+			continue
+		}
+		textual = append(textual, content)
+	}
+	if len(mediaOnly) == 0 || len(textual) == 0 {
+		return contents
+	}
+	normalized := make([]string, 0, len(contents))
+	normalized = append(normalized, textual...)
+	normalized = append(normalized, mediaOnly...)
+	return normalized
+}
+
+func isTelegramMediaOnlySegment(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "[forwarded from ") {
+		if idx := strings.Index(trimmed, "]:"); idx > 0 {
+			trimmed = strings.TrimSpace(trimmed[idx+2:])
+		}
+	}
+	switch trimmed {
+	case "[image: photo]", "[voice]", "[audio]", "[file]":
+		return true
+	default:
+		return false
 	}
 }
 
