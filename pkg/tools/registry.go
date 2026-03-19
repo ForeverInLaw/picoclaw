@@ -150,6 +150,48 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	return entry.Tool, true
 }
 
+// ResetRoundDeliveries clears per-round direct-delivery tracking on tools that
+// emit user-visible messages themselves.
+func (r *ToolRegistry) ResetRoundDeliveries() {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, entry := range r.tools {
+		if tracker, ok := entry.Tool.(RoundDeliveryTracker); ok {
+			tracker.ResetSentInRound()
+		}
+	}
+}
+
+// HasSentInRound reports whether any tool directly sent a user-visible message
+// during the current processing round.
+func (r *ToolRegistry) HasSentInRound() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, entry := range r.tools {
+		if tracker, ok := entry.Tool.(RoundDeliveryTracker); ok && tracker.HasSentInRound() {
+			return true
+		}
+	}
+	return false
+}
+
+// DeliveredInRound returns all directly delivered user-visible messages from
+// tools during the current processing round.
+func (r *ToolRegistry) DeliveredInRound() []DeliveredMessage {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var delivered []DeliveredMessage
+	for _, entry := range r.tools {
+		tracker, ok := entry.Tool.(RoundDeliveryTracker)
+		if !ok {
+			continue
+		}
+		delivered = append(delivered, tracker.DeliveredInRound()...)
+	}
+	return delivered
+}
+
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string]any) *ToolResult {
 	return r.ExecuteWithContext(ctx, name, args, "", "", nil)
 }

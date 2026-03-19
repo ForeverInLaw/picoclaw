@@ -190,17 +190,18 @@ func registerSharedTools(
 		if cfg.Tools.IsToolEnabled("message") {
 			messageTool := tools.NewMessageTool()
 			messageTool.SetSendCallback(func(toolCtx context.Context, channel, chatID, content string) error {
-				pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer pubCancel()
-				replyToMessageID := sameTargetReplyToMessageID(toolCtx, channel, chatID)
-				return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-					Channel:          channel,
-					ChatID:           chatID,
-					Content:          content,
-					ReplyToMessageID: replyToMessageID,
-				})
+				return publishToolMessage(msgBus, toolCtx, channel, chatID, content)
 			})
 			agent.Tools.Register(messageTool)
+		}
+		if cfg.Tools.IsToolEnabled("personal_todo") {
+			if tool, ok := agent.Tools.Get("personal_todo"); ok {
+				if todoTool, ok := tool.(*tools.PersonalTodoTool); ok {
+					todoTool.SetSendCallback(func(toolCtx context.Context, channel, chatID, content string) error {
+						return publishToolMessage(msgBus, toolCtx, channel, chatID, content)
+					})
+				}
+			}
 		}
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore)
@@ -302,17 +303,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 
 			if response != "" {
-				// Check if the message tool already sent a response during this round.
+				// Check if any tool already sent a response during this round.
 				// If so, skip publishing to avoid duplicate messages to the user.
-				// Use default agent's tools to check (message tool is shared).
 				alreadySent := false
 				defaultAgent := al.GetRegistry().GetDefaultAgent()
 				if defaultAgent != nil {
-					if tool, ok := defaultAgent.Tools.Get("message"); ok {
-						if mt, ok := tool.(*tools.MessageTool); ok {
-							alreadySent = mt.HasSentInRound()
-						}
-					}
+					alreadySent = defaultAgent.Tools.HasSentInRound()
 				}
 
 				if !alreadySent {
@@ -331,7 +327,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				} else {
 					logger.DebugCF(
 						"agent",
-						"Skipped outbound (message tool already sent)",
+						"Skipped outbound (tool already sent)",
 						map[string]any{"channel": msg.Channel},
 					)
 				}
@@ -784,12 +780,9 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	}
 	observeChatMemoryInbound(ctx, agent, msg)
 
-	// Reset message-tool state for this round so we don't skip publishing due to a previous round.
-	if tool, ok := agent.Tools.Get("message"); ok {
-		if resetter, ok := tool.(interface{ ResetSentInRound() }); ok {
-			resetter.ResetSentInRound()
-		}
-	}
+	// Reset direct-delivery state for this round so we don't skip publishing due
+	// to a previous round.
+	agent.Tools.ResetRoundDeliveries()
 
 	// Resolve session key from route, while preserving explicit agent-scoped keys.
 	scopeKey := resolveScopeKey(route, msg.SessionKey)
@@ -1005,21 +998,16 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	// 5. Save assistant-visible output to session/memory.
-	savedDeliveredReply := false
-	if tool, ok := agent.Tools.Get("message"); ok {
-		if mt, ok := tool.(*tools.MessageTool); ok {
-			savedDeliveredReply = recordDeliveredAssistantMessages(
-				ctx,
-				agent,
-				opts.SessionKey,
-				opts.Channel,
-				opts.ChatID,
-				opts.PeerKind,
-				opts.ChatLabel,
-				mt.DeliveredInRound(),
-			)
-		}
-	}
+	savedDeliveredReply := recordDeliveredAssistantMessages(
+		ctx,
+		agent,
+		opts.SessionKey,
+		opts.Channel,
+		opts.ChatID,
+		opts.PeerKind,
+		opts.ChatLabel,
+		agent.Tools.DeliveredInRound(),
+	)
 	if !savedDeliveredReply {
 		agent.Sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
 		recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.PeerKind, opts.ChatLabel, "assistant", "", finalContent)
@@ -1471,6 +1459,7 @@ func (al *AgentLoop) runLLMIteration(
 				}
 
 				toolCtx := tools.WithToolSender(ctx, opts.Sender)
+				toolCtx = tools.WithToolPeerKind(toolCtx, opts.PeerKind)
 				toolCtx = tools.WithToolReplyToMessageID(toolCtx, opts.ReplyToMessageID)
 				toolResult := agent.Tools.ExecuteWithContext(
 					toolCtx,
@@ -1632,6 +1621,17 @@ func sameTargetReplyToMessageID(ctx context.Context, channel, chatID string) str
 		return ""
 	}
 	return tools.ToolReplyToMessageID(ctx)
+}
+
+func publishToolMessage(msgBus *bus.MessageBus, toolCtx context.Context, channel, chatID, content string) error {
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pubCancel()
+	return msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
+		Channel:          channel,
+		ChatID:           chatID,
+		Content:          content,
+		ReplyToMessageID: sameTargetReplyToMessageID(toolCtx, channel, chatID),
+	})
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.

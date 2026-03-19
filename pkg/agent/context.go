@@ -111,6 +111,8 @@ Your workspace is at: %s
 
 6. **Memory disclosure** - When you use chat_memory, explicitly say that you checked chat memory or chat history before giving the answer.
 
+7. **Personal todo usage** - For personal task requests like "add this to my tasks", "put this in my todo", "what is in my todo", "show my list", or "mark item 3 done", you MUST use the personal_todo tool. Do not put personal todo items into chat_memory or MEMORY.md.
+
 %s`,
 		version,
 		workspacePath,

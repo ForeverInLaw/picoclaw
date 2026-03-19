@@ -829,6 +829,7 @@ type ToolsConfig struct {
 	InstallSkill    ToolConfig         `json:"install_skill"                                            envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
 	ListDir         ToolConfig         `json:"list_dir"                                                 envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
 	Message         ToolConfig         `json:"message"                                                  envPrefix:"PICOCLAW_TOOLS_MESSAGE_"`
+	PersonalTodo    ToolConfig         `json:"personal_todo"                                            envPrefix:"PICOCLAW_TOOLS_PERSONAL_TODO_"`
 	ReadFile        ReadFileToolConfig `json:"read_file"                                                envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
 	SendFile        ToolConfig         `json:"send_file"                                                envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
 	Spawn           ToolConfig         `json:"spawn"                                                    envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
@@ -1288,6 +1289,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.ListDir.Enabled
 	case "message":
 		return t.Message.Enabled
+	case "personal_todo":
+		return t.PersonalTodo.Enabled
 	case "read_file":
 		return t.ReadFile.Enabled
 	case "spawn":

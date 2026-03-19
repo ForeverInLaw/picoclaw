@@ -9,12 +9,6 @@ import (
 
 type SendCallback func(ctx context.Context, channel, chatID, content string) error
 
-type DeliveredMessage struct {
-	Channel string
-	ChatID  string
-	Content string
-}
-
 type MessageTool struct {
 	sendCallback SendCallback
 	sentInRound  atomic.Bool // Tracks whether a message was sent in the current processing round

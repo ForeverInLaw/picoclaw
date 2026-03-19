@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
+	"github.com/sipeed/picoclaw/pkg/personaltodo"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -119,6 +120,15 @@ func NewAgentInstance(
 	chatMemoryService := initChatMemoryService(cfg, defaults, memIndex)
 	if chatMemoryService != nil {
 		toolsRegistry.Register(tools.NewChatMemoryTool(chatMemoryService))
+	}
+	if cfg.Tools.IsToolEnabled("personal_todo") {
+		todoPath := filepath.Join(workspace, "state", "personal_todos.sqlite")
+		todoStore, err := personaltodo.Open(todoPath)
+		if err != nil {
+			log.Printf("personal_todo: failed to initialize store: %v", err)
+		} else {
+			toolsRegistry.Register(tools.NewPersonalTodoTool(todoStore))
+		}
 	}
 
 	agentID := routing.DefaultAgentID

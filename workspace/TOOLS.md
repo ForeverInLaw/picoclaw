@@ -21,3 +21,9 @@ Durable tool notes, integration quirks, and environment gotchas live here.
 - Use `chat_memory` with `mode=search` for questions like "who mentioned X", "when did we talk about Y", or "where was this discussed".
 - Do not say you do not remember or cannot know until `chat_memory` has been checked.
 - When you use `chat_memory`, explicitly tell the user that you checked chat memory or chat history.
+
+## Personal Todo
+
+- Use `personal_todo` for personal task management requests like "запиши мне", "добавь в мои задачи", "что у меня в todo", "покажи мой список", or "отметь пункт 3 выполненным".
+- Do not store personal todo items in `memory/MEMORY.md` or retrieve them with `chat_memory`.
+- `personal_todo` owns personal task state; use it instead of file tools for todo CRUD.
