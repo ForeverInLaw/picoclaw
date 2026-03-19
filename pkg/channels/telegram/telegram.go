@@ -617,6 +617,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	}
 
 	// In group chats, apply unified group trigger filtering
+	observeOnly := false
 	if message.Chat.Type != "private" {
 		isMentioned := c.isBotMentioned(message)
 		isReplyToBot := c.isReplyToBot(message)
@@ -625,10 +626,11 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 			content = c.stripBotMention(content)
 		}
 		respond, cleaned := c.ShouldRespondInGroup(isAddressedToBot, content)
-		if !respond {
-			return nil
+		if respond {
+			content = cleaned
+		} else {
+			observeOnly = true
 		}
-		content = cleaned
 	}
 	content = prependQuotedTelegramReply(message, content)
 
@@ -666,6 +668,9 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		"sender_label": senderLabel,
 		"chat_label":   strings.TrimSpace(message.Chat.Title),
 		"is_group":     fmt.Sprintf("%t", message.Chat.Type != "private"),
+	}
+	if observeOnly {
+		metadata["observe_only"] = "true"
 	}
 	if alias := c.resolveParticipantAlias(user); alias != "" {
 		metadata["sender_alias"] = alias

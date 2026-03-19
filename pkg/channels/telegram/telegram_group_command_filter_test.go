@@ -198,7 +198,7 @@ func TestHandleMessage_GroupMentionOnly_ReplyToBot(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_GroupMentionOnly_ReplyToHumanIgnored(t *testing.T) {
+func TestHandleMessage_GroupMentionOnly_ReplyToHuman_ObservedOnly(t *testing.T) {
 	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
 
 	msg := &telego.Message{
@@ -232,9 +232,14 @@ func TestHandleMessage_GroupMentionOnly_ReplyToHumanIgnored(t *testing.T) {
 
 	select {
 	case <-ctx.Done():
-		return
+		t.Fatal("timeout waiting for passive group message to be forwarded")
 	case inbound := <-messageBus.InboundChan():
-		t.Fatalf("expected reply-to-human message to be ignored, got %+v", inbound)
+		if got := inbound.Metadata["observe_only"]; got != "true" {
+			t.Fatalf("observe_only=%q want=true", got)
+		}
+		if inbound.Content != "ответ не боту" {
+			t.Fatalf("content=%q want=%q", inbound.Content, "ответ не боту")
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/memoryindex"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -182,6 +183,86 @@ func TestProcessMessage_IncludesCurrentSenderAndChatInDynamicContext(t *testing.
 	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
 	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
 		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
+	}
+}
+
+func TestProcessMessage_ObserveOnly_SkipsProviderAndPersistsUserMessage(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				MemoryIndex: config.MemoryIndexConfig{
+					Enabled:         true,
+					MaxResults:      5,
+					MaxSnippetChars: 280,
+					MinQueryChars:   3,
+				},
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &recordingProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	response, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:42",
+		Sender: bus.SenderInfo{
+			DisplayName: "Alice",
+		},
+		ChatID:  "-1001",
+		Content: "обычное сообщение группы",
+		Peer:    bus.Peer{Kind: "group", ID: "-1001"},
+		Metadata: map[string]string{
+			"observe_only": "true",
+			"chat_label":   "Test Group",
+			"is_group":     "true",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "" {
+		t.Fatalf("processMessage() response = %q, want empty", response)
+	}
+	if len(provider.lastMessages) != 0 {
+		t.Fatalf("provider should not be called for observe_only, got %d messages", len(provider.lastMessages))
+	}
+
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	history := defaultAgent.Sessions.GetHistory("agent:main:telegram:group:-1001")
+	if len(history) != 1 || history[0].Role != "user" {
+		t.Fatalf("history = %#v, want one observed user message", history)
+	}
+	if !strings.Contains(history[0].Content, "обычное сообщение группы") {
+		t.Fatalf("history content = %q, want observed group text", history[0].Content)
+	}
+	if !strings.Contains(history[0].Content, "sender_id: telegram:42") {
+		t.Fatalf("history content = %q, want sender envelope", history[0].Content)
+	}
+
+	hits, err := defaultAgent.MemoryIndex.Search(context.Background(), memoryindex.SearchRequest{
+		Query:      "обычное сообщение",
+		SessionKey: "agent:main:telegram:group:-1001",
+		Channel:    "telegram",
+		ChatID:     "-1001",
+		Limit:      3,
+	})
+	if err != nil {
+		t.Fatalf("memory search error = %v", err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("expected observe_only message to be indexed in memory")
 	}
 }
 

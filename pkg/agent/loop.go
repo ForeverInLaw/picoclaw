@@ -762,12 +762,14 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		},
 	)
 
+	observeOnly := strings.EqualFold(strings.TrimSpace(msg.Metadata["observe_only"]), "true")
+
 	var hadAudio bool
 	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)
 
 	// For audio messages the placeholder was deferred by the channel.
 	// Now that transcription (and optional feedback) is done, send it.
-	if hadAudio && al.channelManager != nil {
+	if hadAudio && !observeOnly && al.channelManager != nil {
 		al.channelManager.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
 	}
 
@@ -824,6 +826,20 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// "unavailable" when the required capability is nil.
 	if response, handled := al.handleCommand(ctx, msg, agent, &opts); handled {
 		return response, nil
+	}
+	if observeOnly {
+		agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
+		recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.PeerKind, opts.ChatLabel, "user", opts.SenderID, opts.UserMessage)
+		al.maybeSummarize(agent, opts.SessionKey, opts.Channel, opts.ChatID)
+		logger.DebugCF("agent", "Observed message without response",
+			map[string]any{
+				"agent_id":    agent.ID,
+				"channel":     msg.Channel,
+				"chat_id":     msg.ChatID,
+				"sender_id":   msg.SenderID,
+				"session_key": opts.SessionKey,
+			})
+		return "", nil
 	}
 
 	return al.runAgentLoop(ctx, agent, opts)

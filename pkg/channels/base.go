@@ -277,9 +277,11 @@ func (c *BaseChannel) HandleMessage(
 		Metadata:   metadata,
 	}
 
+	observeOnly := strings.EqualFold(strings.TrimSpace(metadata["observe_only"]), "true")
+
 	// Auto-trigger typing indicator, message reaction, and placeholder before publishing.
 	// Each capability is independent — all three may fire for the same message.
-	if c.owner != nil && c.placeholderRecorder != nil {
+	if !observeOnly && c.owner != nil && c.placeholderRecorder != nil {
 		// Typing — independent pipeline
 		if tc, ok := c.owner.(TypingCapable); ok {
 			if stop, err := tc.StartTyping(ctx, chatID); err == nil {
