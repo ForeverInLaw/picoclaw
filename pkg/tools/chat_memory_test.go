@@ -78,6 +78,20 @@ func TestChatMemoryTool_ExecuteSummaryCurrentChat(t *testing.T) {
 	}
 }
 
+func TestChatMemoryTool_Description_EncouragesProactiveUse(t *testing.T) {
+	tool := NewChatMemoryTool(nil)
+	desc := tool.Description()
+	for _, needle := range []string{
+		"Use this proactively",
+		"prior discussion",
+		"who said what",
+	} {
+		if !strings.Contains(desc, needle) {
+			t.Fatalf("Description() missing %q: %s", needle, desc)
+		}
+	}
+}
+
 func TestChatMemoryTool_ExecuteSearch_HonorsExplicitLimit(t *testing.T) {
 	idx, err := memoryindex.Open(t.TempDir()+"\\index.sqlite", memoryindex.Config{
 		MaxResults:      5,

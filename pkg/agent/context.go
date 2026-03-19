@@ -107,6 +107,10 @@ Your workspace is at: %s
 
 4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
 
+5. **Chat memory usage** - If a question may depend on prior conversation, earlier agreements, who said what, or what was discussed in a chat or time window, you MUST use the chat_memory tool before answering. This includes questions like "what did we discuss", "who said this", "what happened in that group", or "what was discussed over the last day". Do not claim you do not remember or cannot know until chat_memory has been checked or returned no useful result.
+
+6. **Memory disclosure** - When you use chat_memory, explicitly say that you checked chat memory or chat history before giving the answer.
+
 %s`,
 		version,
 		workspacePath,

@@ -23,7 +23,7 @@ func (t *ChatMemoryTool) Name() string {
 }
 
 func (t *ChatMemoryTool) Description() string {
-	return "Searches or summarizes indexed chat memory. Use this for questions about what was discussed in a chat, group, or time window."
+	return "Searches or summarizes indexed chat memory. Use this proactively for questions about prior discussion, chat history, earlier agreements, who said what, or what was discussed in a chat, group, or time window."
 }
 
 func (t *ChatMemoryTool) Parameters() map[string]any {
@@ -32,16 +32,16 @@ func (t *ChatMemoryTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"mode": map[string]any{
 				"type":        "string",
-				"description": "Either 'summary' or 'search'",
+				"description": "Either 'summary' or 'search'. Use 'summary' for what was discussed, and 'search' for who said or where something was mentioned.",
 				"enum":        []string{"summary", "search"},
 			},
 			"chat": map[string]any{
 				"type":        "string",
-				"description": "Target chat alias/title, or 'current' for the current chat",
+				"description": "Target chat alias/title, or 'current' for the current chat whose history should be checked",
 			},
 			"query": map[string]any{
 				"type":        "string",
-				"description": "Optional query for semantic/lexical retrieval inside the target chat",
+				"description": "Optional query for semantic/lexical retrieval inside the target chat, especially for who said or where something was mentioned",
 			},
 			"since_hours": map[string]any{
 				"type":        "integer",

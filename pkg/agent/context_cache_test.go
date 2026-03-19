@@ -194,6 +194,28 @@ func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 	}
 }
 
+func TestBuildMessages_SystemPromptIncludesChatMemoryGuidance(t *testing.T) {
+	tmpDir := setupWorkspace(t, map[string]string{
+		"IDENTITY.md": "# Identity\nTest agent.",
+		"TOOLS.md":    "# Tools\nChat memory notes.",
+	})
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+	msgs := cb.BuildMessages(nil, "", "", "hello", nil, "telegram", "42", "", "")
+	sys := msgs[0].Content
+
+	for _, needle := range []string{
+		"you MUST use the chat_memory tool before answering",
+		"Do not claim you do not remember or cannot know until chat_memory has been checked",
+		"explicitly say that you checked chat memory or chat history",
+	} {
+		if !strings.Contains(sys, needle) {
+			t.Fatalf("system prompt missing chat memory guidance %q:\n%s", needle, sys)
+		}
+	}
+}
+
 // TestMtimeAutoInvalidation verifies that the cache detects source file changes
 // via mtime without requiring explicit InvalidateCache().
 // Fix: original implementation had no auto-invalidation — edits to bootstrap files,
