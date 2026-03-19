@@ -346,6 +346,7 @@ type TelegramConfig struct {
 	BaseURL            string                 `json:"base_url"                env:"PICOCLAW_CHANNELS_TELEGRAM_BASE_URL"`
 	Proxy              string                 `json:"proxy"                   env:"PICOCLAW_CHANNELS_TELEGRAM_PROXY"`
 	AllowFrom          FlexibleStringSlice    `json:"allow_from"              env:"PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM"`
+	NameTriggers       FlexibleStringSlice    `json:"name_triggers,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_NAME_TRIGGERS"`
 	ParticipantAliases map[string]string      `json:"participant_aliases,omitempty"`
 	GroupTrigger       GroupTriggerConfig     `json:"group_trigger,omitempty"`
 	Typing             TypingConfig           `json:"typing,omitempty"`

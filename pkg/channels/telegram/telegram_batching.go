@@ -163,7 +163,8 @@ func (c *TelegramChannel) buildInboundCandidate(
 	if message.Chat.Type != "private" {
 		isMentioned := c.isBotMentioned(message)
 		isReplyToBot := c.isReplyToBot(message)
-		isAddressedToBot := isMentioned || isReplyToBot
+		isNameTriggered := c.isBotNameTriggered(message)
+		isAddressedToBot := isMentioned || isReplyToBot || isNameTriggered
 		if isMentioned {
 			content = c.stripBotMention(content)
 		}

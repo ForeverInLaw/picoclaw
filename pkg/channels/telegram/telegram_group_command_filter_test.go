@@ -199,6 +199,86 @@ func TestHandleMessage_GroupMentionOnly_ReplyToBot(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_GroupMentionOnly_NameTrigger(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+	ch.config.Channels.Telegram.NameTriggers = []string{"короб"}
+
+	msg := &telego.Message{
+		Text:      "что думаешь, коробки?",
+		MessageID: 46,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        8,
+			FirstName: "Bob",
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Microsecond)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for name-triggered message to be forwarded")
+	case inbound, ok := <-messageBus.InboundChan():
+		if !ok {
+			t.Fatal("expected inbound message to be forwarded")
+		}
+		if inbound.Content != msg.Text {
+			t.Fatalf("content=%q want=%q", inbound.Content, msg.Text)
+		}
+		if got := inbound.Metadata["observe_only"]; got != "" {
+			t.Fatalf("observe_only=%q want empty", got)
+		}
+	}
+}
+
+func TestHandleMessage_GroupMentionOnly_NameTriggerFromCaption(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+	ch.config.Channels.Telegram.NameTriggers = []string{"короб"}
+
+	msg := &telego.Message{
+		Caption:   "Коробка, посмотри на это",
+		MessageID: 47,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        9,
+			FirstName: "Carol",
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Microsecond)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for caption name-triggered message to be forwarded")
+	case inbound, ok := <-messageBus.InboundChan():
+		if !ok {
+			t.Fatal("expected inbound message to be forwarded")
+		}
+		if !strings.Contains(inbound.Content, "Коробка, посмотри на это") {
+			t.Fatalf("content=%q missing caption", inbound.Content)
+		}
+		if got := inbound.Metadata["observe_only"]; got != "" {
+			t.Fatalf("observe_only=%q want empty", got)
+		}
+	}
+}
+
 func TestHandleMessage_GroupMentionOnly_ReplyToHuman_ObservedOnly(t *testing.T) {
 	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
 
