@@ -30,6 +30,7 @@ type telegramInboundCandidate struct {
 	batchEligible    bool
 	observeOnly      bool
 	replyToMessageID string
+	mediaGroupID     string
 }
 
 type telegramInboundBatch struct {
@@ -41,6 +42,7 @@ type telegramInboundBatch struct {
 	sender           bus.SenderInfo
 	observeOnly      bool
 	replyToMessageID string
+	mediaGroupID     string
 	contents         []string
 	media            []string
 	messageIDs       []string
@@ -232,11 +234,21 @@ func (c *TelegramChannel) buildInboundCandidate(
 	if forwardLabel := telegramForwardOriginLabel(message.ForwardOrigin); forwardLabel != "" {
 		metadata["forwarded_from"] = forwardLabel
 	}
+	mediaGroupID := strings.TrimSpace(message.MediaGroupID)
+	if mediaGroupID != "" {
+		metadata["media_group_id"] = mediaGroupID
+	}
 
 	messageText, _ := telegramEntityTextAndList(message)
+	isCommand := commands.HasCommandPrefix(strings.TrimSpace(messageText))
 	batchEligible := c.batchingEnabled() &&
-		len(mediaPaths) == 0 &&
-		!commands.HasCommandPrefix(strings.TrimSpace(messageText))
+		!isCommand &&
+		(len(mediaPaths) == 0 || mediaGroupID != "")
+
+	batchKey := compositeChatID + "|" + sender.CanonicalID
+	if mediaGroupID != "" {
+		batchKey += "|album:" + mediaGroupID
+	}
 
 	return &telegramInboundCandidate{
 		peer:             bus.Peer{Kind: peerKind, ID: peerID},
@@ -247,10 +259,11 @@ func (c *TelegramChannel) buildInboundCandidate(
 		media:            mediaPaths,
 		metadata:         metadata,
 		sender:           sender,
-		batchKey:         compositeChatID + "|" + sender.CanonicalID,
+		batchKey:         batchKey,
 		batchEligible:    batchEligible,
 		observeOnly:      observeOnly,
 		replyToMessageID: replyToMessageID,
+		mediaGroupID:     mediaGroupID,
 	}, nil
 }
 
@@ -308,6 +321,7 @@ func (c *TelegramChannel) enqueueTelegramBatch(
 			sender:           candidate.sender,
 			observeOnly:      candidate.observeOnly,
 			replyToMessageID: candidate.replyToMessageID,
+			mediaGroupID:     candidate.mediaGroupID,
 			startedAt:        time.Now(),
 			endedAt:          time.Now(),
 			contents:         []string{candidate.content},
@@ -336,6 +350,7 @@ func telegramBatchCompatible(batch *telegramInboundBatch, candidate telegramInbo
 	}
 	return batch.observeOnly == candidate.observeOnly &&
 		batch.replyToMessageID == candidate.replyToMessageID &&
+		batch.mediaGroupID == candidate.mediaGroupID &&
 		batch.chatID == candidate.chatID &&
 		batch.sender.CanonicalID == candidate.sender.CanonicalID
 }

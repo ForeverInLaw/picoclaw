@@ -215,3 +215,58 @@ func TestHandleMessage_ReplyBoundaryFlushesBatch(t *testing.T) {
 		t.Fatalf("second reply_to_message_id=%q want=2", second.Metadata["reply_to_message_id"])
 	}
 }
+
+func TestDispatchInboundCandidate_BatchesTelegramMediaGroup(t *testing.T) {
+	ch, messageBus := newBatchingTestChannel(t, 30)
+
+	first := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "501",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "[forwarded from chan]: подпись\n[image: photo]",
+		media:         []string{"media://photo-1"},
+		metadata:      map[string]string{"media_group_id": "album-1"},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42|album:album-1",
+		batchEligible: true,
+		mediaGroupID:  "album-1",
+	}
+	second := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "502",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "[forwarded from chan]: [image: photo]",
+		media:         []string{"media://photo-2"},
+		metadata:      map[string]string{"media_group_id": "album-1"},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42|album:album-1",
+		batchEligible: true,
+		mediaGroupID:  "album-1",
+	}
+
+	if err := ch.dispatchInboundCandidate(context.Background(), first); err != nil {
+		t.Fatalf("dispatchInboundCandidate(first) error: %v", err)
+	}
+	if err := ch.dispatchInboundCandidate(context.Background(), second); err != nil {
+		t.Fatalf("dispatchInboundCandidate(second) error: %v", err)
+	}
+
+	inbound := recvInbound(t, messageBus.InboundChan(), 250*time.Millisecond)
+	if got := inbound.Metadata["media_group_id"]; got != "album-1" {
+		t.Fatalf("media_group_id=%q want=album-1", got)
+	}
+	if got := inbound.Metadata["batch_count"]; got != "2" {
+		t.Fatalf("batch_count=%q want=2", got)
+	}
+	if len(inbound.Media) != 2 {
+		t.Fatalf("len(media)=%d want=2", len(inbound.Media))
+	}
+	if !strings.Contains(inbound.Content, "подпись") {
+		t.Fatalf("content=%q missing caption", inbound.Content)
+	}
+	if strings.Count(inbound.Content, "[image: photo]") != 2 {
+		t.Fatalf("content=%q want two image markers", inbound.Content)
+	}
+}
