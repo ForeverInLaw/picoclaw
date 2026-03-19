@@ -831,6 +831,7 @@ type ToolsConfig struct {
 	MCP             MCPConfig          `json:"mcp"`
 	AppendFile      ToolConfig         `json:"append_file"                                              envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
 	EditFile        ToolConfig         `json:"edit_file"                                                envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
+	FactCheck       ToolConfig         `json:"fact_check"                                               envPrefix:"PICOCLAW_TOOLS_FACT_CHECK_"`
 	FindSkills      ToolConfig         `json:"find_skills"                                              envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
 	I2C             ToolConfig         `json:"i2c"                                                      envPrefix:"PICOCLAW_TOOLS_I2C_"`
 	InstallSkill    ToolConfig         `json:"install_skill"                                            envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
@@ -1286,6 +1287,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.AppendFile.Enabled
 	case "edit_file":
 		return t.EditFile.Enabled
+	case "fact_check":
+		return t.FactCheck.Enabled
 	case "find_skills":
 		return t.FindSkills.Enabled
 	case "i2c":

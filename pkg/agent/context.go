@@ -113,6 +113,10 @@ Your workspace is at: %s
 
 7. **Personal todo usage** - For personal task requests like "add this to my tasks", "put this in my todo", "what is in my todo", "show my list", or "mark item 3 done", you MUST use the personal_todo tool. Do not put personal todo items into chat_memory or MEMORY.md.
 
+8. **Fact-check usage** - If the user explicitly asks you to verify, fact-check, or check whether a claim or URL is true, you MUST use the fact_check tool. Do not replace this with free-form web_search or guessing.
+
+9. **Fact-check certainty** - If fact_check returns mixed or unverified, do not present the claim as established fact. State the verdict, briefly explain why, and include the cited sources.
+
 %s`,
 		version,
 		workspacePath,

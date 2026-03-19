@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/utils"
+	"github.com/sipeed/picoclaw/pkg/websource"
 )
 
 const (
@@ -84,7 +82,8 @@ func (it *APIKeyIterator) Next() (string, bool) {
 }
 
 type SearchProvider interface {
-	Search(ctx context.Context, query string, count int) (string, error)
+	Search(ctx context.Context, query string, count int) ([]websource.SearchHit, error)
+	ProviderName() string
 }
 
 type BraveSearchProvider struct {
@@ -93,7 +92,9 @@ type BraveSearchProvider struct {
 	client  *http.Client
 }
 
-func (p *BraveSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *BraveSearchProvider) ProviderName() string { return "Brave" }
+
+func (p *BraveSearchProvider) Search(ctx context.Context, query string, count int) ([]websource.SearchHit, error) {
 	searchURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
 		url.QueryEscape(query), count)
 
@@ -108,7 +109,7 @@ func (p *BraveSearchProvider) Search(ctx context.Context, query string, count in
 
 		req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 		if err != nil {
-			return "", fmt.Errorf("failed to create request: %w", err)
+			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
 		req.Header.Set("Accept", "application/json")
@@ -136,7 +137,7 @@ func (p *BraveSearchProvider) Search(ctx context.Context, query string, count in
 				resp.StatusCode >= 500 {
 				continue
 			}
-			return "", lastErr
+			return nil, lastErr
 		}
 
 		var searchResp struct {
@@ -151,30 +152,26 @@ func (p *BraveSearchProvider) Search(ctx context.Context, query string, count in
 
 		if err := json.Unmarshal(body, &searchResp); err != nil {
 			// Log error body for debugging
-			return "", fmt.Errorf("failed to parse response: %w", err)
+			return nil, fmt.Errorf("failed to parse response: %w", err)
 		}
 
 		results := searchResp.Web.Results
-		if len(results) == 0 {
-			return fmt.Sprintf("No results for: %s", query), nil
-		}
-
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Results for: %s", query))
+		hits := make([]websource.SearchHit, 0, min(len(results), count))
 		for i, item := range results {
 			if i >= count {
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-			if item.Description != "" {
-				lines = append(lines, fmt.Sprintf("   %s", item.Description))
-			}
+			hits = append(hits, websource.SearchHit{
+				Title:    strings.TrimSpace(item.Title),
+				URL:      strings.TrimSpace(item.URL),
+				Snippet:  strings.TrimSpace(item.Description),
+				Provider: p.ProviderName(),
+			})
 		}
-
-		return strings.Join(lines, "\n"), nil
+		return hits, nil
 	}
 
-	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
+	return nil, fmt.Errorf("all api keys failed, last error: %w", lastErr)
 }
 
 type TavilySearchProvider struct {
@@ -184,7 +181,9 @@ type TavilySearchProvider struct {
 	client  *http.Client
 }
 
-func (p *TavilySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *TavilySearchProvider) ProviderName() string { return "Tavily" }
+
+func (p *TavilySearchProvider) Search(ctx context.Context, query string, count int) ([]websource.SearchHit, error) {
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://api.tavily.com/search"
@@ -211,12 +210,12 @@ func (p *TavilySearchProvider) Search(ctx context.Context, query string, count i
 
 		bodyBytes, err := json.Marshal(payload)
 		if err != nil {
-			return "", fmt.Errorf("failed to marshal payload: %w", err)
+			return nil, fmt.Errorf("failed to marshal payload: %w", err)
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", searchURL, bytes.NewBuffer(bodyBytes))
 		if err != nil {
-			return "", fmt.Errorf("failed to create request: %w", err)
+			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
 		req.Header.Set("Content-Type", "application/json")
@@ -244,7 +243,7 @@ func (p *TavilySearchProvider) Search(ctx context.Context, query string, count i
 				resp.StatusCode >= 500 {
 				continue
 			}
-			return "", lastErr
+			return nil, lastErr
 		}
 
 		var searchResp struct {
@@ -256,30 +255,26 @@ func (p *TavilySearchProvider) Search(ctx context.Context, query string, count i
 		}
 
 		if err := json.Unmarshal(body, &searchResp); err != nil {
-			return "", fmt.Errorf("failed to parse response: %w", err)
+			return nil, fmt.Errorf("failed to parse response: %w", err)
 		}
 
 		results := searchResp.Results
-		if len(results) == 0 {
-			return fmt.Sprintf("No results for: %s", query), nil
-		}
-
-		var lines []string
-		lines = append(lines, fmt.Sprintf("Results for: %s (via Tavily)", query))
+		hits := make([]websource.SearchHit, 0, min(len(results), count))
 		for i, item := range results {
 			if i >= count {
 				break
 			}
-			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-			if item.Content != "" {
-				lines = append(lines, fmt.Sprintf("   %s", item.Content))
-			}
+			hits = append(hits, websource.SearchHit{
+				Title:    strings.TrimSpace(item.Title),
+				URL:      strings.TrimSpace(item.URL),
+				Snippet:  strings.TrimSpace(item.Content),
+				Provider: p.ProviderName(),
+			})
 		}
-
-		return strings.Join(lines, "\n"), nil
+		return hits, nil
 	}
 
-	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
+	return nil, fmt.Errorf("all api keys failed, last error: %w", lastErr)
 }
 
 type DuckDuckGoSearchProvider struct {
@@ -287,31 +282,33 @@ type DuckDuckGoSearchProvider struct {
 	client *http.Client
 }
 
-func (p *DuckDuckGoSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *DuckDuckGoSearchProvider) ProviderName() string { return "DuckDuckGo" }
+
+func (p *DuckDuckGoSearchProvider) Search(ctx context.Context, query string, count int) ([]websource.SearchHit, error) {
 	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(query))
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	return p.extractResults(string(body), count, query)
 }
 
-func (p *DuckDuckGoSearchProvider) extractResults(html string, count int, query string) (string, error) {
+func (p *DuckDuckGoSearchProvider) extractResults(html string, count int, query string) ([]websource.SearchHit, error) {
 	// Simple regex based extraction for DDG HTML
 	// Strategy: Find all result containers or key anchors directly
 
@@ -321,11 +318,10 @@ func (p *DuckDuckGoSearchProvider) extractResults(html string, count int, query 
 	matches := reDDGLink.FindAllStringSubmatch(html, count+5)
 
 	if len(matches) == 0 {
-		return fmt.Sprintf("No results found or extraction failed. Query: %s", query), nil
+		return nil, nil
 	}
 
-	var lines []string
-	lines = append(lines, fmt.Sprintf("Results for: %s (via DuckDuckGo)", query))
+	hits := make([]websource.SearchHit, 0, min(len(matches), count))
 
 	// Pre-compile snippet regex to run inside the loop
 	// We'll search for snippets relative to the link position or just globally if needed
@@ -354,19 +350,21 @@ func (p *DuckDuckGoSearchProvider) extractResults(html string, count int, query 
 			}
 		}
 
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, title, urlStr))
-
+		hit := websource.SearchHit{
+			Title:    title,
+			URL:      urlStr,
+			Provider: p.ProviderName(),
+		}
 		// Attempt to attach snippet if available and index aligns
 		if i < len(snippetMatches) {
 			snippet := stripTags(snippetMatches[i][1])
 			snippet = strings.TrimSpace(snippet)
-			if snippet != "" {
-				lines = append(lines, fmt.Sprintf("   %s", snippet))
-			}
+			hit.Snippet = snippet
 		}
+		hits = append(hits, hit)
 	}
 
-	return strings.Join(lines, "\n"), nil
+	return hits, nil
 }
 
 func stripTags(content string) string {
@@ -379,7 +377,9 @@ type PerplexitySearchProvider struct {
 	client  *http.Client
 }
 
-func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *PerplexitySearchProvider) ProviderName() string { return "Perplexity" }
+
+func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, count int) ([]websource.SearchHit, error) {
 	searchURL := "https://api.perplexity.ai/chat/completions"
 
 	var lastErr error
@@ -408,12 +408,12 @@ func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, cou
 
 		payloadBytes, err := json.Marshal(payload)
 		if err != nil {
-			return "", fmt.Errorf("failed to marshal request: %w", err)
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", searchURL, strings.NewReader(string(payloadBytes)))
 		if err != nil {
-			return "", fmt.Errorf("failed to create request: %w", err)
+			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
 		req.Header.Set("Content-Type", "application/json")
@@ -442,7 +442,7 @@ func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, cou
 				resp.StatusCode >= 500 {
 				continue
 			}
-			return "", lastErr
+			return nil, lastErr
 		}
 
 		var searchResp struct {
@@ -454,42 +454,49 @@ func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, cou
 		}
 
 		if err := json.Unmarshal(body, &searchResp); err != nil {
-			return "", fmt.Errorf("failed to parse response: %w", err)
+			return nil, fmt.Errorf("failed to parse response: %w", err)
 		}
 
 		if len(searchResp.Choices) == 0 {
-			return fmt.Sprintf("No results for: %s", query), nil
+			return nil, nil
 		}
 
-		return fmt.Sprintf("Results for: %s (via Perplexity)\n%s", query, searchResp.Choices[0].Message.Content), nil
+		return []websource.SearchHit{{
+			Title:    fmt.Sprintf("Perplexity results for %s", query),
+			URL:      "https://api.perplexity.ai/chat/completions",
+			Snippet:  strings.TrimSpace(searchResp.Choices[0].Message.Content),
+			Provider: p.ProviderName(),
+		}}, nil
 	}
 
-	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
+	return nil, fmt.Errorf("all api keys failed, last error: %w", lastErr)
 }
 
 type SearXNGSearchProvider struct {
 	baseURL string
 }
 
-func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *SearXNGSearchProvider) ProviderName() string { return "SearXNG" }
+
+func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int) ([]websource.SearchHit, error) {
 	searchURL := fmt.Sprintf("%s/search?q=%s&format=json&categories=general",
 		strings.TrimSuffix(p.baseURL, "/"),
 		url.QueryEscape(query))
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("SearXNG returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("SearXNG returned status %d", resp.StatusCode)
 	}
 
 	var result struct {
@@ -503,11 +510,7 @@ func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count 
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(result.Results) == 0 {
-		return fmt.Sprintf("No results for: %s", query), nil
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	// Limit results to requested count
@@ -515,18 +518,16 @@ func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count 
 		result.Results = result.Results[:count]
 	}
 
-	// Format results in standard PicoClaw format
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Results for: %s (via SearXNG)\n", query))
-	for i, r := range result.Results {
-		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Title))
-		b.WriteString(fmt.Sprintf("   %s\n", r.URL))
-		if r.Content != "" {
-			b.WriteString(fmt.Sprintf("   %s\n", r.Content))
-		}
+	hits := make([]websource.SearchHit, 0, len(result.Results))
+	for _, r := range result.Results {
+		hits = append(hits, websource.SearchHit{
+			Title:    strings.TrimSpace(r.Title),
+			URL:      strings.TrimSpace(r.URL),
+			Snippet:  strings.TrimSpace(r.Content),
+			Provider: p.ProviderName(),
+		})
 	}
-
-	return b.String(), nil
+	return hits, nil
 }
 
 type GLMSearchProvider struct {
@@ -537,7 +538,9 @@ type GLMSearchProvider struct {
 	client       *http.Client
 }
 
-func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+func (p *GLMSearchProvider) ProviderName() string { return "GLM Search" }
+
+func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int) ([]websource.SearchHit, error) {
 	searchURL := p.baseURL
 	if searchURL == "" {
 		searchURL = "https://open.bigmodel.cn/api/paas/v4/web_search"
@@ -553,12 +556,12 @@ func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int)
 
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal payload: %w", err)
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", searchURL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -566,17 +569,17 @@ func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GLM Search API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("GLM Search API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var searchResp struct {
@@ -588,27 +591,23 @@ func (p *GLMSearchProvider) Search(ctx context.Context, query string, count int)
 	}
 
 	if err := json.Unmarshal(body, &searchResp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	results := searchResp.SearchResult
-	if len(results) == 0 {
-		return fmt.Sprintf("No results for: %s", query), nil
-	}
-
-	var lines []string
-	lines = append(lines, fmt.Sprintf("Results for: %s (via GLM Search)", query))
+	hits := make([]websource.SearchHit, 0, min(len(results), count))
 	for i, item := range results {
 		if i >= count {
 			break
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.Link))
-		if item.Content != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Content))
-		}
+		hits = append(hits, websource.SearchHit{
+			Title:    strings.TrimSpace(item.Title),
+			URL:      strings.TrimSpace(item.Link),
+			Snippet:  strings.TrimSpace(item.Content),
+			Provider: p.ProviderName(),
+		})
 	}
-
-	return strings.Join(lines, "\n"), nil
+	return hits, nil
 }
 
 type WebSearchTool struct {
@@ -641,86 +640,11 @@ type WebSearchToolOptions struct {
 }
 
 func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
-	var provider SearchProvider
-	maxResults := 5
-	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > GLM Search
-	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
-		client, err := utils.CreateHTTPClient(opts.Proxy, perplexityTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for Perplexity: %w", err)
-		}
-		provider = &PerplexitySearchProvider{
-			keyPool: NewAPIKeyPool(opts.PerplexityAPIKeys),
-			proxy:   opts.Proxy,
-			client:  client,
-		}
-		if opts.PerplexityMaxResults > 0 {
-			maxResults = opts.PerplexityMaxResults
-		}
-	} else if opts.BraveEnabled && len(opts.BraveAPIKeys) > 0 {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for Brave: %w", err)
-		}
-		provider = &BraveSearchProvider{keyPool: NewAPIKeyPool(opts.BraveAPIKeys), proxy: opts.Proxy, client: client}
-		if opts.BraveMaxResults > 0 {
-			maxResults = opts.BraveMaxResults
-		}
-	} else if opts.SearXNGEnabled && opts.SearXNGBaseURL != "" {
-		provider = &SearXNGSearchProvider{baseURL: opts.SearXNGBaseURL}
-		if opts.SearXNGMaxResults > 0 {
-			maxResults = opts.SearXNGMaxResults
-		}
-	} else if opts.TavilyEnabled && len(opts.TavilyAPIKeys) > 0 {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for Tavily: %w", err)
-		}
-		provider = &TavilySearchProvider{
-			keyPool: NewAPIKeyPool(opts.TavilyAPIKeys),
-			baseURL: opts.TavilyBaseURL,
-			proxy:   opts.Proxy,
-			client:  client,
-		}
-		if opts.TavilyMaxResults > 0 {
-			maxResults = opts.TavilyMaxResults
-		}
-	} else if opts.DuckDuckGoEnabled {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for DuckDuckGo: %w", err)
-		}
-		provider = &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client}
-		if opts.DuckDuckGoMaxResults > 0 {
-			maxResults = opts.DuckDuckGoMaxResults
-		}
-	} else if opts.GLMSearchEnabled && opts.GLMSearchAPIKey != "" {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for GLM Search: %w", err)
-		}
-		searchEngine := opts.GLMSearchEngine
-		if searchEngine == "" {
-			searchEngine = "search_std"
-		}
-		provider = &GLMSearchProvider{
-			apiKey:       opts.GLMSearchAPIKey,
-			baseURL:      opts.GLMSearchBaseURL,
-			searchEngine: searchEngine,
-			proxy:        opts.Proxy,
-			client:       client,
-		}
-		if opts.GLMSearchMaxResults > 0 {
-			maxResults = opts.GLMSearchMaxResults
-		}
-	} else {
-		return nil, nil
+	provider, maxResults, err := NewWebSearchProvider(opts)
+	if err != nil || provider == nil {
+		return nil, err
 	}
-
-	return &WebSearchTool{
-		provider:   provider,
-		maxResults: maxResults,
-	}, nil
+	return NewWebSearchToolWithProvider(provider, maxResults), nil
 }
 
 func (t *WebSearchTool) Name() string {
@@ -763,14 +687,14 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		}
 	}
 
-	result, err := t.provider.Search(ctx, query, count)
+	hits, err := t.provider.Search(ctx, query, count)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("search failed: %v", err))
 	}
 
 	return &ToolResult{
-		ForLLM:  result,
-		ForUser: result,
+		ForLLM:  renderWebSearchResults(query, t.provider, hits),
+		ForUser: renderWebSearchResults(query, t.provider, hits),
 	}
 }
 
@@ -886,134 +810,29 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("url is required")
 	}
 
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid URL: %v", err))
-	}
-
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return ErrorResult("only http/https URLs are allowed")
-	}
-
-	if parsedURL.Host == "" {
-		return ErrorResult("missing domain in URL")
-	}
-
-	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.
-	// The real SSRF guard is newSafeDialContext at connect time.
-	hostname := parsedURL.Hostname()
-	if isObviousPrivateHost(hostname, t.whitelist) {
-		return ErrorResult("fetching private or local network hosts is not allowed")
-	}
-
 	maxChars := t.maxChars
 	if mc, ok := args["maxChars"].(float64); ok {
 		if int(mc) > 100 {
 			maxChars = int(mc)
 		}
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	doc, err := t.FetchDocument(ctx, urlStr, maxChars)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create request: %v", err))
+		return ErrorResult(err.Error())
 	}
-
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("request failed: %v", err))
-	}
-
-	resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
-
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			return ErrorResult(fmt.Sprintf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes))
-		}
-		return ErrorResult(fmt.Sprintf("failed to read response: %v", err))
-	}
-
-	bodyStr := string(body)
-	contentType := resp.Header.Get("Content-Type")
-
-	mediaType, params, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		// The most common error here is "mime: no media type" if the header is empty.
-		logger.WarnCF("tool", "Failed to parse Content-Type", map[string]any{
-			"raw_header": contentType,
-			"error":      err.Error(),
-		})
-
-		// security fallback
-		mediaType = "application/octet-stream"
-	}
-
-	charset, hasCharset := params["charset"]
-	if hasCharset {
-		// If the charset is not utf-8, we might have to convert the bodyStr
-		// before passing it to the HTML/Markdown parser
-		if strings.ToLower(charset) != "utf-8" {
-			logger.WarnCF("tool", "Note: the content is not in UTF-8", map[string]any{"charset": charset})
-		}
-	}
-
-	var text, extractor string
-
-	switch {
-	case mediaType == "application/json":
-		var jsonData any
-		if err := json.Unmarshal(body, &jsonData); err != nil {
-			text = bodyStr
-			extractor = "raw"
-			break
-		}
-
-		formatted, err := json.MarshalIndent(jsonData, "", "  ")
-		if err != nil {
-			text = bodyStr
-			extractor = "raw"
-			break
-		}
-
-		text = string(formatted)
-		extractor = "json"
-
-	case mediaType == "text/html" || looksLikeHTML(bodyStr):
-		switch strings.ToLower(t.format) {
-		case "markdown":
-			var err error
-			text, err = utils.HtmlToMarkdown(bodyStr)
-			if err != nil {
-				return ErrorResult(fmt.Sprintf("failed to HTML to markdown: %v", err))
-			}
-			extractor = "markdown"
-
-		default:
-			text = t.extractText(bodyStr)
-			extractor = "text"
-		}
-
-	default:
-		text = bodyStr
-		extractor = "raw"
-	}
-
-	truncated := len(text) > maxChars
-	if truncated {
-		text = text[:maxChars]
-	}
-
 	result := map[string]any{
-		"url":       urlStr,
-		"status":    resp.StatusCode,
-		"extractor": extractor,
-		"truncated": truncated,
-		"length":    len(text),
-		"text":      text,
+		"url":       doc.URL,
+		"status":    doc.Status,
+		"extractor": doc.Extractor,
+		"truncated": doc.Truncated,
+		"length":    doc.Length,
+		"text":      doc.Text,
+	}
+	if doc.Title != "" {
+		result["title"] = doc.Title
+	}
+	if doc.LeadText != "" {
+		result["lead_text"] = doc.LeadText
 	}
 
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
@@ -1022,10 +841,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		ForLLM: string(resultJSON),
 		ForUser: fmt.Sprintf(
 			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
-			len(text),
-			urlStr,
-			extractor,
-			truncated,
+			doc.Length,
+			doc.URL,
+			doc.Extractor,
+			doc.Truncated,
 		),
 	}
 }

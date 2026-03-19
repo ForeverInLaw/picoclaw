@@ -538,6 +538,9 @@ func DefaultConfig() *Config {
 			EditFile: ToolConfig{
 				Enabled: true,
 			},
+			FactCheck: ToolConfig{
+				Enabled: true,
+			},
 			FindSkills: ToolConfig{
 				Enabled: true,
 			},

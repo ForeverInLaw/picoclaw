@@ -228,6 +228,9 @@ func TestBuildMessages_SystemPromptIncludesChatMemoryGuidance(t *testing.T) {
 		"explicitly say that you checked chat memory or chat history",
 		"you MUST use the personal_todo tool",
 		"Do not put personal todo items into chat_memory or MEMORY.md",
+		"you MUST use the fact_check tool",
+		"Do not replace this with free-form web_search or guessing",
+		"do not present the claim as established fact",
 	} {
 		if !strings.Contains(sys, needle) {
 			t.Fatalf("system prompt missing chat memory guidance %q:\n%s", needle, sys)

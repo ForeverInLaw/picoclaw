@@ -27,3 +27,9 @@ Durable tool notes, integration quirks, and environment gotchas live here.
 - Use `personal_todo` for personal task management requests like "запиши мне", "добавь в мои задачи", "что у меня в todo", "покажи мой список", or "отметь пункт 3 выполненным".
 - Do not store personal todo items in `memory/MEMORY.md` or retrieve them with `chat_memory`.
 - `personal_todo` owns personal task state; use it instead of file tools for todo CRUD.
+
+## Fact Check
+
+- Use `fact_check` when the user explicitly asks to verify, fact-check, or check whether a claim or URL is true.
+- Prefer `fact_check` over free-form `web_search` when the task is to produce a verification verdict with sources.
+- If `fact_check` returns `mixed` or `unverified`, do not state the claim as certain.
