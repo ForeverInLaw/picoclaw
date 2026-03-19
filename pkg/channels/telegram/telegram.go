@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -20,9 +21,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -50,6 +49,8 @@ type TelegramChannel struct {
 
 	registerFunc     func(context.Context, []commands.Definition) error
 	commandRegCancel context.CancelFunc
+	batchMu          sync.Mutex
+	batches          map[string]*telegramInboundBatch
 }
 
 func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChannel, error) {
@@ -100,6 +101,7 @@ func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChann
 		bot:         bot,
 		config:      cfg,
 		chatIDs:     make(map[string]int64),
+		batches:     make(map[string]*telegramInboundBatch),
 	}, nil
 }
 
@@ -148,6 +150,7 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 func (c *TelegramChannel) Stop(ctx context.Context) error {
 	logger.InfoC("telegram", "Stopping Telegram bot...")
 	c.SetRunning(false)
+	c.flushAllBatches(ctx)
 
 	// Stop the bot handler
 	if c.bh != nil {
@@ -504,208 +507,14 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 }
 
 func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Message) error {
-	if message == nil {
-		return fmt.Errorf("message is nil")
+	candidate, err := c.buildInboundCandidate(ctx, message)
+	if err != nil {
+		return err
 	}
-
-	user := message.From
-	if user == nil {
-		return fmt.Errorf("message sender (user) is nil")
-	}
-
-	platformID := fmt.Sprintf("%d", user.ID)
-	senderLabel := c.resolveParticipantLabel(user)
-	sender := bus.SenderInfo{
-		Platform:    "telegram",
-		PlatformID:  platformID,
-		CanonicalID: identity.BuildCanonicalID("telegram", platformID),
-		Username:    user.Username,
-		DisplayName: senderLabel,
-	}
-
-	// check allowlist to avoid downloading attachments for rejected users
-	if !c.IsAllowedSender(sender) {
-		logger.DebugCF("telegram", "Message rejected by allowlist", map[string]any{
-			"user_id": platformID,
-		})
+	if candidate == nil {
 		return nil
 	}
-
-	chatID := message.Chat.ID
-	c.chatIDs[platformID] = chatID
-
-	content := ""
-	mediaPaths := []string{}
-
-	chatIDStr := fmt.Sprintf("%d", chatID)
-	messageIDStr := fmt.Sprintf("%d", message.MessageID)
-	scope := channels.BuildMediaScope("telegram", chatIDStr, messageIDStr)
-
-	// Helper to register a local file with the media store
-	storeMedia := func(localPath, filename string) string {
-		if store := c.GetMediaStore(); store != nil {
-			ref, err := store.Store(localPath, media.MediaMeta{
-				Filename: filename,
-				Source:   "telegram",
-			}, scope)
-			if err == nil {
-				return ref
-			}
-		}
-		return localPath // fallback: use raw path
-	}
-
-	if message.Text != "" {
-		content += message.Text
-	}
-
-	if message.Caption != "" {
-		if content != "" {
-			content += "\n"
-		}
-		content += message.Caption
-	}
-
-	if len(message.Photo) > 0 {
-		photo := message.Photo[len(message.Photo)-1]
-		photoPath := c.downloadPhoto(ctx, photo.FileID)
-		if photoPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(photoPath, "photo.jpg"))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[image: photo]"
-		}
-	}
-
-	if message.Voice != nil {
-		voicePath := c.downloadFile(ctx, message.Voice.FileID, ".ogg")
-		if voicePath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(voicePath, "voice.ogg"))
-
-			if content != "" {
-				content += "\n"
-			}
-			content += "[voice]"
-		}
-	}
-
-	if message.Audio != nil {
-		audioPath := c.downloadFile(ctx, message.Audio.FileID, ".mp3")
-		if audioPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(audioPath, "audio.mp3"))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[audio]"
-		}
-	}
-
-	if message.Document != nil {
-		docPath := c.downloadFile(ctx, message.Document.FileID, "")
-		if docPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(docPath, "document"))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[file]"
-		}
-	}
-
-	if content == "" {
-		content = "[empty message]"
-	}
-
-	// In group chats, apply unified group trigger filtering
-	observeOnly := false
-	if message.Chat.Type != "private" {
-		isMentioned := c.isBotMentioned(message)
-		isReplyToBot := c.isReplyToBot(message)
-		isAddressedToBot := isMentioned || isReplyToBot
-		if isMentioned {
-			content = c.stripBotMention(content)
-		}
-		respond, cleaned := c.ShouldRespondInGroup(isAddressedToBot, content)
-		if respond {
-			content = cleaned
-		} else {
-			observeOnly = true
-		}
-	}
-	content = prependQuotedTelegramReply(message, content)
-
-	// For forum topics, embed the thread ID as "chatID/threadID" so replies
-	// route to the correct topic and each topic gets its own session.
-	// Only forum groups (IsForum) are handled; regular group reply threads
-	// must share one session per group.
-	compositeChatID := fmt.Sprintf("%d", chatID)
-	threadID := message.MessageThreadID
-	if message.Chat.IsForum && threadID != 0 {
-		compositeChatID = fmt.Sprintf("%d/%d", chatID, threadID)
-	}
-
-	logger.DebugCF("telegram", "Received message", map[string]any{
-		"sender_id": sender.CanonicalID,
-		"chat_id":   compositeChatID,
-		"thread_id": threadID,
-		"preview":   utils.Truncate(content, 50),
-	})
-
-	peerKind := "direct"
-	peerID := fmt.Sprintf("%d", user.ID)
-	if message.Chat.Type != "private" {
-		peerKind = "group"
-		peerID = compositeChatID
-	}
-
-	peer := bus.Peer{Kind: peerKind, ID: peerID}
-	messageID := fmt.Sprintf("%d", message.MessageID)
-
-	metadata := map[string]string{
-		"user_id":      fmt.Sprintf("%d", user.ID),
-		"username":     user.Username,
-		"first_name":   user.FirstName,
-		"sender_label": senderLabel,
-		"chat_label":   strings.TrimSpace(message.Chat.Title),
-		"is_group":     fmt.Sprintf("%t", message.Chat.Type != "private"),
-	}
-	if observeOnly {
-		metadata["observe_only"] = "true"
-	}
-	if alias := c.resolveParticipantAlias(user); alias != "" {
-		metadata["sender_alias"] = alias
-	}
-	if message.ReplyToMessage != nil {
-		metadata["reply_to_message_id"] = fmt.Sprintf("%d", message.ReplyToMessage.MessageID)
-		if replyAuthor := message.ReplyToMessage.From; replyAuthor != nil {
-			metadata["reply_to_user_id"] = fmt.Sprintf("%d", replyAuthor.ID)
-			metadata["reply_to_username"] = replyAuthor.Username
-			metadata["reply_to_first_name"] = replyAuthor.FirstName
-			metadata["reply_to_sender_id"] = telegramCanonicalID(replyAuthor)
-			metadata["reply_to_label"] = c.resolveParticipantLabel(replyAuthor)
-			if alias := c.resolveParticipantAlias(replyAuthor); alias != "" {
-				metadata["reply_to_alias"] = alias
-			}
-		}
-	}
-
-	// Set parent_peer metadata for per-topic agent binding.
-	if message.Chat.IsForum && threadID != 0 {
-		metadata["parent_peer_kind"] = "topic"
-		metadata["parent_peer_id"] = fmt.Sprintf("%d", threadID)
-	}
-
-	c.HandleMessage(c.ctx,
-		peer,
-		messageID,
-		platformID,
-		compositeChatID,
-		content,
-		mediaPaths,
-		metadata,
-		sender,
-	)
-	return nil
+	return c.dispatchInboundCandidate(ctx, *candidate)
 }
 
 func (c *TelegramChannel) downloadPhoto(ctx context.Context, fileID string) string {

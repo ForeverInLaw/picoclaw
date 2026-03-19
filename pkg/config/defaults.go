@@ -73,6 +73,10 @@ func DefaultConfig() *Config {
 					Enabled: true,
 					Text:    "Thinking... 💭",
 				},
+				Batching: TelegramBatchingConfig{
+					Enabled:  true,
+					WindowMS: 2000,
+				},
 				UseMarkdownV2: false,
 			},
 			Feishu: FeishuConfig{

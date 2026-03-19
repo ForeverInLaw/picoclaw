@@ -50,6 +50,7 @@ func newGroupMentionOnlyChannel(t *testing.T, botUsername string) (*TelegramChan
 		"10": "Сер",
 		"77": "Визард",
 	}
+	cfg.Channels.Telegram.Batching.Enabled = false
 	ch := &TelegramChannel{
 		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil,
 			channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: true}),
