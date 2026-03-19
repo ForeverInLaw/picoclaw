@@ -16,9 +16,10 @@ import (
 const sqliteDriver = "sqlite"
 
 type Index struct {
-	db     *sql.DB
-	cfg    Config
-	hasFTS bool
+	db           *sql.DB
+	cfg          Config
+	hasFTS       bool
+	schemaStatus string
 }
 
 func Open(path string, cfg Config) (*Index, error) {
@@ -53,103 +54,11 @@ func normalizeConfig(cfg Config) Config {
 }
 
 func (i *Index) init(ctx context.Context) error {
-	stmts := []string{
-		`PRAGMA journal_mode=WAL;`,
-		`PRAGMA busy_timeout=5000;`,
-		`CREATE TABLE IF NOT EXISTS observations (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_key TEXT NOT NULL,
-			channel TEXT NOT NULL,
-			chat_id TEXT NOT NULL,
-			peer_kind TEXT NOT NULL DEFAULT '',
-			chat_label TEXT NOT NULL DEFAULT '',
-			role TEXT NOT NULL,
-			sender_id TEXT NOT NULL,
-			source_kind TEXT NOT NULL DEFAULT '',
-			source_key TEXT NOT NULL DEFAULT '',
-			content TEXT NOT NULL,
-			created_at_ms INTEGER NOT NULL
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_observations_session ON observations(session_key);`,
-		`CREATE INDEX IF NOT EXISTS idx_observations_chat ON observations(channel, chat_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_observations_chat_time ON observations(channel, chat_id, created_at_ms DESC);`,
-		`CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source_kind, source_key);`,
-		`CREATE TABLE IF NOT EXISTS chat_catalog (
-			channel TEXT NOT NULL,
-			chat_id TEXT NOT NULL,
-			peer_kind TEXT NOT NULL DEFAULT '',
-			label TEXT NOT NULL DEFAULT '',
-			last_seen_ms INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY(channel, chat_id)
-		);`,
-		`CREATE TABLE IF NOT EXISTS chat_aliases (
-			alias TEXT PRIMARY KEY,
-			channel TEXT NOT NULL,
-			chat_id TEXT NOT NULL,
-			label TEXT NOT NULL DEFAULT '',
-			allowed_requesters_json TEXT NOT NULL DEFAULT '[]'
-		);`,
-		`CREATE TABLE IF NOT EXISTS chat_participants (
-			channel TEXT NOT NULL,
-			chat_id TEXT NOT NULL,
-			sender_id TEXT NOT NULL,
-			label TEXT NOT NULL DEFAULT '',
-			last_seen_ms INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY(channel, chat_id, sender_id)
-		);`,
-		`CREATE TABLE IF NOT EXISTS observation_embeddings (
-			observation_id INTEGER PRIMARY KEY,
-			model_name TEXT NOT NULL,
-			dims INTEGER NOT NULL,
-			vector_json TEXT NOT NULL,
-			updated_at_ms INTEGER NOT NULL,
-			FOREIGN KEY(observation_id) REFERENCES observations(id) ON DELETE CASCADE
-		);`,
-		`CREATE TABLE IF NOT EXISTS chat_rollups (
-			channel TEXT NOT NULL,
-			chat_id TEXT NOT NULL,
-			window_start_ms INTEGER NOT NULL,
-			window_end_ms INTEGER NOT NULL,
-			source_count INTEGER NOT NULL DEFAULT 0,
-			last_observation_ms INTEGER NOT NULL DEFAULT 0,
-			summary TEXT NOT NULL,
-			created_at_ms INTEGER NOT NULL,
-			updated_at_ms INTEGER NOT NULL,
-			PRIMARY KEY(channel, chat_id, window_start_ms, window_end_ms)
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_chat_rollups_window ON chat_rollups(channel, chat_id, window_start_ms DESC);`,
-		`CREATE TABLE IF NOT EXISTS chat_rollup_embeddings (
-			channel TEXT NOT NULL,
-			chat_id TEXT NOT NULL,
-			window_start_ms INTEGER NOT NULL,
-			window_end_ms INTEGER NOT NULL,
-			model_name TEXT NOT NULL,
-			dims INTEGER NOT NULL,
-			vector_json TEXT NOT NULL,
-			updated_at_ms INTEGER NOT NULL,
-			PRIMARY KEY(channel, chat_id, window_start_ms, window_end_ms)
-		);`,
-		`CREATE TABLE IF NOT EXISTS memory_meta (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		);`,
+	status, err := i.ensureSchema(ctx)
+	if err != nil {
+		return err
 	}
-
-	for _, stmt := range stmts {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("memoryindex: init schema: %w", err)
-		}
-	}
-	for _, stmt := range []string{
-		`ALTER TABLE observations ADD COLUMN source_kind TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE observations ADD COLUMN source_key TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE observations ADD COLUMN peer_kind TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE observations ADD COLUMN chat_label TEXT NOT NULL DEFAULT ''`,
-	} {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-			return fmt.Errorf("memoryindex: migrate schema: %w", err)
-		}
-	}
+	i.schemaStatus = status
 
 	if _, err := i.db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(content, content='observations', content_rowid='id', tokenize='unicode61');`); err == nil {
 		i.hasFTS = true
@@ -174,6 +83,16 @@ func (i *Index) init(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (i *Index) SchemaStatus() string {
+	if i == nil {
+		return ""
+	}
+	if strings.TrimSpace(i.schemaStatus) == "" {
+		return "unknown"
+	}
+	return i.schemaStatus
 }
 
 func (i *Index) AddObservation(ctx context.Context, obs Observation) error {

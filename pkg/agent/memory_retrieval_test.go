@@ -17,7 +17,7 @@ func TestRetrievalQuery_StripsStructuredEnvelope(t *testing.T) {
 
 func TestBuildMessages_IncludesRetrievedMemoryBlock(t *testing.T) {
 	cb := NewContextBuilder(t.TempDir())
-	msgs := cb.BuildMessages(nil, "", "RETRIEVED_MEMORY: earlier talk about sqlite", "hello", nil, "cli", "direct", "", "")
+	msgs := cb.BuildMessages(nil, "", "RETRIEVED_MEMORY: earlier talk about sqlite", "hello", nil, "cli", "direct", "", "", "")
 	if len(msgs) == 0 {
 		t.Fatal("expected messages")
 	}

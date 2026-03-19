@@ -2,11 +2,14 @@ package memoryindex
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestIndex_AddObservationAndSearch(t *testing.T) {
@@ -197,5 +200,100 @@ func TestIndex_SyncWorkspaceFiles_ReplacesUpdatedDocumentContent(t *testing.T) {
 	}
 	if len(newHits) == 0 || !strings.Contains(newHits[0].Content, "OMEGA-TRACE-27") {
 		t.Fatalf("expected updated content hit, got %#v", newHits)
+	}
+}
+
+func TestIndex_Open_RepairsLegacySchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory", "index.sqlite")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+
+	db, err := sql.Open(sqliteDriver, dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, stmt := range []string{
+		`CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_key TEXT NOT NULL,
+			channel TEXT NOT NULL,
+			chat_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			sender_id TEXT NOT NULL,
+			content TEXT NOT NULL,
+			created_at_ms INTEGER NOT NULL
+		);`,
+		`CREATE INDEX idx_observations_session ON observations(session_key);`,
+		`INSERT INTO observations(session_key, channel, chat_id, role, sender_id, content, created_at_ms)
+		 VALUES ('agent:main:telegram:group:-1001', 'telegram', '-1001', 'user', 'telegram:42', 'legacy row', 1234567890);`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("legacy schema setup failed for %q: %v", stmt, err)
+		}
+	}
+	_ = db.Close()
+
+	idx, err := Open(dbPath, Config{})
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer idx.Close()
+
+	if got := idx.SchemaStatus(); got != schemaStatusRepaired {
+		t.Fatalf("SchemaStatus() = %q, want %q", got, schemaStatusRepaired)
+	}
+
+	checkDB, err := sql.Open(sqliteDriver, dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open(check) error: %v", err)
+	}
+	defer checkDB.Close()
+
+	columnNames := map[string]bool{}
+	rows, err := checkDB.Query(`PRAGMA table_info(observations)`)
+	if err != nil {
+		t.Fatalf("PRAGMA table_info(observations) error: %v", err)
+	}
+	for rows.Next() {
+		var (
+			cid      int
+			name     string
+			typ      string
+			notNull  int
+			defaultV sql.NullString
+			pk       int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultV, &pk); err != nil {
+			t.Fatalf("Scan(table_info) error: %v", err)
+		}
+		columnNames[name] = true
+	}
+	rows.Close()
+
+	for _, column := range []string{"peer_kind", "chat_label", "source_kind", "source_key"} {
+		if !columnNames[column] {
+			t.Fatalf("expected repaired observations.%s column, columns=%v", column, columnNames)
+		}
+	}
+
+	for _, table := range []string{"chat_catalog", "chat_aliases", "chat_participants", "chat_rollups"} {
+		var exists int
+		if err := checkDB.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, table).Scan(&exists); err != nil {
+			t.Fatalf("table exists check for %s failed: %v", table, err)
+		}
+		if exists != 1 {
+			t.Fatalf("expected repaired table %s to exist", table)
+		}
+	}
+
+	var legacyCount int
+	if err := checkDB.QueryRow(`SELECT COUNT(*) FROM observations WHERE content = 'legacy row'`).Scan(&legacyCount); err != nil {
+		t.Fatalf("legacy row count failed: %v", err)
+	}
+	if legacyCount != 1 {
+		t.Fatalf("legacy row count = %d, want 1", legacyCount)
 	}
 }

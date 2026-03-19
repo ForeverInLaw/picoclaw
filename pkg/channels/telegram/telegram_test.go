@@ -655,3 +655,33 @@ func TestHandleMessage_ReplyThread_NonForum_NoIsolation(t *testing.T) {
 	assert.Empty(t, inbound.Metadata["parent_peer_kind"])
 	assert.Empty(t, inbound.Metadata["parent_peer_id"])
 }
+
+func TestHandleMessage_GroupIncludesChatLabelMetadata(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+	}
+
+	msg := &telego.Message{
+		Text:      "@bot status",
+		MessageID: 21,
+		Chat: telego.Chat{
+			ID:    -100777,
+			Type:  "supergroup",
+			Title: "Memory Lab",
+		},
+		From: &telego.User{
+			ID:        9,
+			FirstName: "Carol",
+		},
+	}
+
+	err := ch.handleMessage(context.Background(), msg)
+	require.NoError(t, err)
+
+	inbound, ok := <-messageBus.InboundChan()
+	require.True(t, ok)
+	assert.Equal(t, "Memory Lab", inbound.Metadata["chat_label"])
+}

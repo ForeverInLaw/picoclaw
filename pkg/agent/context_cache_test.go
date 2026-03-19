@@ -82,7 +82,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msgs := cb.BuildMessages(tt.history, tt.summary, "", tt.message, nil, "test", "chat1", "", "")
+			msgs := cb.BuildMessages(tt.history, tt.summary, "", tt.message, nil, "test", "chat1", "", "", "")
 
 			systemCount := 0
 			for _, m := range msgs {
@@ -174,7 +174,7 @@ func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msgs := cb.BuildMessages(nil, "", "", "hello", nil, "discord", "chat1", tt.senderID, tt.senderDisplayName)
+			msgs := cb.BuildMessages(nil, "", "", "hello", nil, "discord", "chat1", "", tt.senderID, tt.senderDisplayName)
 			sys := msgs[0].Content
 
 			if tt.wantSection {
@@ -194,6 +194,23 @@ func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 	}
 }
 
+func TestBuildMessages_CurrentChatDynamicContext(t *testing.T) {
+	tmpDir := setupWorkspace(t, map[string]string{
+		"IDENTITY.md": "# Identity\nTest agent.",
+	})
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+
+	msgs := cb.BuildMessages(nil, "", "", "hello", nil, "telegram", "-1001", "Test Group", "", "")
+	sys := msgs[0].Content
+
+	want := "## Current Chat\nCurrent chat: Test Group"
+	if !strings.Contains(sys, want) {
+		t.Fatalf("system prompt missing chat context %q:\n%s", want, sys)
+	}
+}
+
 func TestBuildMessages_SystemPromptIncludesChatMemoryGuidance(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"IDENTITY.md": "# Identity\nTest agent.",
@@ -202,7 +219,7 @@ func TestBuildMessages_SystemPromptIncludesChatMemoryGuidance(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cb := NewContextBuilder(tmpDir)
-	msgs := cb.BuildMessages(nil, "", "", "hello", nil, "telegram", "42", "", "")
+	msgs := cb.BuildMessages(nil, "", "", "hello", nil, "telegram", "42", "", "", "")
 	sys := msgs[0].Content
 
 	for _, needle := range []string{
@@ -683,7 +700,7 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 				}
 
 				// Also exercise BuildMessages concurrently
-				msgs := cb.BuildMessages(nil, "", "", "hello", nil, "test", "chat", "", "")
+				msgs := cb.BuildMessages(nil, "", "", "hello", nil, "test", "chat", "", "", "")
 				if len(msgs) < 2 {
 					errs <- "BuildMessages returned fewer than 2 messages"
 					return
@@ -771,6 +788,6 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = cb.BuildMessages(history, "summary", "", "new message", nil, "cli", "test", "", "")
+		_ = cb.BuildMessages(history, "summary", "", "new message", nil, "cli", "test", "", "", "")
 	}
 }

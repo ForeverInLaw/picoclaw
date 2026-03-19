@@ -491,7 +491,15 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 	}
 }
 
-func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderDisplayName string) string {
+func formatCurrentChatLine(chatLabel string) string {
+	chatLabel = strings.TrimSpace(chatLabel)
+	if chatLabel == "" {
+		return ""
+	}
+	return fmt.Sprintf("Current chat: %s", chatLabel)
+}
+
+func (cb *ContextBuilder) buildDynamicContext(channel, chatID, chatLabel, senderID, senderDisplayName string) string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
@@ -500,6 +508,9 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID, senderID, senderD
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
+	}
+	if chatLine := formatCurrentChatLine(chatLabel); chatLine != "" {
+		fmt.Fprintf(&sb, "\n\n## Current Chat\n%s", chatLine)
 	}
 	if senderLine := formatCurrentSenderLine(senderID, senderDisplayName); senderLine != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Sender\n%s", senderLine)
@@ -514,7 +525,7 @@ func (cb *ContextBuilder) BuildMessages(
 	retrievedMemory string,
 	currentMessage string,
 	media []string,
-	channel, chatID, senderID, senderDisplayName string,
+	channel, chatID, chatLabel, senderID, senderDisplayName string,
 ) []providers.Message {
 	messages := []providers.Message{}
 
@@ -530,7 +541,7 @@ func (cb *ContextBuilder) BuildMessages(
 	staticPrompt := cb.BuildSystemPromptWithCache()
 
 	// Build short dynamic context (time, runtime, session) — changes per request
-	dynamicCtx := cb.buildDynamicContext(channel, chatID, senderID, senderDisplayName)
+	dynamicCtx := cb.buildDynamicContext(channel, chatID, chatLabel, senderID, senderDisplayName)
 
 	// Compose a single system message: static (cached) + dynamic + optional summary.
 	// Keeping all system content in one message ensures every provider adapter can

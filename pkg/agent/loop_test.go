@@ -125,7 +125,7 @@ func TestSameTargetReplyToMessageID_OnlyForSameChannelAndChat(t *testing.T) {
 	}
 }
 
-func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
+func TestProcessMessage_IncludesCurrentSenderAndChatInDynamicContext(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -155,6 +155,9 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 		},
 		ChatID:  "group-1",
 		Content: "hello",
+		Metadata: map[string]string{
+			"chat_label": "Architecture",
+		},
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -170,6 +173,10 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	wantSender := "## Current Sender\nCurrent sender: Alice (ID: discord:123)"
 	if !strings.Contains(systemPrompt, wantSender) {
 		t.Fatalf("system prompt missing sender context %q:\n%s", wantSender, systemPrompt)
+	}
+	wantChat := "## Current Chat\nCurrent chat: Architecture"
+	if !strings.Contains(systemPrompt, wantChat) {
+		t.Fatalf("system prompt missing chat context %q:\n%s", wantChat, systemPrompt)
 	}
 
 	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]

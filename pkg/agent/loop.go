@@ -960,6 +960,7 @@ func (al *AgentLoop) runAgentLoop(
 		opts.Media,
 		opts.Channel,
 		opts.ChatID,
+		opts.ChatLabel,
 		opts.SenderID,
 		opts.SenderDisplayName,
 	)
@@ -1284,7 +1285,7 @@ func (al *AgentLoop) runLLMIteration(
 				messages = agent.ContextBuilder.BuildMessages(
 					newHistory, newSummary, "",
 					"",
-					nil, opts.Channel, opts.ChatID, opts.SenderID, opts.SenderDisplayName,
+					nil, opts.Channel, opts.ChatID, opts.ChatLabel, opts.SenderID, opts.SenderDisplayName,
 				)
 				continue
 			}

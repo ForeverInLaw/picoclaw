@@ -403,6 +403,7 @@ func initMemoryIndex(cfg *config.Config, defaults *config.AgentDefaults, workspa
 		log.Printf("memoryindex: init failed: %v", err)
 		return nil
 	}
+	log.Printf("memoryindex: schema status=%s path=%s", idx.SchemaStatus(), dbPath)
 	if err := idx.BootstrapSessions(context.Background(), sessionsDir); err != nil {
 		log.Printf("memoryindex: bootstrap failed: %v", err)
 	}
