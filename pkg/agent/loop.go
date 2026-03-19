@@ -60,6 +60,7 @@ type processOptions struct {
 	ChatID            string // Target chat ID for tool execution
 	PeerKind          string
 	ChatLabel         string
+	Language          string
 	Sender            bus.SenderInfo
 	SenderID          string   // Current sender ID for dynamic context
 	SenderDisplayName string   // Current sender display name for dynamic context
@@ -804,6 +805,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		ChatID:            msg.ChatID,
 		PeerKind:          strings.TrimSpace(msg.Peer.Kind),
 		ChatLabel:         strings.TrimSpace(msg.Metadata["chat_label"]),
+		Language:          detectMessageLanguageHint(msg.Content),
 		Sender:            msg.Sender,
 		SenderID:          msg.SenderID,
 		SenderDisplayName: msg.Sender.DisplayName,
@@ -1460,6 +1462,7 @@ func (al *AgentLoop) runLLMIteration(
 
 				toolCtx := tools.WithToolSender(ctx, opts.Sender)
 				toolCtx = tools.WithToolPeerKind(toolCtx, opts.PeerKind)
+				toolCtx = tools.WithToolLanguage(toolCtx, opts.Language)
 				toolCtx = tools.WithToolReplyToMessageID(toolCtx, opts.ReplyToMessageID)
 				toolResult := agent.Tools.ExecuteWithContext(
 					toolCtx,

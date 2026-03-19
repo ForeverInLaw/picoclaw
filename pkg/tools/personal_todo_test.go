@@ -49,12 +49,12 @@ func TestPersonalTodoTool_Description_ExplainsUsage(t *testing.T) {
 
 func TestPersonalTodoTool_Execute_DMFlow(t *testing.T) {
 	tool, sent := newPersonalTodoToolForTest(t)
-	ctx := WithToolSender(WithToolContext(t.Context(), "telegram", "42"), bus.SenderInfo{
+	ctx := WithToolLanguage(WithToolSender(WithToolContext(t.Context(), "telegram", "42"), bus.SenderInfo{
 		Platform:    "telegram",
 		PlatformID:  "42",
 		CanonicalID: "telegram:42",
 		DisplayName: "Ser",
-	})
+	}), "en")
 
 	addResult := tool.Execute(ctx, map[string]any{
 		"action": "add",
@@ -81,12 +81,12 @@ func TestPersonalTodoTool_Execute_DMFlow(t *testing.T) {
 
 func TestPersonalTodoTool_Execute_TelegramGroupPrivacy(t *testing.T) {
 	tool, sent := newPersonalTodoToolForTest(t)
-	ctx := WithToolSender(WithToolContext(t.Context(), "telegram", "-1001"), bus.SenderInfo{
+	ctx := WithToolLanguage(WithToolSender(WithToolContext(t.Context(), "telegram", "-1001"), bus.SenderInfo{
 		Platform:    "telegram",
 		PlatformID:  "42",
 		CanonicalID: "telegram:42",
 		DisplayName: "Ser",
-	})
+	}), "en")
 
 	addResult := tool.Execute(ctx, map[string]any{
 		"action": "add",
@@ -119,12 +119,12 @@ func TestPersonalTodoTool_Execute_TelegramGroupPrivacy(t *testing.T) {
 
 func TestPersonalTodoTool_Execute_NonTelegramGroupBlocked(t *testing.T) {
 	tool, sent := newPersonalTodoToolForTest(t)
-	ctx := WithToolSender(WithToolContext(t.Context(), "discord", "group-1"), bus.SenderInfo{
+	ctx := WithToolLanguage(WithToolSender(WithToolContext(t.Context(), "discord", "group-1"), bus.SenderInfo{
 		Platform:    "discord",
 		PlatformID:  "42",
 		CanonicalID: "discord:42",
 		DisplayName: "Ser",
-	})
+	}), "en")
 
 	result := tool.Execute(ctx, map[string]any{
 		"action": "add",
@@ -161,12 +161,12 @@ func TestPersonalTodoTool_Execute_TelegramGroupList_FailsClosedWhenDMUnavailable
 		return nil
 	})
 
-	ctx := WithToolSender(WithToolContext(t.Context(), "telegram", "-1001"), bus.SenderInfo{
+	ctx := WithToolLanguage(WithToolSender(WithToolContext(t.Context(), "telegram", "-1001"), bus.SenderInfo{
 		Platform:    "telegram",
 		PlatformID:  "42",
 		CanonicalID: "telegram:42",
 		DisplayName: "Ser",
-	})
+	}), "en")
 	result := tool.Execute(ctx, map[string]any{"action": "list"})
 	if result.IsError {
 		t.Fatalf("Execute() error: %s", result.ForLLM)
@@ -179,5 +179,37 @@ func TestPersonalTodoTool_Execute_TelegramGroupList_FailsClosedWhenDMUnavailable
 	}
 	if !strings.Contains(sent[0].content, "Open a direct chat") {
 		t.Fatalf("expected DM guidance in ack, got %q", sent[0].content)
+	}
+}
+
+func TestPersonalTodoTool_Execute_RussianLanguageHint(t *testing.T) {
+	tool, sent := newPersonalTodoToolForTest(t)
+	ctx := WithToolLanguage(WithToolSender(WithToolContext(t.Context(), "telegram", "42"), bus.SenderInfo{
+		Platform:    "telegram",
+		PlatformID:  "42",
+		CanonicalID: "telegram:42",
+		DisplayName: "Ser",
+	}), "ru")
+
+	addResult := tool.Execute(ctx, map[string]any{
+		"action": "add",
+		"text":   "Передать саламалекум Андрею",
+	})
+	if addResult.IsError {
+		t.Fatalf("add Execute() error: %s", addResult.ForLLM)
+	}
+
+	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
+	if listResult.IsError {
+		t.Fatalf("list Execute() error: %s", listResult.ForLLM)
+	}
+	if len(*sent) != 2 {
+		t.Fatalf("expected 2 sent messages, got %#v", *sent)
+	}
+	if !strings.Contains((*sent)[1].content, "Личный список дел") {
+		t.Fatalf("expected Russian title, got %q", (*sent)[1].content)
+	}
+	if !strings.Contains((*sent)[1].content, "Открыто: 1 | Выполнено: 0 | Всего: 1") {
+		t.Fatalf("expected Russian counters, got %q", (*sent)[1].content)
 	}
 }

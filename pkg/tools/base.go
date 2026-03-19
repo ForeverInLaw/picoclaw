@@ -28,6 +28,7 @@ var (
 	ctxKeyChannel   = &toolCtxKey{"channel"}
 	ctxKeyChatID    = &toolCtxKey{"chatID"}
 	ctxKeyPeerKind  = &toolCtxKey{"peerKind"}
+	ctxKeyLanguage  = &toolCtxKey{"language"}
 	ctxKeyReplyToID = &toolCtxKey{"replyToMessageID"}
 	ctxKeySender    = &toolCtxKey{"sender"}
 )
@@ -42,6 +43,11 @@ func WithToolContext(ctx context.Context, channel, chatID string) context.Contex
 // WithToolPeerKind returns a child context carrying the inbound peer kind.
 func WithToolPeerKind(ctx context.Context, peerKind string) context.Context {
 	return context.WithValue(ctx, ctxKeyPeerKind, peerKind)
+}
+
+// WithToolLanguage returns a child context carrying the preferred response language.
+func WithToolLanguage(ctx context.Context, language string) context.Context {
+	return context.WithValue(ctx, ctxKeyLanguage, language)
 }
 
 // WithToolReplyToMessageID returns a child context carrying the inbound message ID.
@@ -69,6 +75,12 @@ func ToolChatID(ctx context.Context) string {
 // ToolPeerKind extracts the peer kind from ctx, or "" if unset.
 func ToolPeerKind(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyPeerKind).(string)
+	return v
+}
+
+// ToolLanguage extracts the preferred response language from ctx, or "" if unset.
+func ToolLanguage(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyLanguage).(string)
 	return v
 }
 
