@@ -1120,6 +1120,8 @@ func (al *AgentLoop) runLLMIteration(
 ) (string, int, error) {
 	iteration := 0
 	var finalContent string
+	var lastToolResultForFallback string
+	hadToolCalls := false
 
 	// Determine effective model tier for this conversation turn.
 	// selectCandidates evaluates routing once and the decision is sticky for
@@ -1362,6 +1364,7 @@ func (al *AgentLoop) runLLMIteration(
 		for _, tc := range normalizedToolCalls {
 			toolNames = append(toolNames, tc.Name)
 		}
+		hadToolCalls = true
 		logger.InfoCF("agent", "LLM requested tool calls",
 			map[string]any{
 				"agent_id":  agent.ID,
@@ -1530,6 +1533,9 @@ func (al *AgentLoop) runLLMIteration(
 			if contentForLLM == "" && r.result.Err != nil {
 				contentForLLM = r.result.Err.Error()
 			}
+			if strings.TrimSpace(contentForLLM) != "" {
+				lastToolResultForFallback = contentForLLM
+			}
 
 			toolResultMsg := providers.Message{
 				Role:       "tool",
@@ -1552,6 +1558,10 @@ func (al *AgentLoop) runLLMIteration(
 		logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 			"agent_id": agent.ID, "iteration": iteration,
 		})
+	}
+
+	if finalContent == "" && hadToolCalls && iteration >= agent.MaxIterations {
+		finalContent = toolExhaustionFallback(opts.Language, lastToolResultForFallback, hadToolCalls)
 	}
 
 	return finalContent, iteration, nil

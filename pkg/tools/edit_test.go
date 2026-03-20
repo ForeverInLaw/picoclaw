@@ -55,6 +55,34 @@ func TestEditTool_EditFile_Success(t *testing.T) {
 	}
 }
 
+func TestEditTool_EditFile_SuccessWithCompatibilityAliases(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.txt")
+	os.WriteFile(testFile, []byte("Hello World\nThis is a test"), 0o644)
+
+	tool := NewEditFileTool(tmpDir, true)
+	ctx := context.Background()
+	args := map[string]any{
+		"path":       testFile,
+		"old_string": "World",
+		"new_string": "Universe",
+	}
+
+	result := tool.Execute(ctx, args)
+
+	if result.IsError {
+		t.Fatalf("Expected compatibility alias success, got IsError=true: %s", result.ForLLM)
+	}
+
+	content, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("Failed to read edited file: %v", err)
+	}
+	if !strings.Contains(string(content), "Hello Universe") {
+		t.Fatalf("Expected compatibility alias edit to update file, got: %s", string(content))
+	}
+}
+
 // TestEditTool_EditFile_NotFound verifies error handling for non-existent file
 func TestEditTool_EditFile_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()

@@ -29,7 +29,7 @@ func (t *EditFileTool) Name() string {
 }
 
 func (t *EditFileTool) Description() string {
-	return "Edit a file by replacing old_text with new_text. The old_text must exist exactly in the file."
+	return "Edit a file by replacing old_text with new_text. The old_text must exist exactly in the file. Compatibility aliases old_string/new_string are also accepted."
 }
 
 func (t *EditFileTool) Parameters() map[string]any {
@@ -44,9 +44,17 @@ func (t *EditFileTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The exact text to find and replace",
 			},
+			"old_string": map[string]any{
+				"type":        "string",
+				"description": "Deprecated alias for old_text",
+			},
 			"new_text": map[string]any{
 				"type":        "string",
 				"description": "The text to replace with",
+			},
+			"new_string": map[string]any{
+				"type":        "string",
+				"description": "Deprecated alias for new_text",
 			},
 		},
 		"required": []string{"path", "old_text", "new_text"},
@@ -59,20 +67,30 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
-	oldText, ok := args["old_text"].(string)
+	oldText, ok := stringArgAlias(args, "old_text", "old_string")
 	if !ok {
-		return ErrorResult("old_text is required")
+		return ErrorResult("old_text is required (old_string is accepted as a compatibility alias)")
 	}
 
-	newText, ok := args["new_text"].(string)
+	newText, ok := stringArgAlias(args, "new_text", "new_string")
 	if !ok {
-		return ErrorResult("new_text is required")
+		return ErrorResult("new_text is required (new_string is accepted as a compatibility alias)")
 	}
 
 	if err := editFile(t.fs, path, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
 	}
 	return SilentResult(fmt.Sprintf("File edited: %s", path))
+}
+
+func stringArgAlias(args map[string]any, primary, alias string) (string, bool) {
+	if value, ok := args[primary].(string); ok {
+		return value, true
+	}
+	if value, ok := args[alias].(string); ok {
+		return value, true
+	}
+	return "", false
 }
 
 type AppendFileTool struct {
