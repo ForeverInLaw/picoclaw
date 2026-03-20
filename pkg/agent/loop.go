@@ -752,23 +752,15 @@ func (al *AgentLoop) ProcessHeartbeat(
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
-	// Add message preview to log (show full content for error messages)
-	var logContent string
-	if strings.Contains(msg.Content, "Error:") || strings.Contains(msg.Content, "error") {
-		logContent = msg.Content // Full content for errors
-	} else {
-		logContent = utils.Truncate(msg.Content, 80)
-	}
-	logger.InfoCF(
-		"agent",
-		fmt.Sprintf("Processing message from %s:%s: %s", msg.Channel, msg.SenderID, logContent),
+	logger.InfoCF("agent", "Processing inbound message",
 		map[string]any{
-			"channel":     msg.Channel,
-			"chat_id":     msg.ChatID,
-			"sender_id":   msg.SenderID,
-			"session_key": msg.SessionKey,
-		},
-	)
+			"channel":       msg.Channel,
+			"chat_id":       msg.ChatID,
+			"sender_id":     msg.SenderID,
+			"session_key":   msg.SessionKey,
+			"content_chars": len(msg.Content),
+			"media_count":   len(msg.Media),
+		})
 
 	observeOnly := strings.EqualFold(strings.TrimSpace(msg.Metadata["observe_only"]), "true")
 
@@ -1043,8 +1035,7 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	// 8. Log response
-	responsePreview := utils.Truncate(finalContent, 120)
-	logger.InfoCF("agent", fmt.Sprintf("Response: %s", responsePreview),
+	logger.InfoCF("agent", "Prepared response",
 		map[string]any{
 			"agent_id":     agent.ID,
 			"session_key":  opts.SessionKey,
