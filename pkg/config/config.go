@@ -829,10 +829,25 @@ type ModelConfig struct {
 	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
 
 	// Optional optimizations
-	RPM            int    `json:"rpm,omitempty"`              // Requests per minute limit
-	MaxTokensField string `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
-	RequestTimeout int    `json:"request_timeout,omitempty"`
-	ThinkingLevel  string `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
+	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
+	MaxTokensField string         `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
+	RequestTimeout int            `json:"request_timeout,omitempty"`
+	ThinkingLevel  string         `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
+	ExtraBody      map[string]any `json:"extra_body,omitempty"`     // Additional fields to inject into request body
+
+	// from security
+	secModelName string
+	apiKeys      []string
+	secDirty     bool
+}
+
+// APIKey returns the first API key from apiKeys
+func (c *ModelConfig) APIKey() string {
+	if len(c.apiKeys) > 0 {
+		return c.apiKeys[0]
+	}
+	return ""
+}
 }
 
 // Validate checks if the ModelConfig has all required fields.
@@ -1400,6 +1415,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 				MaxTokensField: m.MaxTokensField,
 				RequestTimeout: m.RequestTimeout,
 				ThinkingLevel:  m.ThinkingLevel,
+				ExtraBody:      m.ExtraBody,
 			}
 			expanded = append(expanded, additionalEntry)
 			fallbackNames = append(fallbackNames, expandedName)
@@ -1419,6 +1435,8 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 			MaxTokensField: m.MaxTokensField,
 			RequestTimeout: m.RequestTimeout,
 			ThinkingLevel:  m.ThinkingLevel,
+			ExtraBody:      m.ExtraBody,
+			apiKeys:        []string{keys[0]},
 		}
 
 		// Prepend new fallbacks to existing ones
