@@ -11,6 +11,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/chatmemory"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
@@ -96,9 +97,11 @@ func NewAgentInstance(
 	if cfg.Tools.IsToolEnabled("exec") {
 		execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
 		if err != nil {
-			log.Fatalf("Critical error: unable to initialize exec tool: %v", err)
+			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
+				map[string]any{"error": err.Error()})
+		} else {
+			toolsRegistry.Register(execTool)
 		}
-		toolsRegistry.Register(execTool)
 	}
 
 	if cfg.Tools.IsToolEnabled("edit_file") {
@@ -153,6 +156,17 @@ func NewAgentInstance(
 		maxTokens = 8192
 	}
 
+	contextWindow := defaults.ContextWindow
+	if contextWindow == 0 {
+		// Default heuristic: 4x the output token limit.
+		// Most models have context windows well above their output limits
+		// (e.g., GPT-4o 128k ctx / 16k out, Claude 200k ctx / 8k out).
+		// 4x is a conservative lower bound that avoids premature
+		// summarization while remaining safe — the reactive
+		// forceCompression handles any overshoot.
+		contextWindow = maxTokens * 4
+	}
+
 	temperature := 0.7
 	if defaults.Temperature != nil {
 		temperature = *defaults.Temperature
@@ -175,51 +189,7 @@ func NewAgentInstance(
 	}
 
 	// Resolve fallback candidates
-	modelCfg := providers.ModelConfig{
-		Primary:   model,
-		Fallbacks: fallbacks,
-	}
-	resolveFromModelList := func(raw string) (string, bool) {
-		ensureProtocol := func(model string) string {
-			model = strings.TrimSpace(model)
-			if model == "" {
-				return ""
-			}
-			if strings.Contains(model, "/") {
-				return model
-			}
-			return "openai/" + model
-		}
-
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			return "", false
-		}
-
-		if cfg != nil {
-			if mc, err := cfg.GetModelConfig(raw); err == nil && mc != nil && strings.TrimSpace(mc.Model) != "" {
-				return ensureProtocol(mc.Model), true
-			}
-
-			for i := range cfg.ModelList {
-				fullModel := strings.TrimSpace(cfg.ModelList[i].Model)
-				if fullModel == "" {
-					continue
-				}
-				if fullModel == raw {
-					return ensureProtocol(fullModel), true
-				}
-				_, modelID := providers.ExtractProtocol(fullModel)
-				if modelID == raw {
-					return ensureProtocol(fullModel), true
-				}
-			}
-		}
-
-		return "", false
-	}
-
-	candidates := providers.ResolveCandidatesWithLookup(modelCfg, defaults.Provider, resolveFromModelList)
+	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
 
 	var imageProvider providers.LLMProvider
 	var imageCandidates []providers.FallbackCandidate
@@ -228,7 +198,7 @@ func NewAgentInstance(
 			Primary:   imageModel,
 			Fallbacks: imageFallbacks,
 		}
-		imageCandidates = providers.ResolveCandidatesWithLookup(imageModelCfg, defaults.Provider, resolveFromModelList)
+		imageCandidates = providers.ResolveCandidatesWithLookup(imageModelCfg, defaults.Provider, buildModelListResolver(cfg))
 		if imageModel == model {
 			imageProvider = provider
 		} else if mc, err := cfg.GetModelConfig(imageModel); err != nil {
@@ -252,8 +222,7 @@ func NewAgentInstance(
 	var router *routing.Router
 	var lightCandidates []providers.FallbackCandidate
 	if rc := defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
-		lightModelCfg := providers.ModelConfig{Primary: rc.LightModel}
-		resolved := providers.ResolveCandidatesWithLookup(lightModelCfg, defaults.Provider, resolveFromModelList)
+		resolved := resolveModelCandidates(cfg, defaults.Provider, rc.LightModel, nil)
 		if len(resolved) > 0 {
 			router = routing.New(routing.RouterConfig{
 				LightModel: rc.LightModel,
@@ -261,8 +230,8 @@ func NewAgentInstance(
 			})
 			lightCandidates = resolved
 		} else {
-			log.Printf("routing: light_model %q not found in model_list — routing disabled for agent %q",
-				rc.LightModel, agentID)
+			logger.WarnCF("agent", "Routing light model not found; routing disabled",
+				map[string]any{"light_model": rc.LightModel, "agent_id": agentID})
 		}
 	}
 
@@ -278,7 +247,7 @@ func NewAgentInstance(
 		MaxTokens:                 maxTokens,
 		Temperature:               temperature,
 		ThinkingLevel:             thinkingLevel,
-		ContextWindow:             maxTokens,
+		ContextWindow:             contextWindow,
 		SummarizeMessageThreshold: summarizeMessageThreshold,
 		SummarizeTokenPercent:     summarizeTokenPercent,
 		Provider:                  provider,
@@ -380,7 +349,8 @@ func (a *AgentInstance) Close() error {
 func initSessionStore(dir string) session.SessionStore {
 	store, err := memory.NewJSONLStore(dir)
 	if err != nil {
-		log.Printf("memory: init store: %v; using json sessions", err)
+		logger.WarnCF("agent", "Memory JSONL store init failed; falling back to json sessions",
+			map[string]any{"error": err.Error()})
 		return session.NewSessionManager(dir)
 	}
 
@@ -388,11 +358,12 @@ func initSessionStore(dir string) session.SessionStore {
 		// Migration failure means the store could not write data.
 		// Fall back to SessionManager to avoid a split state where
 		// some sessions are in JSONL and others remain in JSON.
-		log.Printf("memory: migration failed: %v; falling back to json sessions", merr)
+		logger.WarnCF("agent", "Memory migration failed; falling back to json sessions",
+			map[string]any{"error": merr.Error()})
 		store.Close()
 		return session.NewSessionManager(dir)
 	} else if n > 0 {
-		log.Printf("memory: migrated %d session(s) to jsonl", n)
+		logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
 	}
 
 	return session.NewJSONLBackend(store)

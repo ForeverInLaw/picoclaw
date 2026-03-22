@@ -26,6 +26,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
+				LogLevel:                  "fatal",
 				Workspace:                 workspacePath,
 				RestrictToWorkspace:       true,
 				Provider:                  "",
@@ -49,6 +50,11 @@ func DefaultConfig() *Config {
 						Enabled:          true,
 						HourlySampleSize: 8,
 					},
+				},
+				SteeringMode:              "one-at-a-time",
+				ToolFeedback: ToolFeedbackConfig{
+					Enabled:       true,
+					MaxArgsLength: 300,
 				},
 			},
 		},
@@ -77,6 +83,7 @@ func DefaultConfig() *Config {
 					Enabled:  true,
 					WindowMS: 2000,
 				},
+				Streaming:     StreamingConfig{Enabled: true, ThrottleSeconds: 3, MinGrowthChars: 200},
 				UseMarkdownV2: false,
 			},
 			Feishu: FeishuConfig{
@@ -100,11 +107,12 @@ func DefaultConfig() *Config {
 				AllowFrom: FlexibleStringSlice{},
 			},
 			QQ: QQConfig{
-				Enabled:          false,
-				AppID:            "",
-				AppSecret:        "",
-				AllowFrom:        FlexibleStringSlice{},
-				MaxMessageLength: 2000,
+				Enabled:              false,
+				AppID:                "",
+				AppSecret:            "",
+				AllowFrom:            FlexibleStringSlice{},
+				MaxMessageLength:     2000,
+				MaxBase64FileSizeMiB: 0,
 			},
 			DingTalk: DingTalkConfig{
 				Enabled:      false,
@@ -177,23 +185,15 @@ func DefaultConfig() *Config {
 				ReplyTimeout:   5,
 			},
 			WeComAIBot: WeComAIBotConfig{
-				Enabled:        false,
-				Token:          "",
-				EncodingAESKey: "",
-				WebhookPath:    "/webhook/wecom-aibot",
-				AllowFrom:      FlexibleStringSlice{},
-				ReplyTimeout:   5,
-				MaxSteps:       10,
-				WelcomeMessage: "Hello! I'm your AI assistant. How can I help you today?",
-			},
-			Pico: PicoConfig{
-				Enabled:        false,
-				Token:          "",
-				PingInterval:   30,
-				ReadTimeout:    60,
-				WriteTimeout:   10,
-				MaxConnections: 100,
-				AllowFrom:      FlexibleStringSlice{},
+				Enabled:           false,
+				Token:             "",
+				EncodingAESKey:    "",
+				WebhookPath:       "/webhook/wecom-aibot",
+				AllowFrom:         FlexibleStringSlice{},
+				ReplyTimeout:      5,
+				MaxSteps:          10,
+				WelcomeMessage:    "Hello! I'm your AI assistant. How can I help you today?",
+				ProcessingMessage: DefaultWeComAIBotProcessingMessage,
 			},
 			Email: EmailConfig{
 				Enabled:           false,
@@ -209,6 +209,31 @@ func DefaultConfig() *Config {
 				SMTPTLS:           true,
 				AllowFrom:         FlexibleStringSlice{},
 				NotifyTelegramIDs: FlexibleStringSlice{},
+			},
+			Weixin: WeixinConfig{
+				Enabled:    false,
+				Token:      "",
+				BaseURL:    "https://ilinkai.weixin.qq.com/",
+				CDNBaseURL: "https://novac2c.cdn.weixin.qq.com/c2c",
+				AllowFrom:  FlexibleStringSlice{},
+				Proxy:      "",
+			},
+			Pico: PicoConfig{
+				Enabled:        false,
+				Token:          "",
+				PingInterval:   30,
+				ReadTimeout:    60,
+				WriteTimeout:   10,
+				MaxConnections: 100,
+				AllowFrom:      FlexibleStringSlice{},
+			},
+		},
+		Hooks: HooksConfig{
+			Enabled: true,
+			Defaults: HookDefaultsConfig{
+				ObserverTimeoutMS:    500,
+				InterceptorTimeoutMS: 5000,
+				ApprovalTimeoutMS:    60000,
 			},
 		},
 		Providers: ProvidersConfig{
@@ -538,9 +563,6 @@ func DefaultConfig() *Config {
 			EditFile: ToolConfig{
 				Enabled: true,
 			},
-			FactCheck: ToolConfig{
-				Enabled: true,
-			},
 			FindSkills: ToolConfig{
 				Enabled: true,
 			},
@@ -554,9 +576,6 @@ func DefaultConfig() *Config {
 				Enabled: true,
 			},
 			Message: ToolConfig{
-				Enabled: true,
-			},
-			PersonalTodo: ToolConfig{
 				Enabled: true,
 			},
 			ReadFile: ReadFileToolConfig{
@@ -573,9 +592,6 @@ func DefaultConfig() *Config {
 				Enabled: false, // Hardware tool - Linux only
 			},
 			Subagent: ToolConfig{
-				Enabled: true,
-			},
-			TranscribeMedia: ToolConfig{
 				Enabled: true,
 			},
 			WebFetch: ToolConfig{

@@ -93,9 +93,7 @@ You are picoclaw, a helpful AI assistant.
 Your workspace is at: %s
 - Memory: %s/memory/MEMORY.md
 - Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
-- Learnings: %s/.learnings/{LEARNINGS.md,ERRORS.md,FEATURE_REQUESTS.md}
 - Skills: %s/skills/{skill-name}/SKILL.md
-- Tools Notes: %s/TOOLS.md
 
 ## Important Rules
 
@@ -107,27 +105,14 @@ Your workspace is at: %s
 
 4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
 
-5. **Chat memory usage** - If a question may depend on prior conversation, earlier agreements, who said what, or what was discussed in a chat or time window, you MUST use the chat_memory tool before answering. This includes questions like "what did we discuss", "who said this", "what happened in that group", or "what was discussed over the last day". Do not claim you do not remember or cannot know until chat_memory has been checked or returned no useful result.
+5. **Chat memory** - When a question depends on prior chat history, prior agreements, who said what, or time-window summaries, you MUST use the chat_memory tool before answering. Do not claim you do not remember or cannot know until chat_memory has been checked. After using it, explicitly say that you checked chat memory or chat history.
 
-6. **Memory disclosure** - When you use chat_memory, explicitly say that you checked chat memory or chat history before giving the answer.
+6. **Personal todo** - When the user asks about their personal tasks, todo list, or marking personal items done, you MUST use the personal_todo tool. Do not put personal todo items into chat_memory or MEMORY.md.
 
-7. **Personal todo usage** - For personal task requests like "add this to my tasks", "put this in my todo", "what is in my todo", "show my list", or "mark item 3 done", you MUST use the personal_todo tool. Do not put personal todo items into chat_memory or MEMORY.md.
-
-8. **Fact-check usage** - If the user explicitly asks you to verify, fact-check, or check whether a claim or URL is true, you MUST use the fact_check tool. Do not replace this with free-form web_search or guessing.
-
-9. **Fact-check certainty** - If fact_check returns mixed or unverified, do not present the claim as established fact. State the verdict, briefly explain why, and include the cited sources.
+7. **Fact check** - When the user explicitly asks to verify, fact-check, or check whether a claim or URL is true, you MUST use the fact_check tool. Do not replace this with free-form web_search or guessing. If fact_check returns mixed or unverified, do not present the claim as established fact; state the verdict and cite the sources.
 
 %s`,
-		version,
-		workspacePath,
-		workspacePath,
-		workspacePath,
-		workspacePath,
-		workspacePath,
-		workspacePath,
-		workspacePath,
-		toolDiscovery,
-	)
+		version, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, toolDiscovery)
 }
 
 func (cb *ContextBuilder) getDiscoveryRule() string {
@@ -243,14 +228,10 @@ func (cb *ContextBuilder) InvalidateCache() {
 // invalidation (bootstrap files + memory). Skill roots are handled separately
 // because they require both directory-level and recursive file-level checks.
 func (cb *ContextBuilder) sourcePaths() []string {
-	return []string{
-		filepath.Join(cb.workspace, "AGENTS.md"),
-		filepath.Join(cb.workspace, "SOUL.md"),
-		filepath.Join(cb.workspace, "TOOLS.md"),
-		filepath.Join(cb.workspace, "USER.md"),
-		filepath.Join(cb.workspace, "IDENTITY.md"),
-		filepath.Join(cb.workspace, "memory", "MEMORY.md"),
-	}
+	agentDefinition := cb.LoadAgentDefinition()
+	paths := agentDefinition.trackedPaths(cb.workspace)
+	paths = append(paths, filepath.Join(cb.workspace, "memory", "MEMORY.md"))
+	return uniquePaths(paths)
 }
 
 // skillRoots returns all skill root directories that can affect
@@ -454,19 +435,32 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 }
 
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
-	bootstrapFiles := []string{
-		"AGENTS.md",
-		"SOUL.md",
-		"TOOLS.md",
-		"USER.md",
-		"IDENTITY.md",
+	var sb strings.Builder
+
+	agentDefinition := cb.LoadAgentDefinition()
+	if agentDefinition.Agent != nil {
+		label := string(agentDefinition.Source)
+		if label == "" {
+			label = relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
+		}
+		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", label, agentDefinition.Agent.Body)
+	}
+	if agentDefinition.Soul != nil {
+		fmt.Fprintf(
+			&sb,
+			"## %s\n\n%s\n\n",
+			relativeWorkspacePath(cb.workspace, agentDefinition.Soul.Path),
+			agentDefinition.Soul.Content,
+		)
+	}
+	if agentDefinition.User != nil {
+		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
 	}
 
-	var sb strings.Builder
-	for _, filename := range bootstrapFiles {
-		filePath := filepath.Join(cb.workspace, filename)
+	if agentDefinition.Source != AgentDefinitionSourceAgent {
+		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
 		if data, err := os.ReadFile(filePath); err == nil {
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", filename, data)
+			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "IDENTITY.md", data)
 		}
 	}
 

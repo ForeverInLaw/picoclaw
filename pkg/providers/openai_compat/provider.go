@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -87,139 +88,10 @@ func NewProviderWithMaxTokensFieldAndTimeout(
 	)
 }
 
-func (p *Provider) Chat(
-	ctx context.Context,
-	messages []Message,
-	tools []ToolDefinition,
-	model string,
-	options map[string]any,
-) (*LLMResponse, error) {
-	if p.apiBase == "" {
-		return nil, fmt.Errorf("API base not configured")
-	}
-
-	_, requestBody := p.buildRequestBody(messages, tools, model, options)
-	resp, err := p.doChatRequest(ctx, requestBody)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
-	}
-
-	return common.ReadAndParseResponse(resp, p.apiBase)
-}
-
-func (p *Provider) ChatStream(
-	ctx context.Context,
-	messages []Message,
-	tools []ToolDefinition,
-	model string,
-	options map[string]any,
-	onUpdate func(content string),
-) (*LLMResponse, error) {
-	if p.apiBase == "" {
-		return nil, fmt.Errorf("API base not configured")
-	}
-
-	_, requestBody := p.buildRequestBody(messages, tools, model, options)
-	requestBody["stream"] = true
-
-	resp, err := p.doChatRequest(ctx, requestBody)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
-	}
-
-	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if !strings.Contains(contentType, "text/event-stream") {
-		return common.ReadAndParseResponse(resp, p.apiBase)
-	}
-
-	return parseStreamingResponse(resp.Body, onUpdate)
-}
-
-func normalizeModel(model, apiBase string) string {
-	before, after, ok := strings.Cut(model, "/")
-	if !ok {
-		return model
-	}
-
-	lowerAPIBase := strings.ToLower(apiBase)
-	if strings.Contains(lowerAPIBase, "openrouter.ai") {
-		return model
-	}
-
-	prefix := strings.ToLower(before)
-	switch prefix {
-	case "litellm", "moonshot", "groq", "ollama", "deepseek", "google",
-		"openrouter", "zhipu", "mistral", "vivgrid", "minimax", "novita":
-		return after
-	case "nvidia":
-		// NVIDIA-hosted endpoints expect the vendor prefix stripped, but
-		// custom OpenAI-compatible proxies may require the full nested model ID.
-		if strings.Contains(lowerAPIBase, "integrate.api.nvidia.com") ||
-			strings.Contains(lowerAPIBase, "grpc.nvcf.nvidia.com") {
-			return after
-		}
-		return model
-	default:
-		return model
-	}
-}
-
-func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {
-	result := make([]any, 0, len(tools)+1)
-	for _, t := range tools {
-		if nativeSearch && strings.EqualFold(t.Function.Name, "web_search") {
-			continue
-		}
-		result = append(result, t)
-	}
-	if nativeSearch {
-		result = append(result, map[string]any{"type": "web_search_preview"})
-	}
-	return result
-}
-
-func (p *Provider) SupportsNativeSearch() bool {
-	return isNativeSearchHost(p.apiBase)
-}
-
-func isNativeSearchHost(apiBase string) bool {
-	u, err := url.Parse(apiBase)
-	if err != nil {
-		return false
-	}
-	host := u.Hostname()
-	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
-}
-
-// supportsPromptCacheKey reports whether the given API base is known to
-// support the prompt_cache_key request field. Currently only OpenAI's own
-// API and Azure OpenAI support this. All other OpenAI-compatible providers
-// (Mistral, Gemini, DeepSeek, Groq, etc.) reject unknown fields with 422 errors.
-func supportsPromptCacheKey(apiBase string) bool {
-	u, err := url.Parse(apiBase)
-	if err != nil {
-		return false
-	}
-	host := u.Hostname()
-	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
-}
-
+// buildRequestBody constructs the common request body for Chat and ChatStream.
 func (p *Provider) buildRequestBody(
-	messages []Message,
-	tools []ToolDefinition,
-	model string,
-	options map[string]any,
-) (string, map[string]any) {
+	messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) map[string]any {
 	model = normalizeModel(model, p.apiBase)
 
 	requestBody := map[string]any{
@@ -258,16 +130,32 @@ func (p *Provider) buildRequestBody(
 		}
 	}
 
+	// Prompt caching: pass a stable cache key so OpenAI can bucket requests
+	// with the same key and reuse prefix KV cache across calls.
+	// Prompt caching is only supported by OpenAI-native endpoints.
+	// Non-OpenAI providers reject unknown fields with 422 errors.
 	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" {
 		if supportsPromptCacheKey(p.apiBase) {
 			requestBody["prompt_cache_key"] = cacheKey
 		}
 	}
 
-	return model, requestBody
+	return requestBody
 }
 
-func (p *Provider) doChatRequest(ctx context.Context, requestBody map[string]any) (*http.Response, error) {
+func (p *Provider) Chat(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+) (*LLMResponse, error) {
+	if p.apiBase == "" {
+		return nil, fmt.Errorf("API base not configured")
+	}
+
+	requestBody := p.buildRequestBody(messages, tools, model, options)
+
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -287,8 +175,68 @@ func (p *Provider) doChatRequest(ctx context.Context, requestBody map[string]any
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
+	defer resp.Body.Close()
 
-	return resp, nil
+	if resp.StatusCode != http.StatusOK {
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
+	}
+
+	return common.ReadAndParseResponse(resp, p.apiBase)
+}
+
+// ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
+// onChunk receives the accumulated text so far on each text delta.
+func (p *Provider) ChatStream(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onChunk func(accumulated string),
+) (*LLMResponse, error) {
+	if p.apiBase == "" {
+		return nil, fmt.Errorf("API base not configured")
+	}
+
+	requestBody := p.buildRequestBody(messages, tools, model, options)
+	requestBody["stream"] = true
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", p.apiBase+"/chat/completions", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+
+	// Use a client without Timeout for streaming — the http.Client.Timeout covers
+	// the entire request lifecycle including body reads, which would kill long streams.
+	// Context cancellation still provides the safety net.
+	streamClient := &http.Client{Transport: p.httpClient.Transport}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
+	}
+
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if !strings.Contains(contentType, "text/event-stream") {
+		return common.ReadAndParseResponse(resp, p.apiBase)
+	}
+
+	return parseStreamingResponse(resp.Body, onChunk)
 }
 
 type streamedToolCall struct {
@@ -431,6 +379,7 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 		arguments := make(map[string]any)
 		if strings.TrimSpace(tc.Arguments) != "" {
 			if err := json.Unmarshal([]byte(tc.Arguments), &arguments); err != nil {
+				log.Printf("openai_compat stream: failed to decode tool call arguments for %q: %v", tc.Name, err)
 				arguments["raw"] = tc.Arguments
 			}
 		}
@@ -463,4 +412,71 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 		FinishReason:     finishReason,
 		Usage:            usage,
 	}, nil
+}
+
+func normalizeModel(model, apiBase string) string {
+	before, after, ok := strings.Cut(model, "/")
+	if !ok {
+		return model
+	}
+
+	if strings.Contains(strings.ToLower(apiBase), "openrouter.ai") {
+		return model
+	}
+
+	prefix := strings.ToLower(before)
+	switch prefix {
+	case "litellm", "moonshot", "groq", "ollama", "deepseek", "google",
+		"openrouter", "zhipu", "mistral", "vivgrid", "minimax", "novita":
+		return after
+	case "nvidia":
+		lowerAPIBase := strings.ToLower(apiBase)
+		if strings.Contains(lowerAPIBase, "integrate.api.nvidia.com") ||
+			strings.Contains(lowerAPIBase, "grpc.nvcf.nvidia.com") {
+			return after
+		}
+		return model
+	default:
+		return model
+	}
+}
+
+func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {
+	result := make([]any, 0, len(tools)+1)
+	for _, t := range tools {
+		if nativeSearch && strings.EqualFold(t.Function.Name, "web_search") {
+			continue
+		}
+		result = append(result, t)
+	}
+	if nativeSearch {
+		result = append(result, map[string]any{"type": "web_search_preview"})
+	}
+	return result
+}
+
+func (p *Provider) SupportsNativeSearch() bool {
+	return isNativeSearchHost(p.apiBase)
+}
+
+func isNativeSearchHost(apiBase string) bool {
+	u, err := url.Parse(apiBase)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
+}
+
+// supportsPromptCacheKey reports whether the given API base is known to
+// support the prompt_cache_key request field. Currently only OpenAI's own
+// API and Azure OpenAI support this. All other OpenAI-compatible providers
+// (Mistral, Gemini, DeepSeek, Groq, etc.) reject unknown fields with 422 errors.
+func supportsPromptCacheKey(apiBase string) bool {
+	u, err := url.Parse(apiBase)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
 }

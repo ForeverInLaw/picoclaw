@@ -2,6 +2,8 @@ package telegram
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,11 +48,11 @@ type TelegramChannel struct {
 	chatIDs map[string]int64
 	ctx     context.Context
 	cancel  context.CancelFunc
+	batchMu sync.Mutex
+	batches map[string]*telegramInboundBatch
 
 	registerFunc     func(context.Context, []commands.Definition) error
 	commandRegCancel context.CancelFunc
-	batchMu          sync.Mutex
-	batches          map[string]*telegramInboundBatch
 }
 
 func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChannel, error) {
@@ -166,6 +168,69 @@ func (c *TelegramChannel) Stop(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *TelegramChannel) isReplyToBot(message *telego.Message) bool {
+	if message == nil || message.ReplyToMessage == nil || message.ReplyToMessage.From == nil {
+		return false
+	}
+
+	replyAuthor := message.ReplyToMessage.From
+	if !replyAuthor.IsBot {
+		return false
+	}
+
+	botUsername := ""
+	if c.bot != nil {
+		botUsername = c.bot.Username()
+	}
+
+	switch {
+	case botUsername != "" && replyAuthor.Username != "":
+		return strings.EqualFold(replyAuthor.Username, botUsername)
+	default:
+		return true
+	}
+}
+
+func prependQuotedTelegramReply(message *telego.Message, content string) string {
+	if message == nil || message.ReplyToMessage == nil {
+		return content
+	}
+
+	replyText := strings.TrimSpace(telegramMessageText(message.ReplyToMessage))
+	if replyText == "" {
+		return content
+	}
+
+	author := telegramMessageAuthor(message.ReplyToMessage)
+	return fmt.Sprintf("[quoted message from %s]: %s\n\n%s", author, replyText, content)
+}
+
+func telegramMessageText(message *telego.Message) string {
+	if message == nil {
+		return ""
+	}
+	if strings.TrimSpace(message.Text) != "" {
+		return message.Text
+	}
+	if strings.TrimSpace(message.Caption) != "" {
+		return message.Caption
+	}
+	return ""
+}
+
+func telegramMessageAuthor(message *telego.Message) string {
+	if message == nil || message.From == nil {
+		return "unknown"
+	}
+	if strings.TrimSpace(message.From.Username) != "" {
+		return message.From.Username
+	}
+	if strings.TrimSpace(message.From.FirstName) != "" {
+		return message.From.FirstName
+	}
+	return "unknown"
 }
 
 func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
@@ -305,10 +370,17 @@ func (c *TelegramChannel) sendChunk(
 	return nil
 }
 
+// maxTypingDuration limits how long the typing indicator can run.
+// Prevents endless typing when the LLM fails/hangs and preSend never invokes cancel.
+// Matches channels.Manager's typingStopTTL (5 min) so behavior is consistent.
+const maxTypingDuration = 5 * time.Minute
+
 // StartTyping implements channels.TypingCapable.
 // It sends ChatAction(typing) immediately and then repeats every 4 seconds
 // (Telegram's typing indicator expires after ~5s) in a background goroutine.
 // The returned stop function is idempotent and cancels the goroutine.
+// The goroutine also exits automatically after maxTypingDuration if cancel is
+// never called (e.g. when the LLM fails or times out without publishing).
 func (c *TelegramChannel) StartTyping(ctx context.Context, chatID string) (func(), error) {
 	cid, threadID, err := parseTelegramChatID(chatID)
 	if err != nil {
@@ -322,12 +394,15 @@ func (c *TelegramChannel) StartTyping(ctx context.Context, chatID string) (func(
 	_ = c.bot.SendChatAction(ctx, action)
 
 	typingCtx, cancel := context.WithCancel(ctx)
+	// Cap lifetime so the goroutine cannot run indefinitely if cancel is never called
+	maxCtx, maxCancel := context.WithTimeout(typingCtx, maxTypingDuration)
 	go func() {
+		defer maxCancel()
 		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-typingCtx.Done():
+			case <-maxCtx.Done():
 				return
 			case <-ticker.C:
 				a := tu.ChatAction(tu.ID(cid), telego.ChatActionTyping)
@@ -369,6 +444,7 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 			return nil
 		}
 	}
+
 	return err
 }
 
@@ -377,6 +453,22 @@ func isTelegramMessageNotModified(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "message is not modified")
+}
+
+// DeleteMessage implements channels.MessageDeleter.
+func (c *TelegramChannel) DeleteMessage(ctx context.Context, chatID string, messageID string) error {
+	cid, _, err := parseTelegramChatID(chatID)
+	if err != nil {
+		return err
+	}
+	mid, err := strconv.Atoi(messageID)
+	if err != nil {
+		return err
+	}
+	return c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+		ChatID:    tu.ID(cid),
+		MessageID: mid,
+	})
 }
 
 // SendPlaceholder implements channels.PlaceholderCapable.
@@ -634,72 +726,6 @@ func (c *TelegramChannel) isBotMentioned(message *telego.Message) bool {
 	return false
 }
 
-// isReplyToBot reports whether the incoming message is replying to a message
-// sent by this bot. In group chats this should count as addressing the bot,
-// even without an explicit @mention.
-func (c *TelegramChannel) isReplyToBot(message *telego.Message) bool {
-	if message == nil || message.ReplyToMessage == nil || message.ReplyToMessage.From == nil {
-		return false
-	}
-
-	replyAuthor := message.ReplyToMessage.From
-	if !replyAuthor.IsBot {
-		return false
-	}
-
-	botUsername := ""
-	if c.bot != nil {
-		botUsername = c.bot.Username()
-	}
-
-	switch {
-	case botUsername != "" && replyAuthor.Username != "":
-		return strings.EqualFold(replyAuthor.Username, botUsername)
-	default:
-		return true
-	}
-}
-
-func prependQuotedTelegramReply(message *telego.Message, content string) string {
-	if message == nil || message.ReplyToMessage == nil {
-		return content
-	}
-
-	replyText := strings.TrimSpace(telegramMessageText(message.ReplyToMessage))
-	if replyText == "" {
-		return content
-	}
-
-	author := telegramMessageAuthor(message.ReplyToMessage)
-	return fmt.Sprintf("[quoted message from %s]: %s\n\n%s", author, replyText, content)
-}
-
-func telegramMessageText(message *telego.Message) string {
-	if message == nil {
-		return ""
-	}
-	if strings.TrimSpace(message.Text) != "" {
-		return message.Text
-	}
-	if strings.TrimSpace(message.Caption) != "" {
-		return message.Caption
-	}
-	return ""
-}
-
-func telegramMessageAuthor(message *telego.Message) string {
-	if message == nil || message.From == nil {
-		return "unknown"
-	}
-	if strings.TrimSpace(message.From.Username) != "" {
-		return message.From.Username
-	}
-	if strings.TrimSpace(message.From.FirstName) != "" {
-		return message.From.FirstName
-	}
-	return "unknown"
-}
-
 func telegramEntityTextAndList(message *telego.Message) (string, []telego.MessageEntity) {
 	if message.Text != "" {
 		return message.Text, message.Entities
@@ -750,4 +776,108 @@ func (c *TelegramChannel) stripBotMention(content string) string {
 	re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(botUsername))
 	content = re.ReplaceAllString(content, "")
 	return strings.TrimSpace(content)
+}
+
+// BeginStream implements channels.StreamingCapable.
+func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (channels.Streamer, error) {
+	if !c.config.Channels.Telegram.Streaming.Enabled {
+		return nil, fmt.Errorf("streaming disabled in config")
+	}
+
+	cid, _, err := parseTelegramChatID(chatID)
+	if err != nil {
+		return nil, err
+	}
+
+	streamCfg := c.config.Channels.Telegram.Streaming
+	return &telegramStreamer{
+		bot:              c.bot,
+		chatID:           cid,
+		draftID:          cryptoRandInt(),
+		throttleInterval: time.Duration(streamCfg.ThrottleSeconds) * time.Second,
+		minGrowth:        streamCfg.MinGrowthChars,
+	}, nil
+}
+
+// telegramStreamer streams partial LLM output via Telegram's sendMessageDraft API.
+// On first API error (e.g. bot lacks forum mode), it silently degrades: Update
+// becomes a no-op, while Finalize still delivers the final message.
+type telegramStreamer struct {
+	bot              *telego.Bot
+	chatID           int64
+	draftID          int
+	throttleInterval time.Duration
+	minGrowth        int
+	lastLen          int
+	lastAt           time.Time
+	failed           bool
+	mu               sync.Mutex
+}
+
+func (s *telegramStreamer) Update(ctx context.Context, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.failed {
+		return nil
+	}
+
+	// Throttle: skip if not enough time or content has passed
+	now := time.Now()
+	growth := len(content) - s.lastLen
+	if s.lastLen > 0 && now.Sub(s.lastAt) < s.throttleInterval && growth < s.minGrowth {
+		return nil
+	}
+
+	htmlContent := markdownToTelegramHTML(content)
+
+	err := s.bot.SendMessageDraft(ctx, &telego.SendMessageDraftParams{
+		ChatID:    s.chatID,
+		DraftID:   s.draftID,
+		Text:      htmlContent,
+		ParseMode: telego.ModeHTML,
+	})
+	if err != nil {
+		// First error → degrade silently (e.g. no forum mode)
+		logger.WarnCF("telegram", "sendMessageDraft failed, disabling streaming", map[string]any{
+			"error": err.Error(),
+		})
+		s.failed = true
+		return nil // don't propagate — Finalize will still deliver
+	}
+
+	s.lastLen = len(content)
+	s.lastAt = now
+	return nil
+}
+
+func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
+	htmlContent := markdownToTelegramHTML(content)
+	tgMsg := tu.Message(tu.ID(s.chatID), htmlContent)
+	tgMsg.ParseMode = telego.ModeHTML
+
+	if _, err := s.bot.SendMessage(ctx, tgMsg); err != nil {
+		// Fallback to plain text
+		tgMsg.ParseMode = ""
+		if _, err = s.bot.SendMessage(ctx, tgMsg); err != nil {
+			logger.ErrorCF("telegram", "Finalize failed after HTML and plain-text attempts", map[string]any{
+				"chat_id": s.chatID,
+				"error":   err.Error(),
+				"len":     len(content),
+			})
+			return fmt.Errorf("telegram finalize: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *telegramStreamer) Cancel(ctx context.Context) {
+	// Draft auto-expires on Telegram's side; nothing to clean up.
+}
+
+// cryptoRandInt returns a non-zero random int using crypto/rand.
+func cryptoRandInt() int {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return int(binary.BigEndian.Uint32(b[:])) | 1 // ensure non-zero
 }

@@ -18,7 +18,7 @@
     <a href="https://discord.gg/V4sAZ9XWpN"><img src="https://img.shields.io/badge/Discord-Community-4c60eb?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   </p>
 
-**中文** | [日本語](README.ja.md) | [Português](README.pt-br.md) | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [English](README.md)
+**中文** | [日本語](README.ja.md) | [Português](README.pt-br.md) | [Tiếng Việt](README.vi.md) | [Français](README.fr.md) | [Italiano](README.it.md) | [Bahasa Indonesia](README.id.md) | [English](README.md)
 
 </div>
 
@@ -104,6 +104,8 @@ _*近期版本因快速合并 PR 可能占用 10–20MB，资源优化已列入�
 
 <img src="assets/compare.jpg" alt="PicoClaw" width="512">
 
+> 📋 **[硬件兼容列表](docs/hardware-compatibility.md)** — 查看所有已测试的板卡，从 $5 RISC-V 到树莓派到安卓手机。你的板卡没在列表中？欢迎提交 PR！
+
 ## 🦾 演示
 
 ### 🛠️ 标准助手工作流
@@ -138,7 +140,7 @@ PicoClaw 可以将你 10 年前的老旧手机废物利用，变身成为你的 
 wget https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_Linux_arm64.tar.gz
 tar xzf picoclaw_Linux_arm64.tar.gz
 pkg install proot
-termux-chroot ./picoclaw onboard
+termux-chroot ./picoclaw onboard   # chroot 提供标准 Linux 文件系统布局
 ```
 
 然后跟随下面的"快速开始"章节继续配置 PicoClaw 即可使用！
@@ -159,11 +161,15 @@ PicoClaw 几乎可以部署在任何 Linux 设备上！
 
 ## 📦 安装
 
-### 使用预编译二进制文件安装
+### 从 picoclaw.io 下载（推荐）
 
-从 [Release 页面](https://github.com/sipeed/picoclaw/releases) 下载适用于您平台的二进制文件。
+访问 **[picoclaw.io](https://picoclaw.io)** — 官网自动检测你的平台，提供一键下载，无需手动选择架构。
 
-### 从源码安装（获取最新特性，开发推荐）
+### 下载预编译二进制文件
+
+也可以从 [GitHub Releases](https://github.com/sipeed/picoclaw/releases) 页面手动下载对应平台的二进制文件。
+
+### 从源码构建（开发用）
 
 ```bash
 git clone https://github.com/sipeed/picoclaw.git
@@ -199,6 +205,7 @@ make install
 | 🔄 [异步任务与 Spawn](docs/zh/spawn-tasks.md) | 快速任务、长任务与 Spawn、异步子 Agent 编排 |
 | 🐛 [疑难解答](docs/zh/troubleshooting.md) | 常见问题与解决方案 |
 | 🔧 [工具配置](docs/zh/tools_configuration.md) | 工具启用/禁用、执行策略 |
+| 📋 [硬件兼容列表](docs/hardware-compatibility.md) | 已测试板卡、最低要求、如何添加你的板卡 |
 
 ## <img src="assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> 加入 Agent 社交网络
 
@@ -211,6 +218,7 @@ make install
 | 命令                       | 说明                   |
 | ------------------------- | ---------------------- |
 | `picoclaw onboard`        | 初始化配置与工作区       |
+| `picoclaw onboard weixin` | 扫码连接微信个人号       |
 | `picoclaw agent -m "..."` | 与 Agent 对话           |
 | `picoclaw agent`          | 交互式对话模式           |
 | `picoclaw gateway`        | 启动网关                |
@@ -224,6 +232,7 @@ make install
 | `picoclaw skills install` | 安装技能                |
 | `picoclaw migrate`        | 从旧版本迁移数据         |
 | `picoclaw auth login`     | 认证提供商               |
+| `picoclaw model`          | 查看或切换默认模型 |
 
 ### 定时任务 / 提醒
 

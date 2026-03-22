@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -14,12 +16,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/utils"
 	"github.com/sipeed/picoclaw/pkg/websource"
 )
 
 const (
-	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	userAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	userAgentHonest = "picoclaw/%s (+https://github.com/sipeed/picoclaw; AI assistant bot)"
 
 	// HTTP client timeouts for web tool providers.
 	searchTimeout     = 10 * time.Second // Brave, Tavily, DuckDuckGo
@@ -320,7 +325,6 @@ func (p *DuckDuckGoSearchProvider) extractResults(html string, count int, query 
 	if len(matches) == 0 {
 		return nil, nil
 	}
-
 	hits := make([]websource.SearchHit, 0, min(len(matches), count))
 
 	// Pre-compile snippet regex to run inside the loop
@@ -355,7 +359,6 @@ func (p *DuckDuckGoSearchProvider) extractResults(html string, count int, query 
 			URL:      urlStr,
 			Provider: p.ProviderName(),
 		}
-		// Attempt to attach snippet if available and index aligns
 		if i < len(snippetMatches) {
 			snippet := stripTags(snippetMatches[i][1])
 			snippet = strings.TrimSpace(snippet)
@@ -513,13 +516,19 @@ func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count 
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
+	if len(result.Results) == 0 {
+		return nil, nil
+	}
+
 	// Limit results to requested count
 	if len(result.Results) > count {
 		result.Results = result.Results[:count]
 	}
 
+	// Format results in standard PicoClaw format
 	hits := make([]websource.SearchHit, 0, len(result.Results))
-	for _, r := range result.Results {
+	for i, r := range result.Results {
+		_ = i
 		hits = append(hits, websource.SearchHit{
 			Title:    strings.TrimSpace(r.Title),
 			URL:      strings.TrimSpace(r.URL),
@@ -691,10 +700,11 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("search failed: %v", err))
 	}
+	rendered := renderWebSearchResults(query, t.provider, hits)
 
 	return &ToolResult{
-		ForLLM:  renderWebSearchResults(query, t.provider, hits),
-		ForUser: renderWebSearchResults(query, t.provider, hits),
+		ForLLM:  rendered,
+		ForUser: rendered,
 	}
 }
 
@@ -810,29 +820,164 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("url is required")
 	}
 
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("invalid URL: %v", err))
+	}
+
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return ErrorResult("only http/https URLs are allowed")
+	}
+
+	if parsedURL.Host == "" {
+		return ErrorResult("missing domain in URL")
+	}
+
+	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.
+	// The real SSRF guard is newSafeDialContext at connect time.
+	hostname := parsedURL.Hostname()
+	if isObviousPrivateHost(hostname, t.whitelist) {
+		return ErrorResult("fetching private or local network hosts is not allowed")
+	}
+
 	maxChars := t.maxChars
 	if mc, ok := args["maxChars"].(float64); ok {
 		if int(mc) > 100 {
 			maxChars = int(mc)
 		}
 	}
-	doc, err := t.FetchDocument(ctx, urlStr, maxChars)
+
+	doFetch := func(ua string) (*http.Response, []byte, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+		if reqErr != nil {
+			return nil, nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
+		req.Header.Set("User-Agent", ua)
+		resp, doErr := t.client.Do(req)
+		if doErr != nil {
+			return nil, nil, fmt.Errorf("request failed: %w", doErr)
+		}
+		resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
+
+		b, readErr := io.ReadAll(resp.Body)
+		return resp, b, readErr
+	}
+
+	resp, body, err := doFetch(userAgent)
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			return ErrorResult(fmt.Sprintf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes))
+		}
 		return ErrorResult(err.Error())
 	}
+
+	// Cloudflare (and similar WAFs) signal bot challenges with 403 + cf-mitigated: challenge.
+	// Retry once with an honest User-Agent that identifies picoclaw, which some
+	// operators explicitly allow-list for AI assistants.
+	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("Cf-Mitigated") == "challenge" {
+		logger.DebugCF("tool", "Cloudflare challenge detected, retrying with honest User-Agent",
+			map[string]any{"url": urlStr})
+		honestUA := fmt.Sprintf(userAgentHonest, config.Version)
+		resp2, body2, err2 := doFetch(honestUA)
+		if resp2 != nil && resp2.Body != nil {
+			defer resp2.Body.Close()
+		}
+
+		if err2 == nil {
+			resp, body = resp2, body2
+		} else {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err2, &maxBytesErr) {
+				return ErrorResult(
+					fmt.Sprintf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes),
+				)
+			}
+			return ErrorResult(err2.Error())
+		}
+	}
+
+	bodyStr := string(body)
+	contentType := resp.Header.Get("Content-Type")
+
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		// The most common error here is "mime: no media type" if the header is empty.
+		logger.WarnCF("tool", "Failed to parse Content-Type", map[string]any{
+			"raw_header": contentType,
+			"error":      err.Error(),
+		})
+
+		// security fallback
+		mediaType = "application/octet-stream"
+	}
+
+	charset, hasCharset := params["charset"]
+	if hasCharset {
+		// If the charset is not utf-8, we might have to convert the bodyStr
+		// before passing it to the HTML/Markdown parser
+		if strings.ToLower(charset) != "utf-8" {
+			logger.WarnCF("tool", "Note: the content is not in UTF-8", map[string]any{"charset": charset})
+		}
+	}
+
+	var text, extractor string
+
+	switch {
+	case mediaType == "application/json":
+		var jsonData any
+		if err := json.Unmarshal(body, &jsonData); err != nil {
+			text = bodyStr
+			extractor = "raw"
+			break
+		}
+
+		formatted, err := json.MarshalIndent(jsonData, "", "  ")
+		if err != nil {
+			text = bodyStr
+			extractor = "raw"
+			break
+		}
+
+		text = string(formatted)
+		extractor = "json"
+
+	case mediaType == "text/html" || looksLikeHTML(bodyStr):
+		switch strings.ToLower(t.format) {
+		case "markdown":
+			var err error
+			text, err = utils.HtmlToMarkdown(bodyStr)
+			if err != nil {
+				return ErrorResult(fmt.Sprintf("failed to HTML to markdown: %v", err))
+			}
+			extractor = "markdown"
+
+		default:
+			text = t.extractText(bodyStr)
+			extractor = "text"
+		}
+
+	default:
+		text = bodyStr
+		extractor = "raw"
+	}
+
+	truncated := len(text) > maxChars
+	if truncated {
+		text = text[:maxChars] + "\n[Content truncated due to size limit]"
+	}
+
 	result := map[string]any{
-		"url":       doc.URL,
-		"status":    doc.Status,
-		"extractor": doc.Extractor,
-		"truncated": doc.Truncated,
-		"length":    doc.Length,
-		"text":      doc.Text,
-	}
-	if doc.Title != "" {
-		result["title"] = doc.Title
-	}
-	if doc.LeadText != "" {
-		result["lead_text"] = doc.LeadText
+		"url":       urlStr,
+		"status":    resp.StatusCode,
+		"extractor": extractor,
+		"truncated": truncated,
+		"length":    len(text),
+		"text":      text,
 	}
 
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
@@ -841,10 +986,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		ForLLM: string(resultJSON),
 		ForUser: fmt.Sprintf(
 			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
-			doc.Length,
-			doc.URL,
-			doc.Extractor,
-			doc.Truncated,
+			len(text),
+			urlStr,
+			extractor,
+			truncated,
 		),
 	}
 }

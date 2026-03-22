@@ -84,12 +84,43 @@ type Config struct {
 	Providers ProvidersConfig `json:"providers,omitempty"`
 	ModelList []ModelConfig   `json:"model_list"` // New model-centric provider configuration
 	Gateway   GatewayConfig   `json:"gateway"`
+	Hooks     HooksConfig     `json:"hooks,omitempty"`
 	Tools     ToolsConfig     `json:"tools"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 	Devices   DevicesConfig   `json:"devices"`
 	Voice     VoiceConfig     `json:"voice"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
+}
+
+type HooksConfig struct {
+	Enabled   bool                         `json:"enabled"`
+	Defaults  HookDefaultsConfig           `json:"defaults,omitempty"`
+	Builtins  map[string]BuiltinHookConfig `json:"builtins,omitempty"`
+	Processes map[string]ProcessHookConfig `json:"processes,omitempty"`
+}
+
+type HookDefaultsConfig struct {
+	ObserverTimeoutMS    int `json:"observer_timeout_ms,omitempty"`
+	InterceptorTimeoutMS int `json:"interceptor_timeout_ms,omitempty"`
+	ApprovalTimeoutMS    int `json:"approval_timeout_ms,omitempty"`
+}
+
+type BuiltinHookConfig struct {
+	Enabled  bool            `json:"enabled"`
+	Priority int             `json:"priority,omitempty"`
+	Config   json.RawMessage `json:"config,omitempty"`
+}
+
+type ProcessHookConfig struct {
+	Enabled   bool              `json:"enabled"`
+	Priority  int               `json:"priority,omitempty"`
+	Transport string            `json:"transport,omitempty"`
+	Command   []string          `json:"command,omitempty"`
+	Dir       string            `json:"dir,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	Observe   []string          `json:"observe,omitempty"`
+	Intercept []string          `json:"intercept,omitempty"`
 }
 
 // BuildInfo contains build-time version information
@@ -219,24 +250,13 @@ type RoutingConfig struct {
 	Threshold  float64 `json:"threshold"`   // complexity score in [0,1]; score >= threshold → primary model
 }
 
-type AgentDefaults struct {
-	Workspace                 string            `json:"workspace"                       env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool              `json:"restrict_to_workspace"           env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool              `json:"allow_read_outside_workspace"    env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string            `json:"provider"                        env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string            `json:"model_name"                      env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
-	Model                     string            `json:"model,omitempty"                 env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
-	ModelFallbacks            []string          `json:"model_fallbacks,omitempty"`
-	ImageModel                string            `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string          `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int               `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	Temperature               *float64          `json:"temperature,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int               `json:"max_tool_iterations"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int               `json:"summarize_message_threshold"     env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int               `json:"summarize_token_percent"         env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int               `json:"max_media_size,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	MemoryIndex               MemoryIndexConfig `json:"memory_index,omitempty"`
-	Routing                   *RoutingConfig    `json:"routing,omitempty"`
+// SubTurnConfig configures the SubTurn execution system.
+type SubTurnConfig struct {
+	MaxDepth              int `json:"max_depth"               env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
+	MaxConcurrent         int `json:"max_concurrent"          env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT"`
+	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
+	DefaultTokenBudget    int `json:"default_token_budget"    env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TOKEN_BUDGET"`
+	ConcurrencyTimeoutSec int `json:"concurrency_timeout_sec" env:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_CONCURRENCY_TIMEOUT_SEC"`
 }
 
 type MemoryIndexConfig struct {
@@ -270,13 +290,59 @@ type MemoryChatAliasConfig struct {
 	AllowedRequesters FlexibleStringSlice `json:"allowed_requesters,omitempty"`
 }
 
-const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
+type ToolFeedbackConfig struct {
+	Enabled       bool `json:"enabled"         env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`
+	MaxArgsLength int  `json:"max_args_length" env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_MAX_ARGS_LENGTH"`
+}
+
+type AgentDefaults struct {
+	Workspace                 string             `json:"workspace"                       env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace       bool               `json:"restrict_to_workspace"           env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool               `json:"allow_read_outside_workspace"    env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                  string             `json:"provider"                        env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                 string             `json:"model_name"                      env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
+	Model                     string             `json:"model,omitempty"                 env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
+	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
+	ImageModel                string             `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
+	MaxTokens                 int                `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow             int                `json:"context_window,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature               *float64           `json:"temperature,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations         int                `json:"max_tool_iterations"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold int                `json:"summarize_message_threshold"     env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent     int                `json:"summarize_token_percent"         env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize              int                `json:"max_media_size,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	MemoryIndex               MemoryIndexConfig  `json:"memory_index,omitempty"`
+	Routing                   *RoutingConfig     `json:"routing,omitempty"`
+	SteeringMode              string             `json:"steering_mode,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
+	SubTurn                   SubTurnConfig      `json:"subturn"                                                                                     envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
+	LogLevel                  string             `json:"log_level,omitempty"             env:"PICOCLAW_LOG_LEVEL"`
+}
+
+const (
+	DefaultMaxMediaSize                = 20 * 1024 * 1024 // 20 MB
+	DefaultWeComAIBotProcessingMessage = "⏳ Processing, please wait. The results will be sent shortly."
+)
 
 func (d *AgentDefaults) GetMaxMediaSize() int {
 	if d.MaxMediaSize > 0 {
 		return d.MaxMediaSize
 	}
 	return DefaultMaxMediaSize
+}
+
+// GetToolFeedbackMaxArgsLength returns the max args preview length for tool feedback messages.
+func (d *AgentDefaults) GetToolFeedbackMaxArgsLength() int {
+	if d.ToolFeedback.MaxArgsLength > 0 {
+		return d.ToolFeedback.MaxArgsLength
+	}
+	return 300
+}
+
+// IsToolFeedbackEnabled returns true when tool feedback messages should be sent to the chat.
+func (d *AgentDefaults) IsToolFeedbackEnabled() bool {
+	return d.ToolFeedback.Enabled
 }
 
 // GetModelName returns the effective model name for the agent defaults.
@@ -303,9 +369,11 @@ type ChannelsConfig struct {
 	WeCom      WeComConfig      `json:"wecom"`
 	WeComApp   WeComAppConfig   `json:"wecom_app"`
 	WeComAIBot WeComAIBotConfig `json:"wecom_aibot"`
-	Pico       PicoConfig       `json:"pico"`
-	IRC        IRCConfig        `json:"irc"`
 	Email      EmailConfig      `json:"email"`
+	Weixin     WeixinConfig     `json:"weixin"`
+	Pico       PicoConfig       `json:"pico"`
+	PicoClient PicoClientConfig `json:"pico_client"`
+	IRC        IRCConfig        `json:"irc"`
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
@@ -325,9 +393,15 @@ type PlaceholderConfig struct {
 	Text    string `json:"text,omitempty"`
 }
 
+type StreamingConfig struct {
+	Enabled         bool `json:"enabled,omitempty"          env:"PICOCLAW_CHANNELS_TELEGRAM_STREAMING_ENABLED"`
+	ThrottleSeconds int  `json:"throttle_seconds,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_STREAMING_THROTTLE_SECONDS"`
+	MinGrowthChars  int  `json:"min_growth_chars,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_STREAMING_MIN_GROWTH_CHARS"`
+}
+
 // TelegramBatchingConfig controls sliding-window batching of inbound Telegram messages.
 type TelegramBatchingConfig struct {
-	Enabled  bool `json:"enabled,omitempty"  env:"PICOCLAW_CHANNELS_TELEGRAM_BATCHING_ENABLED"`
+	Enabled  bool `json:"enabled,omitempty"   env:"PICOCLAW_CHANNELS_TELEGRAM_BATCHING_ENABLED"`
 	WindowMS int  `json:"window_ms,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_BATCHING_WINDOW_MS"`
 }
 
@@ -341,19 +415,20 @@ type WhatsAppConfig struct {
 }
 
 type TelegramConfig struct {
-	Enabled            bool                   `json:"enabled"                 env:"PICOCLAW_CHANNELS_TELEGRAM_ENABLED"`
-	Token              string                 `json:"token"                   env:"PICOCLAW_CHANNELS_TELEGRAM_TOKEN"`
-	BaseURL            string                 `json:"base_url"                env:"PICOCLAW_CHANNELS_TELEGRAM_BASE_URL"`
-	Proxy              string                 `json:"proxy"                   env:"PICOCLAW_CHANNELS_TELEGRAM_PROXY"`
-	AllowFrom          FlexibleStringSlice    `json:"allow_from"              env:"PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM"`
-	NameTriggers       FlexibleStringSlice    `json:"name_triggers,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_NAME_TRIGGERS"`
-	ParticipantAliases map[string]string      `json:"participant_aliases,omitempty"`
-	GroupTrigger       GroupTriggerConfig     `json:"group_trigger,omitempty"`
-	Typing             TypingConfig           `json:"typing,omitempty"`
-	Placeholder        PlaceholderConfig      `json:"placeholder,omitempty"`
+	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_TELEGRAM_ENABLED"`
+	Token              string              `json:"token"                   env:"PICOCLAW_CHANNELS_TELEGRAM_TOKEN"`
+	BaseURL            string              `json:"base_url"                env:"PICOCLAW_CHANNELS_TELEGRAM_BASE_URL"`
+	Proxy              string              `json:"proxy"                   env:"PICOCLAW_CHANNELS_TELEGRAM_PROXY"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM"`
+	NameTriggers       FlexibleStringSlice `json:"name_triggers,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_NAME_TRIGGERS"`
+	ParticipantAliases map[string]string   `json:"participant_aliases,omitempty"`
+	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
+	Typing             TypingConfig        `json:"typing,omitempty"`
+	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
 	Batching           TelegramBatchingConfig `json:"batching,omitempty"`
-	ReasoningChannelID string                 `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID"`
-	UseMarkdownV2      bool                   `json:"use_markdown_v2"         env:"PICOCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
+	Streaming          StreamingConfig     `json:"streaming,omitempty"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID"`
+	UseMarkdownV2      bool                `json:"use_markdown_v2"         env:"PICOCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
 }
 
 type FeishuConfig struct {
@@ -391,14 +466,15 @@ type MaixCamConfig struct {
 }
 
 type QQConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_QQ_ENABLED"`
-	AppID              string              `json:"app_id"                  env:"PICOCLAW_CHANNELS_QQ_APP_ID"`
-	AppSecret          string              `json:"app_secret"              env:"PICOCLAW_CHANNELS_QQ_APP_SECRET"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_QQ_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	MaxMessageLength   int                 `json:"max_message_length"      env:"PICOCLAW_CHANNELS_QQ_MAX_MESSAGE_LENGTH"`
-	SendMarkdown       bool                `json:"send_markdown"           env:"PICOCLAW_CHANNELS_QQ_SEND_MARKDOWN"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_QQ_REASONING_CHANNEL_ID"`
+	Enabled              bool                `json:"enabled"                  env:"PICOCLAW_CHANNELS_QQ_ENABLED"`
+	AppID                string              `json:"app_id"                   env:"PICOCLAW_CHANNELS_QQ_APP_ID"`
+	AppSecret            string              `json:"app_secret"               env:"PICOCLAW_CHANNELS_QQ_APP_SECRET"`
+	AllowFrom            FlexibleStringSlice `json:"allow_from"               env:"PICOCLAW_CHANNELS_QQ_ALLOW_FROM"`
+	GroupTrigger         GroupTriggerConfig  `json:"group_trigger,omitempty"`
+	MaxMessageLength     int                 `json:"max_message_length"       env:"PICOCLAW_CHANNELS_QQ_MAX_MESSAGE_LENGTH"`
+	MaxBase64FileSizeMiB int64               `json:"max_base64_file_size_mib" env:"PICOCLAW_CHANNELS_QQ_MAX_BASE64_FILE_SIZE_MIB"`
+	SendMarkdown         bool                `json:"send_markdown"            env:"PICOCLAW_CHANNELS_QQ_SEND_MARKDOWN"`
+	ReasoningChannelID   string              `json:"reasoning_channel_id"     env:"PICOCLAW_CHANNELS_QQ_REASONING_CHANNEL_ID"`
 }
 
 type DingTalkConfig struct {
@@ -493,15 +569,28 @@ type WeComAppConfig struct {
 }
 
 type WeComAIBotConfig struct {
-	Enabled            bool                `json:"enabled"              env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ENABLED"`
-	Token              string              `json:"token"                env:"PICOCLAW_CHANNELS_WECOM_AIBOT_TOKEN"`
-	EncodingAESKey     string              `json:"encoding_aes_key"     env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ENCODING_AES_KEY"`
-	WebhookPath        string              `json:"webhook_path"         env:"PICOCLAW_CHANNELS_WECOM_AIBOT_WEBHOOK_PATH"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ALLOW_FROM"`
-	ReplyTimeout       int                 `json:"reply_timeout"        env:"PICOCLAW_CHANNELS_WECOM_AIBOT_REPLY_TIMEOUT"`
-	MaxSteps           int                 `json:"max_steps"            env:"PICOCLAW_CHANNELS_WECOM_AIBOT_MAX_STEPS"`       // Maximum streaming steps
-	WelcomeMessage     string              `json:"welcome_message"      env:"PICOCLAW_CHANNELS_WECOM_AIBOT_WELCOME_MESSAGE"` // Sent on enter_chat event; empty = no welcome
-	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_WECOM_AIBOT_REASONING_CHANNEL_ID"`
+	Enabled            bool                `json:"enabled"                      env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ENABLED"`
+	BotID              string              `json:"bot_id,omitempty"             env:"PICOCLAW_CHANNELS_WECOM_AIBOT_BOT_ID"`
+	Secret             string              `json:"secret,omitempty"             env:"PICOCLAW_CHANNELS_WECOM_AIBOT_SECRET"`
+	Token              string              `json:"token,omitempty"              env:"PICOCLAW_CHANNELS_WECOM_AIBOT_TOKEN"`
+	EncodingAESKey     string              `json:"encoding_aes_key,omitempty"   env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ENCODING_AES_KEY"`
+	WebhookPath        string              `json:"webhook_path,omitempty"       env:"PICOCLAW_CHANNELS_WECOM_AIBOT_WEBHOOK_PATH"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"                   env:"PICOCLAW_CHANNELS_WECOM_AIBOT_ALLOW_FROM"`
+	ReplyTimeout       int                 `json:"reply_timeout"                env:"PICOCLAW_CHANNELS_WECOM_AIBOT_REPLY_TIMEOUT"`
+	MaxSteps           int                 `json:"max_steps"                    env:"PICOCLAW_CHANNELS_WECOM_AIBOT_MAX_STEPS"`       // Maximum streaming steps
+	WelcomeMessage     string              `json:"welcome_message"              env:"PICOCLAW_CHANNELS_WECOM_AIBOT_WELCOME_MESSAGE"` // Sent on enter_chat event; empty = no welcome
+	ProcessingMessage  string              `json:"processing_message,omitempty" env:"PICOCLAW_CHANNELS_WECOM_AIBOT_PROCESSING_MESSAGE"`
+	ReasoningChannelID string              `json:"reasoning_channel_id"         env:"PICOCLAW_CHANNELS_WECOM_AIBOT_REASONING_CHANNEL_ID"`
+}
+
+type WeixinConfig struct {
+	Enabled            bool                `json:"enabled"              env:"PICOCLAW_CHANNELS_WEIXIN_ENABLED"`
+	Token              string              `json:"token"                env:"PICOCLAW_CHANNELS_WEIXIN_TOKEN"`
+	BaseURL            string              `json:"base_url"             env:"PICOCLAW_CHANNELS_WEIXIN_BASE_URL"`
+	CDNBaseURL         string              `json:"cdn_base_url"         env:"PICOCLAW_CHANNELS_WEIXIN_CDN_BASE_URL"`
+	Proxy              string              `json:"proxy"                env:"PICOCLAW_CHANNELS_WEIXIN_PROXY"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"PICOCLAW_CHANNELS_WEIXIN_ALLOW_FROM"`
+	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_WEIXIN_REASONING_CHANNEL_ID"`
 }
 
 type PicoConfig struct {
@@ -515,6 +604,16 @@ type PicoConfig struct {
 	MaxConnections  int                 `json:"max_connections,omitempty"`
 	AllowFrom       FlexibleStringSlice `json:"allow_from"                  env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
 	Placeholder     PlaceholderConfig   `json:"placeholder,omitempty"`
+}
+
+type PicoClientConfig struct {
+	Enabled      bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_PICO_CLIENT_ENABLED"`
+	URL          string              `json:"url"                     env:"PICOCLAW_CHANNELS_PICO_CLIENT_URL"`
+	Token        string              `json:"token"                   env:"PICOCLAW_CHANNELS_PICO_CLIENT_TOKEN"`
+	SessionID    string              `json:"session_id,omitempty"`
+	PingInterval int                 `json:"ping_interval,omitempty"`
+	ReadTimeout  int                 `json:"read_timeout,omitempty"`
+	AllowFrom    FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_PICO_CLIENT_ALLOW_FROM"`
 }
 
 type IRCConfig struct {
@@ -536,27 +635,27 @@ type IRCConfig struct {
 	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_IRC_REASONING_CHANNEL_ID"`
 }
 
-type EmailConfig struct {
-	Enabled            bool                `json:"enabled"              env:"PICOCLAW_CHANNELS_EMAIL_ENABLED"`
-	Address            string              `json:"address"              env:"PICOCLAW_CHANNELS_EMAIL_ADDRESS"`
-	Username           string              `json:"username"             env:"PICOCLAW_CHANNELS_EMAIL_USERNAME"`
-	Password           string              `json:"password"             env:"PICOCLAW_CHANNELS_EMAIL_PASSWORD"`
-	Folder             string              `json:"folder"               env:"PICOCLAW_CHANNELS_EMAIL_FOLDER"`
-	IMAPHost           string              `json:"imap_host"            env:"PICOCLAW_CHANNELS_EMAIL_IMAP_HOST"`
-	IMAPPort           int                 `json:"imap_port"            env:"PICOCLAW_CHANNELS_EMAIL_IMAP_PORT"`
-	IMAPTLS            bool                `json:"imap_tls"             env:"PICOCLAW_CHANNELS_EMAIL_IMAP_TLS"`
-	SMTPHost           string              `json:"smtp_host"            env:"PICOCLAW_CHANNELS_EMAIL_SMTP_HOST"`
-	SMTPPort           int                 `json:"smtp_port"            env:"PICOCLAW_CHANNELS_EMAIL_SMTP_PORT"`
-	SMTPTLS            bool                `json:"smtp_tls"             env:"PICOCLAW_CHANNELS_EMAIL_SMTP_TLS"`
-	PollInterval       int                 `json:"poll_interval"        env:"PICOCLAW_CHANNELS_EMAIL_POLL_INTERVAL"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"PICOCLAW_CHANNELS_EMAIL_ALLOW_FROM"`
-	NotifyTelegramIDs  FlexibleStringSlice `json:"notify_telegram_ids"  env:"PICOCLAW_CHANNELS_EMAIL_NOTIFY_TELEGRAM_IDS"`
-	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_EMAIL_REASONING_CHANNEL_ID"`
-}
-
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"PICOCLAW_HEARTBEAT_ENABLED"`
 	Interval int  `json:"interval" env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+}
+
+type EmailConfig struct {
+	Enabled            bool                `json:"enabled" env:"PICOCLAW_CHANNELS_EMAIL_ENABLED"`
+	Address            string              `json:"address" env:"PICOCLAW_CHANNELS_EMAIL_ADDRESS"`
+	Username           string              `json:"username" env:"PICOCLAW_CHANNELS_EMAIL_USERNAME"`
+	Password           string              `json:"password" env:"PICOCLAW_CHANNELS_EMAIL_PASSWORD"`
+	Folder             string              `json:"folder" env:"PICOCLAW_CHANNELS_EMAIL_FOLDER"`
+	IMAPHost           string              `json:"imap_host" env:"PICOCLAW_CHANNELS_EMAIL_IMAP_HOST"`
+	IMAPPort           int                 `json:"imap_port" env:"PICOCLAW_CHANNELS_EMAIL_IMAP_PORT"`
+	IMAPTLS            bool                `json:"imap_tls" env:"PICOCLAW_CHANNELS_EMAIL_IMAP_TLS"`
+	SMTPHost           string              `json:"smtp_host" env:"PICOCLAW_CHANNELS_EMAIL_SMTP_HOST"`
+	SMTPPort           int                 `json:"smtp_port" env:"PICOCLAW_CHANNELS_EMAIL_SMTP_PORT"`
+	SMTPTLS            bool                `json:"smtp_tls" env:"PICOCLAW_CHANNELS_EMAIL_SMTP_TLS"`
+	PollInterval       int                 `json:"poll_interval" env:"PICOCLAW_CHANNELS_EMAIL_POLL_INTERVAL"`
+	AllowFrom          FlexibleStringSlice `json:"allow_from" env:"PICOCLAW_CHANNELS_EMAIL_ALLOW_FROM"`
+	NotifyTelegramIDs  FlexibleStringSlice `json:"notify_telegram_ids" env:"PICOCLAW_CHANNELS_EMAIL_NOTIFY_TELEGRAM_IDS"`
+	ReasoningChannelID string              `json:"reasoning_channel_id" env:"PICOCLAW_CHANNELS_EMAIL_REASONING_CHANNEL_ID"`
 }
 
 type DevicesConfig struct {
@@ -570,13 +669,13 @@ type VoiceConfig struct {
 }
 
 type RivaVoiceConfig struct {
-	Enabled                 bool   `json:"enabled"                   env:"PICOCLAW_VOICE_RIVA_ENABLED"`
-	Server                  string `json:"server"                    env:"PICOCLAW_VOICE_RIVA_SERVER"`
-	UseSSL                  bool   `json:"use_ssl"                   env:"PICOCLAW_VOICE_RIVA_USE_SSL"`
-	FunctionID              string `json:"function_id"               env:"PICOCLAW_VOICE_RIVA_FUNCTION_ID"`
-	LanguageCode            string `json:"language_code"             env:"PICOCLAW_VOICE_RIVA_LANGUAGE_CODE"`
-	CustomConfiguration     string `json:"custom_configuration"      env:"PICOCLAW_VOICE_RIVA_CUSTOM_CONFIGURATION"`
-	RequestTimeoutSeconds   int    `json:"request_timeout_seconds"   env:"PICOCLAW_VOICE_RIVA_REQUEST_TIMEOUT_SECONDS"`
+	Enabled                 bool   `json:"enabled" env:"PICOCLAW_VOICE_RIVA_ENABLED"`
+	Server                  string `json:"server" env:"PICOCLAW_VOICE_RIVA_SERVER"`
+	UseSSL                  bool   `json:"use_ssl" env:"PICOCLAW_VOICE_RIVA_USE_SSL"`
+	FunctionID              string `json:"function_id" env:"PICOCLAW_VOICE_RIVA_FUNCTION_ID"`
+	LanguageCode            string `json:"language_code" env:"PICOCLAW_VOICE_RIVA_LANGUAGE_CODE"`
+	CustomConfiguration     string `json:"custom_configuration" env:"PICOCLAW_VOICE_RIVA_CUSTOM_CONFIGURATION"`
+	RequestTimeoutSeconds   int    `json:"request_timeout_seconds" env:"PICOCLAW_VOICE_RIVA_REQUEST_TIMEOUT_SECONDS"`
 	MaxReceiveMessageLength int    `json:"max_receive_message_length" env:"PICOCLAW_VOICE_RIVA_MAX_RECEIVE_MESSAGE_LENGTH"`
 }
 
@@ -832,20 +931,17 @@ type ToolsConfig struct {
 	MCP             MCPConfig          `json:"mcp"`
 	AppendFile      ToolConfig         `json:"append_file"                                              envPrefix:"PICOCLAW_TOOLS_APPEND_FILE_"`
 	EditFile        ToolConfig         `json:"edit_file"                                                envPrefix:"PICOCLAW_TOOLS_EDIT_FILE_"`
-	FactCheck       ToolConfig         `json:"fact_check"                                               envPrefix:"PICOCLAW_TOOLS_FACT_CHECK_"`
 	FindSkills      ToolConfig         `json:"find_skills"                                              envPrefix:"PICOCLAW_TOOLS_FIND_SKILLS_"`
 	I2C             ToolConfig         `json:"i2c"                                                      envPrefix:"PICOCLAW_TOOLS_I2C_"`
 	InstallSkill    ToolConfig         `json:"install_skill"                                            envPrefix:"PICOCLAW_TOOLS_INSTALL_SKILL_"`
 	ListDir         ToolConfig         `json:"list_dir"                                                 envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
 	Message         ToolConfig         `json:"message"                                                  envPrefix:"PICOCLAW_TOOLS_MESSAGE_"`
-	PersonalTodo    ToolConfig         `json:"personal_todo"                                            envPrefix:"PICOCLAW_TOOLS_PERSONAL_TODO_"`
 	ReadFile        ReadFileToolConfig `json:"read_file"                                                envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
 	SendFile        ToolConfig         `json:"send_file"                                                envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
 	Spawn           ToolConfig         `json:"spawn"                                                    envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
 	SpawnStatus     ToolConfig         `json:"spawn_status"                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
 	SPI             ToolConfig         `json:"spi"                                                      envPrefix:"PICOCLAW_TOOLS_SPI_"`
 	Subagent        ToolConfig         `json:"subagent"                                                 envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
-	TranscribeMedia ToolConfig         `json:"transcribe_media"                                         envPrefix:"PICOCLAW_TOOLS_TRANSCRIBE_MEDIA_"`
 	WebFetch        ToolConfig         `json:"web_fetch"                                                envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"                                               envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }
@@ -880,6 +976,10 @@ type ClawHubRegistryConfig struct {
 type MCPServerConfig struct {
 	// Enabled indicates whether this MCP server is active
 	Enabled bool `json:"enabled"`
+	// Deferred controls whether this server's tools are registered as hidden (deferred/discovery mode).
+	// When nil, the global Discovery.Enabled setting applies.
+	// When explicitly set to true or false, it overrides the global setting for this server only.
+	Deferred *bool `json:"deferred,omitempty"`
 	// Command is the executable to run (e.g., "npx", "python", "/path/to/server")
 	Command string `json:"command"`
 	// Args are the arguments to pass to the command
@@ -935,10 +1035,13 @@ func LoadConfig(path string) (*Config, error) {
 
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
 		for _, m := range cfg.ModelList {
-			if m.APIKey != "" && !strings.HasPrefix(m.APIKey, "enc://") && !strings.HasPrefix(m.APIKey, "file://") {
-				fmt.Fprintf(os.Stderr,
+			if m.APIKey != "" && !strings.HasPrefix(m.APIKey, "enc://") &&
+				!strings.HasPrefix(m.APIKey, "file://") {
+				fmt.Fprintf(
+					os.Stderr,
 					"picoclaw: warning: model %q has a plaintext api_key; call SaveConfig to encrypt it\n",
-					m.ModelName)
+					m.ModelName,
+				)
 			}
 		}
 	}
@@ -962,6 +1065,15 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.ModelList = ConvertProvidersToModelList(cfg)
 	}
 
+	// Inherit credentials from providers to model_list entries (#1635).
+	// When both providers and model_list are present, model_list entries
+	// whose api_key/api_base are empty will inherit from the matching
+	// provider (matched by protocol prefix).  Explicit model_list values
+	// always take precedence.
+	if cfg.HasProvidersConfig() {
+		InheritProviderCredentials(cfg.ModelList, cfg.Providers)
+	}
+
 	// Validate model_list for uniqueness and required fields
 	if err := cfg.ValidateModelList(); err != nil {
 		return nil, err
@@ -982,7 +1094,8 @@ func encryptPlaintextAPIKeys(models []ModelConfig, passphrase string) ([]ModelCo
 	changed := false
 	for i := range sealed {
 		m := &sealed[i]
-		if m.APIKey == "" || strings.HasPrefix(m.APIKey, "enc://") || strings.HasPrefix(m.APIKey, "file://") {
+		if m.APIKey == "" || strings.HasPrefix(m.APIKey, "enc://") ||
+			strings.HasPrefix(m.APIKey, "file://") {
 			continue
 		}
 		encrypted, err := credential.Encrypt(passphrase, "", m.APIKey)
@@ -1015,7 +1128,13 @@ func resolveAPIKeys(models []ModelConfig, configDir string) error {
 		for j, key := range models[i].APIKeys {
 			resolved, err := cr.Resolve(key)
 			if err != nil {
-				return fmt.Errorf("model_list[%d] (%s): api_keys[%d]: %w", i, models[i].ModelName, j, err)
+				return fmt.Errorf(
+					"model_list[%d] (%s): api_keys[%d]: %w",
+					i,
+					models[i].ModelName,
+					j,
+					err,
+				)
 			}
 			models[i].APIKeys[j] = resolved
 		}
@@ -1288,8 +1407,6 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.AppendFile.Enabled
 	case "edit_file":
 		return t.EditFile.Enabled
-	case "fact_check":
-		return t.FactCheck.Enabled
 	case "find_skills":
 		return t.FindSkills.Enabled
 	case "i2c":
@@ -1300,8 +1417,6 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.ListDir.Enabled
 	case "message":
 		return t.Message.Enabled
-	case "personal_todo":
-		return t.PersonalTodo.Enabled
 	case "read_file":
 		return t.ReadFile.Enabled
 	case "spawn":
@@ -1312,8 +1427,6 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.SPI.Enabled
 	case "subagent":
 		return t.Subagent.Enabled
-	case "transcribe_media":
-		return t.TranscribeMedia.Enabled
 	case "web_fetch":
 		return t.WebFetch.Enabled
 	case "send_file":
