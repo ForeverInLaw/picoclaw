@@ -121,6 +121,17 @@ func SerializeMessages(messages []Message) []any {
 						"url": mediaURL,
 					},
 				})
+				continue
+			}
+
+			if format, data, ok := parseDataAudioURL(mediaURL); ok {
+				parts = append(parts, map[string]any{
+					"type": "input_audio",
+					"input_audio": map[string]any{
+						"data":   data,
+						"format": format,
+					},
+				})
 			}
 		}
 		parts = append(parts, fileParts...)
@@ -195,6 +206,26 @@ func buildInlineFilePart(path string) map[string]any {
 			"file_data": fileData,
 		},
 	}
+}
+
+func parseDataAudioURL(mediaURL string) (format, data string, ok bool) {
+	if !strings.HasPrefix(mediaURL, "data:audio/") {
+		return "", "", false
+	}
+
+	payload := strings.TrimPrefix(mediaURL, "data:audio/")
+	meta, data, found := strings.Cut(payload, ",")
+	if !found {
+		return "", "", false
+	}
+
+	format, _, _ = strings.Cut(meta, ";")
+	format = strings.TrimSpace(format)
+	data = strings.TrimSpace(data)
+	if format == "" || data == "" {
+		return "", "", false
+	}
+	return format, data, true
 }
 
 // --- Response parsing ---
