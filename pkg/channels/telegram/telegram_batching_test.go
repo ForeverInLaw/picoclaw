@@ -348,3 +348,132 @@ func TestDispatchInboundCandidate_BatchesCommentWithTelegramMediaGroup(t *testin
 		t.Fatalf("len(media)=%d want=2", len(inbound.Media))
 	}
 }
+
+func TestDispatchInboundCandidate_BatchesStandaloneVoiceMessages(t *testing.T) {
+	ch, messageBus := newBatchingTestChannel(t, 30)
+
+	first := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "701",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "[voice]",
+		media:         []string{"media://voice-1"},
+		metadata:      map[string]string{},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42",
+		batchEligible: true,
+	}
+	second := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "702",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "[forwarded from Bob]: [voice]",
+		media:         []string{"media://voice-2"},
+		metadata:      map[string]string{"forwarded_from": "Bob"},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42",
+		batchEligible: true,
+	}
+
+	if err := ch.dispatchInboundCandidate(context.Background(), first); err != nil {
+		t.Fatalf("dispatchInboundCandidate(first) error: %v", err)
+	}
+	if err := ch.dispatchInboundCandidate(context.Background(), second); err != nil {
+		t.Fatalf("dispatchInboundCandidate(second) error: %v", err)
+	}
+
+	inbound := recvInbound(t, messageBus.InboundChan(), 250*time.Millisecond)
+	if got := inbound.Metadata["batch_count"]; got != "2" {
+		t.Fatalf("batch_count=%q want=2", got)
+	}
+	if len(inbound.Media) != 2 {
+		t.Fatalf("len(media)=%d want=2", len(inbound.Media))
+	}
+	if strings.Count(inbound.Content, "[voice]") != 2 {
+		t.Fatalf("content=%q want two voice markers", inbound.Content)
+	}
+	if !strings.Contains(inbound.Content, "[forwarded from Bob]: [voice]") {
+		t.Fatalf("content=%q missing forwarded voice label", inbound.Content)
+	}
+}
+
+func TestDispatchInboundCandidate_BatchesCommentWithStandaloneVoiceMessages(t *testing.T) {
+	ch, messageBus := newBatchingTestChannel(t, 30)
+
+	comment := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "801",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "послушай это",
+		metadata:      map[string]string{},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42",
+		batchEligible: true,
+	}
+	voice1 := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "802",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "[voice]",
+		media:         []string{"media://voice-1"},
+		metadata:      map[string]string{},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42",
+		batchEligible: true,
+	}
+	voice2 := telegramInboundCandidate{
+		peer:          bus.Peer{Kind: "direct", ID: "42"},
+		messageID:     "803",
+		senderID:      "42",
+		chatID:        "123",
+		content:       "[voice]",
+		media:         []string{"media://voice-2"},
+		metadata:      map[string]string{},
+		sender:        bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42", DisplayName: "Alice"},
+		batchKey:      "123|telegram:42",
+		batchEligible: true,
+	}
+
+	if err := ch.dispatchInboundCandidate(context.Background(), comment); err != nil {
+		t.Fatalf("dispatchInboundCandidate(comment) error: %v", err)
+	}
+	if err := ch.dispatchInboundCandidate(context.Background(), voice1); err != nil {
+		t.Fatalf("dispatchInboundCandidate(voice1) error: %v", err)
+	}
+	if err := ch.dispatchInboundCandidate(context.Background(), voice2); err != nil {
+		t.Fatalf("dispatchInboundCandidate(voice2) error: %v", err)
+	}
+
+	inbound := recvInbound(t, messageBus.InboundChan(), 250*time.Millisecond)
+	if got := inbound.Metadata["batch_count"]; got != "3" {
+		t.Fatalf("batch_count=%q want=3", got)
+	}
+	if !strings.Contains(inbound.Content, "послушай это") {
+		t.Fatalf("content=%q missing comment", inbound.Content)
+	}
+	if strings.Count(inbound.Content, "[voice]") != 2 {
+		t.Fatalf("content=%q want two voice markers", inbound.Content)
+	}
+	if len(inbound.Media) != 2 {
+		t.Fatalf("len(media)=%d want=2", len(inbound.Media))
+	}
+}
+
+func TestTelegramStandaloneBatchableMedia(t *testing.T) {
+	if !telegramStandaloneBatchableMedia(&telego.Message{Voice: &telego.Voice{FileID: "voice-1"}}) {
+		t.Fatal("voice should be standalone-batchable")
+	}
+	if !telegramStandaloneBatchableMedia(&telego.Message{Audio: &telego.Audio{FileID: "audio-1"}}) {
+		t.Fatal("audio should be standalone-batchable")
+	}
+	if telegramStandaloneBatchableMedia(&telego.Message{Document: &telego.Document{FileID: "doc-1"}}) {
+		t.Fatal("document should not be standalone-batchable")
+	}
+	if telegramStandaloneBatchableMedia(&telego.Message{Photo: []telego.PhotoSize{{FileID: "photo-1"}}}) {
+		t.Fatal("photo should not be standalone-batchable without media group")
+	}
+}

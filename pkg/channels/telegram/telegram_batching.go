@@ -244,7 +244,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 	isCommand := commands.HasCommandPrefix(strings.TrimSpace(messageText))
 	batchEligible := c.batchingEnabled() &&
 		!isCommand &&
-		(len(mediaPaths) == 0 || mediaGroupID != "")
+		(len(mediaPaths) == 0 || mediaGroupID != "" || telegramStandaloneBatchableMedia(message))
 
 	batchKey := compositeChatID + "|" + sender.CanonicalID
 
@@ -263,6 +263,13 @@ func (c *TelegramChannel) buildInboundCandidate(
 		replyToMessageID: replyToMessageID,
 		mediaGroupID:     mediaGroupID,
 	}, nil
+}
+
+func telegramStandaloneBatchableMedia(message *telego.Message) bool {
+	if message == nil {
+		return false
+	}
+	return message.Voice != nil || message.Audio != nil
 }
 
 func (c *TelegramChannel) dispatchInboundCandidate(
