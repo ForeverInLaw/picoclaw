@@ -404,3 +404,19 @@ func TestHandleMessage_GroupMentionReply_IncludesQuotedContext(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeQuotedTelegramReplyMedia_PrependsQuotedAttachments(t *testing.T) {
+	quoted := []string{"media://quoted-image", "media://quoted-file"}
+	current := []string{"media://current-image"}
+
+	got := mergeQuotedTelegramReplyMedia(quoted, current)
+	want := []string{"media://quoted-image", "media://quoted-file", "media://current-image"}
+	if len(got) != len(want) {
+		t.Fatalf("len(media)=%d want=%d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("media[%d]=%q want=%q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}

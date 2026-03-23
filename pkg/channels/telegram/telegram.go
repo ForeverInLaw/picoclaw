@@ -193,18 +193,18 @@ func (c *TelegramChannel) isReplyToBot(message *telego.Message) bool {
 	}
 }
 
-func prependQuotedTelegramReply(message *telego.Message, content string) string {
+func prependQuotedTelegramReply(message *telego.Message, quotedBody, content string) string {
 	if message == nil || message.ReplyToMessage == nil {
 		return content
 	}
 
-	replyText := strings.TrimSpace(telegramMessageText(message.ReplyToMessage))
-	if replyText == "" {
+	quotedBody = strings.TrimSpace(quotedBody)
+	if quotedBody == "" {
 		return content
 	}
 
 	author := telegramMessageAuthor(message.ReplyToMessage)
-	return fmt.Sprintf("[quoted message from %s]: %s\n\n%s", author, replyText, content)
+	return fmt.Sprintf("[quoted message from %s]: %s\n\n%s", author, quotedBody, content)
 }
 
 func telegramMessageText(message *telego.Message) string {

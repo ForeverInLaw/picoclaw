@@ -84,9 +84,6 @@ func (c *TelegramChannel) buildInboundCandidate(
 	chatID := message.Chat.ID
 	c.chatIDs[platformID] = chatID
 
-	content := ""
-	mediaPaths := []string{}
-
 	chatIDStr := fmt.Sprintf("%d", chatID)
 	messageIDStr := fmt.Sprintf("%d", message.MessageID)
 	scope := channels.BuildMediaScope("telegram", chatIDStr, messageIDStr)
@@ -104,57 +101,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 		return localPath
 	}
 
-	if message.Text != "" {
-		content += message.Text
-	}
-	if message.Caption != "" {
-		if content != "" {
-			content += "\n"
-		}
-		content += message.Caption
-	}
-
-	if len(message.Photo) > 0 {
-		photo := message.Photo[len(message.Photo)-1]
-		photoPath := c.downloadPhoto(ctx, photo.FileID)
-		if photoPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(photoPath, "photo.jpg"))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[image: photo]"
-		}
-	}
-	if message.Voice != nil {
-		voicePath := c.downloadFile(ctx, message.Voice.FileID, ".ogg")
-		if voicePath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(voicePath, "voice.ogg"))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[voice]"
-		}
-	}
-	if message.Audio != nil {
-		audioPath := c.downloadFile(ctx, message.Audio.FileID, ".mp3")
-		if audioPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(audioPath, "audio.mp3"))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[audio]"
-		}
-	}
-	if message.Document != nil {
-		docPath := c.downloadFile(ctx, message.Document.FileID, "")
-		if docPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(docPath, "document"))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[file]"
-		}
-	}
+	content, mediaPaths := c.buildTelegramMessagePayload(ctx, message, storeMedia)
 	if content == "" {
 		content = "[empty message]"
 	}
@@ -175,7 +122,9 @@ func (c *TelegramChannel) buildInboundCandidate(
 			observeOnly = true
 		}
 	}
-	content = prependQuotedTelegramReply(message, formatForwardedTelegramMessage(message, content))
+	replyQuotedBody, replyQuotedMedia := c.buildQuotedReplyPayload(ctx, message, storeMedia)
+	content = prependQuotedTelegramReply(message, replyQuotedBody, formatForwardedTelegramMessage(message, content))
+	mediaPaths = mergeQuotedTelegramReplyMedia(replyQuotedMedia, mediaPaths)
 
 	compositeChatID := fmt.Sprintf("%d", chatID)
 	threadID := message.MessageThreadID
@@ -263,6 +212,98 @@ func (c *TelegramChannel) buildInboundCandidate(
 		replyToMessageID: replyToMessageID,
 		mediaGroupID:     mediaGroupID,
 	}, nil
+}
+
+func (c *TelegramChannel) buildTelegramMessagePayload(
+	ctx context.Context,
+	message *telego.Message,
+	storeMedia func(localPath, filename string) string,
+) (string, []string) {
+	if message == nil {
+		return "", nil
+	}
+
+	content := ""
+	mediaPaths := []string{}
+
+	if message.Text != "" {
+		content += message.Text
+	}
+	if message.Caption != "" {
+		if content != "" {
+			content += "\n"
+		}
+		content += message.Caption
+	}
+
+	if len(message.Photo) > 0 {
+		photo := message.Photo[len(message.Photo)-1]
+		photoPath := c.downloadPhoto(ctx, photo.FileID)
+		if photoPath != "" {
+			mediaPaths = append(mediaPaths, storeMedia(photoPath, "photo.jpg"))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[image: photo]"
+		}
+	}
+	if message.Voice != nil {
+		voicePath := c.downloadFile(ctx, message.Voice.FileID, ".ogg")
+		if voicePath != "" {
+			mediaPaths = append(mediaPaths, storeMedia(voicePath, "voice.ogg"))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[voice]"
+		}
+	}
+	if message.Audio != nil {
+		audioPath := c.downloadFile(ctx, message.Audio.FileID, ".mp3")
+		if audioPath != "" {
+			mediaPaths = append(mediaPaths, storeMedia(audioPath, "audio.mp3"))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[audio]"
+		}
+	}
+	if message.Document != nil {
+		docPath := c.downloadFile(ctx, message.Document.FileID, "")
+		if docPath != "" {
+			mediaPaths = append(mediaPaths, storeMedia(docPath, "document"))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[file]"
+		}
+	}
+
+	return content, mediaPaths
+}
+
+func (c *TelegramChannel) buildQuotedReplyPayload(
+	ctx context.Context,
+	message *telego.Message,
+	storeMedia func(localPath, filename string) string,
+) (string, []string) {
+	if message == nil || message.ReplyToMessage == nil {
+		return "", nil
+	}
+	replyContent, replyMedia := c.buildTelegramMessagePayload(ctx, message.ReplyToMessage, storeMedia)
+	replyContent = strings.TrimSpace(formatForwardedTelegramMessage(message.ReplyToMessage, replyContent))
+	if replyContent == "" && len(replyMedia) == 0 {
+		return "", nil
+	}
+	return replyContent, replyMedia
+}
+
+func mergeQuotedTelegramReplyMedia(quotedMedia, mediaPaths []string) []string {
+	if len(quotedMedia) == 0 {
+		return mediaPaths
+	}
+	mergedMedia := append([]string(nil), quotedMedia...)
+	mergedMedia = append(mergedMedia, mediaPaths...)
+	return mergedMedia
 }
 
 func telegramStandaloneBatchableMedia(message *telego.Message) bool {
