@@ -173,6 +173,10 @@ func (c *BaseChannel) IsRunning() bool {
 	return c.running.Load()
 }
 
+func (c *BaseChannel) PublishOutbound(ctx context.Context, msg bus.OutboundMessage) error {
+	return c.bus.PublishOutbound(ctx, msg)
+}
+
 func (c *BaseChannel) IsAllowed(senderID string) bool {
 	if len(c.allowList) == 0 {
 		return true
