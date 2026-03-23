@@ -1142,6 +1142,12 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	sec, err := loadSecurityConfig(securityPath(path))
+	if err != nil {
+		return nil, err
+	}
+	cfg.security = sec
+
 	if err := resolveAPIKeys(cfg.ModelList, filepath.Dir(path)); err != nil {
 		return nil, err
 	}
