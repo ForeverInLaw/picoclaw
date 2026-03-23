@@ -1058,8 +1058,14 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		return msg, false
 	}
 
-	// Transcribe each audio media ref in order.
-	var transcriptions []string
+	// Transcribe each audio media ref in order. Successfully transcribed audio
+	// refs are removed from msg.Media so the model does not see both the
+	// transcript and the original file path and then try to inspect the file again.
+	var (
+		audioReplacements []string
+		successTexts      []string
+		keptMedia         = make([]string, 0, len(msg.Media))
+	)
 	for _, ref := range msg.Media {
 		path, meta, err := al.mediaStore.ResolveWithMeta(ref)
 		if err != nil {
@@ -1067,40 +1073,50 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 			continue
 		}
 		if !utils.IsAudioFile(meta.Filename, meta.ContentType) {
+			keptMedia = append(keptMedia, ref)
 			continue
 		}
 		result, err := al.transcriber.Transcribe(ctx, path)
 		if err != nil {
 			logger.WarnCF("voice", "Transcription failed", map[string]any{"ref": ref, "error": err})
-			transcriptions = append(transcriptions, "")
+			audioReplacements = append(audioReplacements, "")
+			keptMedia = append(keptMedia, ref)
 			continue
 		}
-		transcriptions = append(transcriptions, result.Text)
+		audioReplacements = append(audioReplacements, result.Text)
+		successTexts = append(successTexts, result.Text)
 	}
 
-	if len(transcriptions) == 0 {
+	if len(successTexts) == 0 {
 		return msg, false
 	}
 
-	al.sendTranscriptionFeedback(ctx, msg.Channel, msg.ChatID, msg.MessageID, transcriptions)
+	al.sendTranscriptionFeedback(ctx, msg.Channel, msg.ChatID, msg.MessageID, successTexts)
 
 	// Replace audio annotations sequentially with transcriptions.
 	idx := 0
 	newContent := audioAnnotationRe.ReplaceAllStringFunc(msg.Content, func(match string) string {
-		if idx >= len(transcriptions) {
+		if idx >= len(audioReplacements) {
 			return match
 		}
-		text := transcriptions[idx]
+		text := audioReplacements[idx]
 		idx++
+		if text == "" {
+			return match
+		}
 		return "[voice: " + text + "]"
 	})
 
 	// Append any remaining transcriptions not matched by an annotation.
-	for ; idx < len(transcriptions); idx++ {
-		newContent += "\n[voice: " + transcriptions[idx] + "]"
+	for ; idx < len(audioReplacements); idx++ {
+		if audioReplacements[idx] == "" {
+			continue
+		}
+		newContent += "\n[voice: " + audioReplacements[idx] + "]"
 	}
 
 	msg.Content = newContent
+	msg.Media = keptMedia
 	return msg, true
 }
 
