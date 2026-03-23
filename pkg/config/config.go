@@ -291,8 +291,9 @@ type MemoryChatAliasConfig struct {
 }
 
 type ToolFeedbackConfig struct {
-	Enabled       bool `json:"enabled"         env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`
-	MaxArgsLength int  `json:"max_args_length" env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_MAX_ARGS_LENGTH"`
+	Enabled         bool                `json:"enabled"                    env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`
+	MaxArgsLength   int                 `json:"max_args_length"            env:"PICOCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_MAX_ARGS_LENGTH"`
+	DirectAllowFrom FlexibleStringSlice `json:"direct_allow_from,omitempty"`
 }
 
 type AgentDefaults struct {
@@ -343,6 +344,48 @@ func (d *AgentDefaults) GetToolFeedbackMaxArgsLength() int {
 // IsToolFeedbackEnabled returns true when tool feedback messages should be sent to the chat.
 func (d *AgentDefaults) IsToolFeedbackEnabled() bool {
 	return d.ToolFeedback.Enabled
+}
+
+// ShouldSendToolFeedback returns true when tool feedback messages should be sent
+// for the current peer/sender. When DirectAllowFrom is configured, tool feedback
+// is limited to direct chats from the explicitly allowed senders.
+func (d *AgentDefaults) ShouldSendToolFeedback(peerKind, senderID string) bool {
+	if !d.ToolFeedback.Enabled {
+		return false
+	}
+
+	if len(d.ToolFeedback.DirectAllowFrom) == 0 {
+		return true
+	}
+
+	if strings.TrimSpace(peerKind) != "direct" {
+		return false
+	}
+
+	return matchesToolFeedbackSender(d.ToolFeedback.DirectAllowFrom, senderID)
+}
+
+func matchesToolFeedbackSender(allowList FlexibleStringSlice, senderID string) bool {
+	senderID = strings.TrimSpace(senderID)
+	if senderID == "" {
+		return false
+	}
+
+	rawID := senderID
+	if idx := strings.LastIndex(senderID, ":"); idx >= 0 && idx+1 < len(senderID) {
+		rawID = senderID[idx+1:]
+	}
+
+	for _, candidate := range allowList {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if candidate == senderID || candidate == rawID {
+			return true
+		}
+	}
+	return false
 }
 
 // GetModelName returns the effective model name for the agent defaults.
@@ -415,20 +458,20 @@ type WhatsAppConfig struct {
 }
 
 type TelegramConfig struct {
-	Enabled            bool                `json:"enabled"                 env:"PICOCLAW_CHANNELS_TELEGRAM_ENABLED"`
-	Token              string              `json:"token"                   env:"PICOCLAW_CHANNELS_TELEGRAM_TOKEN"`
-	BaseURL            string              `json:"base_url"                env:"PICOCLAW_CHANNELS_TELEGRAM_BASE_URL"`
-	Proxy              string              `json:"proxy"                   env:"PICOCLAW_CHANNELS_TELEGRAM_PROXY"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM"`
-	NameTriggers       FlexibleStringSlice `json:"name_triggers,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_NAME_TRIGGERS"`
-	ParticipantAliases map[string]string   `json:"participant_aliases,omitempty"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	Typing             TypingConfig        `json:"typing,omitempty"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
+	Enabled            bool                   `json:"enabled"                 env:"PICOCLAW_CHANNELS_TELEGRAM_ENABLED"`
+	Token              string                 `json:"token"                   env:"PICOCLAW_CHANNELS_TELEGRAM_TOKEN"`
+	BaseURL            string                 `json:"base_url"                env:"PICOCLAW_CHANNELS_TELEGRAM_BASE_URL"`
+	Proxy              string                 `json:"proxy"                   env:"PICOCLAW_CHANNELS_TELEGRAM_PROXY"`
+	AllowFrom          FlexibleStringSlice    `json:"allow_from"              env:"PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM"`
+	NameTriggers       FlexibleStringSlice    `json:"name_triggers,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_NAME_TRIGGERS"`
+	ParticipantAliases map[string]string      `json:"participant_aliases,omitempty"`
+	GroupTrigger       GroupTriggerConfig     `json:"group_trigger,omitempty"`
+	Typing             TypingConfig           `json:"typing,omitempty"`
+	Placeholder        PlaceholderConfig      `json:"placeholder,omitempty"`
 	Batching           TelegramBatchingConfig `json:"batching,omitempty"`
-	Streaming          StreamingConfig     `json:"streaming,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID"`
-	UseMarkdownV2      bool                `json:"use_markdown_v2"         env:"PICOCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
+	Streaming          StreamingConfig        `json:"streaming,omitempty"`
+	ReasoningChannelID string                 `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID"`
+	UseMarkdownV2      bool                   `json:"use_markdown_v2"         env:"PICOCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
 }
 
 type FeishuConfig struct {

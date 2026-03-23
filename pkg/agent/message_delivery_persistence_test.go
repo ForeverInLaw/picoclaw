@@ -48,7 +48,7 @@ func (p *messageThenDoneProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
-func newMessageDeliveryLoop(t *testing.T) (*AgentLoop, *config.Config) {
+func newMessageDeliveryLoop(t *testing.T) (*AgentLoop, *config.Config, *bus.MessageBus) {
 	t.Helper()
 
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
@@ -71,11 +71,12 @@ func newMessageDeliveryLoop(t *testing.T) (*AgentLoop, *config.Config) {
 		},
 	}
 
-	return NewAgentLoop(cfg, bus.NewMessageBus(), &messageThenDoneProvider{}), cfg
+	msgBus := bus.NewMessageBus()
+	return NewAgentLoop(cfg, msgBus, &messageThenDoneProvider{}), cfg, msgBus
 }
 
 func TestProcessMessage_PersistsDeliveredReplyInsteadOfMetaAck(t *testing.T) {
-	al, _ := newMessageDeliveryLoop(t)
+	al, _, _ := newMessageDeliveryLoop(t)
 
 	_, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:  "telegram",
@@ -107,7 +108,7 @@ func TestProcessMessage_PersistsDeliveredReplyInsteadOfMetaAck(t *testing.T) {
 }
 
 func TestProcessMessage_PersistsDeliveredReply_ForExplicitAgentScopedSessionKey(t *testing.T) {
-	al, cfg := newMessageDeliveryLoop(t)
+	al, cfg, _ := newMessageDeliveryLoop(t)
 	sessionKey := "agent:main:telegram:direct:42:memfix-check"
 
 	_, err := al.processMessage(context.Background(), bus.InboundMessage{
@@ -146,5 +147,36 @@ func TestProcessMessage_PersistsDeliveredReply_ForExplicitAgentScopedSessionKey(
 	}
 	if strings.Contains(string(data), "\"content\":\"Done.\"") {
 		t.Fatalf("session file still persisted meta ack:\n%s", string(data))
+	}
+}
+
+func TestProcessMessage_DoesNotPublishDuplicateFinalResponseAfterMessageTool(t *testing.T) {
+	al, _, msgBus := newMessageDeliveryLoop(t)
+
+	_, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:42",
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		ChatID:   "42",
+		Content:  "reply using the message tool",
+	})
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+
+	var outbound []bus.OutboundMessage
+	for {
+		select {
+		case msg := <-msgBus.OutboundChan():
+			outbound = append(outbound, msg)
+		default:
+			if len(outbound) != 1 {
+				t.Fatalf("expected exactly 1 outbound message, got %d: %+v", len(outbound), outbound)
+			}
+			if outbound[0].Content != "VISIBLE_REPLY" {
+				t.Fatalf("unexpected outbound content: %+v", outbound[0])
+			}
+			return
+		}
 	}
 }

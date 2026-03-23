@@ -1532,11 +1532,7 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	if opts.SendResponse && result.finalContent != "" {
-		al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: result.finalContent,
-		})
+		al.publishResponseIfNeeded(ctx, opts.Channel, opts.ChatID, result.finalContent)
 	}
 
 	if result.finalContent != "" {
@@ -2402,7 +2398,7 @@ turnLoop:
 			)
 
 			// Send tool feedback to chat channel if enabled (from HEAD)
-			if al.cfg.Agents.Defaults.IsToolFeedbackEnabled() && ts.channel != "" {
+			if al.cfg.Agents.Defaults.ShouldSendToolFeedback(ts.opts.PeerKind, ts.opts.SenderID) && ts.channel != "" {
 				feedbackPreview := utils.Truncate(
 					string(argsJSON),
 					al.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
