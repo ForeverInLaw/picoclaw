@@ -256,3 +256,357 @@ Agent 将每隔 30 分钟（可配置）读取此文件，并使用可用工具�
 
 - `PICOCLAW_HEARTBEAT_ENABLED=false` 禁用
 - `PICOCLAW_HEARTBEAT_INTERVAL=60` 更改间隔
+
+#### 子 Agent 通信流程
+
+```
+心跳触发
+    ↓
+Agent 读取 HEARTBEAT.md
+    ↓
+遇到耗时任务：spawn 子 Agent
+    ↓                           ↓
+继续处理下一个任务         子 Agent 独立运行
+    ↓                           ↓
+所有任务完成               子 Agent 使用 "message" 工具
+    ↓                           ↓
+回复 HEARTBEAT_OK          用户直接收到结果
+```
+
+子 Agent 拥有工具访问权限（message、web_search 等），可以独立与用户通信，无需经过主 Agent。
+
+### Providers（模型提供商）
+
+> [!NOTE]
+> Groq 通过 Whisper 提供免费语音转录。配置后，任意渠道的语音消息都会在 Agent 层自动转录为文字。
+
+| 提供商       | 用途                                    | 获取 API Key                                                 |
+| ------------ | --------------------------------------- | ------------------------------------------------------------ |
+| `gemini`     | LLM（Gemini 直连）                      | [aistudio.google.com](https://aistudio.google.com)           |
+| `zhipu`      | LLM（智谱直连）                         | [bigmodel.cn](https://bigmodel.cn)                           |
+| `volcengine` | LLM（火山引擎直连）                     | [volcengine.com](https://www.volcengine.com/activity/codingplan?utm_campaign=PicoClaw&utm_content=PicoClaw&utm_medium=devrel&utm_source=OWO&utm_term=PicoClaw) |
+| `openrouter` | LLM（推荐，可访问所有模型）             | [openrouter.ai](https://openrouter.ai)                       |
+| `anthropic`  | LLM（Claude 直连）                      | [console.anthropic.com](https://console.anthropic.com)       |
+| `openai`     | LLM（GPT 直连）                         | [platform.openai.com](https://platform.openai.com)           |
+| `deepseek`   | LLM（DeepSeek 直连）                    | [platform.deepseek.com](https://platform.deepseek.com)       |
+| `qwen`       | LLM（通义千问直连）                     | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com) |
+| `groq`       | LLM + **语音转录**（Whisper）           | [console.groq.com](https://console.groq.com)                 |
+| `cerebras`   | LLM（Cerebras 直连）                    | [cerebras.ai](https://cerebras.ai)                           |
+| `vivgrid`    | LLM（Vivgrid 直连）                     | [vivgrid.com](https://vivgrid.com)                           |
+
+### 模型配置 (model_list)
+
+> **新特性：** PicoClaw 现在采用**以模型为中心**的配置方式。只需指定 `vendor/model` 格式（例如 `zhipu/glm-4.7`）即可接入新提供商——**无需修改任何代码！**
+
+这一设计同时支持**多 Agent**场景，灵活选择提供商：
+
+- **不同 Agent 使用不同提供商**：每个 Agent 可以使用独立的 LLM 提供商
+- **模型降级**：配置主模型和备用模型，提升可用性
+- **负载均衡**：将请求分发到多个端点
+- **集中管理**：在一处管理所有提供商配置
+
+#### 所有支持的厂商
+
+| 厂商                    | `model` 前缀      | 默认 API Base                                       | 协议      | API Key                                                          |
+| ----------------------- | ----------------- | --------------------------------------------------- | --------- | ---------------------------------------------------------------- |
+| **OpenAI**              | `openai/`         | `https://api.openai.com/v1`                         | OpenAI    | [获取](https://platform.openai.com)                              |
+| **Anthropic**           | `anthropic/`      | `https://api.anthropic.com/v1`                      | Anthropic | [获取](https://console.anthropic.com)                            |
+| **智谱 AI (GLM)**       | `zhipu/`          | `https://open.bigmodel.cn/api/paas/v4`              | OpenAI    | [获取](https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys)    |
+| **DeepSeek**            | `deepseek/`       | `https://api.deepseek.com/v1`                       | OpenAI    | [获取](https://platform.deepseek.com)                            |
+| **Google Gemini**       | `gemini/`         | `https://generativelanguage.googleapis.com/v1beta`  | OpenAI    | [获取](https://aistudio.google.com/api-keys)                     |
+| **Groq**                | `groq/`           | `https://api.groq.com/openai/v1`                    | OpenAI    | [获取](https://console.groq.com)                                 |
+| **Moonshot**            | `moonshot/`       | `https://api.moonshot.cn/v1`                        | OpenAI    | [获取](https://platform.moonshot.cn)                             |
+| **通义千问 (Qwen)**     | `qwen/`           | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI    | [获取](https://dashscope.console.aliyun.com)                     |
+| **NVIDIA**              | `nvidia/`         | `https://integrate.api.nvidia.com/v1`               | OpenAI    | [获取](https://build.nvidia.com)                                 |
+| **Ollama**              | `ollama/`         | `http://localhost:11434/v1`                         | OpenAI    | 本地（无需 Key）                                                 |
+| **OpenRouter**          | `openrouter/`     | `https://openrouter.ai/api/v1`                      | OpenAI    | [获取](https://openrouter.ai/keys)                               |
+| **LiteLLM Proxy**       | `litellm/`        | `http://localhost:4000/v1`                          | OpenAI    | 你的 LiteLLM 代理 Key                                            |
+| **VLLM**                | `vllm/`           | `http://localhost:8000/v1`                          | OpenAI    | 本地                                                             |
+| **Cerebras**            | `cerebras/`       | `https://api.cerebras.ai/v1`                        | OpenAI    | [获取](https://cerebras.ai)                                      |
+| **火山引擎 (豆包)**     | `volcengine/`     | `https://ark.cn-beijing.volces.com/api/v3`          | OpenAI    | [获取](https://www.volcengine.com/activity/codingplan?utm_campaign=PicoClaw&utm_content=PicoClaw&utm_medium=devrel&utm_source=OWO&utm_term=PicoClaw) |
+| **神算云**              | `shengsuanyun/`   | `https://router.shengsuanyun.com/api/v1`            | OpenAI    | —                                                                |
+| **BytePlus**            | `byteplus/`       | `https://ark.ap-southeast.bytepluses.com/api/v3`    | OpenAI    | [获取](https://www.byteplus.com)                                 |
+| **Vivgrid**             | `vivgrid/`        | `https://api.vivgrid.com/v1`                        | OpenAI    | [获取](https://vivgrid.com)                                      |
+| **LongCat**             | `longcat/`        | `https://api.longcat.chat/openai`                   | OpenAI    | [获取](https://longcat.chat/platform)                            |
+| **ModelScope (魔搭)**   | `modelscope/`     | `https://api-inference.modelscope.cn/v1`            | OpenAI    | [获取](https://modelscope.cn/my/tokens)                          |
+| **Antigravity**         | `antigravity/`    | Google Cloud                                        | Custom    | 仅 OAuth                                                         |
+| **GitHub Copilot**      | `github-copilot/` | `localhost:4321`                                    | gRPC      | —                                                                |
+
+#### 基础配置
+
+```json
+{
+  "model_list": [
+    {
+      "model_name": "ark-code-latest",
+      "model": "volcengine/ark-code-latest",
+      "api_key": "sk-your-api-key"
+    },
+    {
+      "model_name": "gpt-5.4",
+      "model": "openai/gpt-5.4",
+      "api_key": "sk-your-openai-key"
+    },
+    {
+      "model_name": "claude-sonnet-4.6",
+      "model": "anthropic/claude-sonnet-4.6",
+      "api_key": "sk-ant-your-key"
+    },
+    {
+      "model_name": "glm-4.7",
+      "model": "zhipu/glm-4.7",
+      "api_key": "your-zhipu-key"
+    }
+  ],
+  "agents": {
+    "defaults": {
+      "model": "gpt-5.4"
+    }
+  }
+}
+```
+
+#### 各厂商配置示例
+
+<details>
+<summary><b>OpenAI</b></summary>
+
+```json
+{
+  "model_name": "gpt-5.4",
+  "model": "openai/gpt-5.4",
+  "api_key": "sk-..."
+}
+```
+
+</details>
+
+<details>
+<summary><b>火山引擎（豆包）</b></summary>
+
+```json
+{
+  "model_name": "ark-code-latest",
+  "model": "volcengine/ark-code-latest",
+  "api_key": "sk-..."
+}
+```
+
+</details>
+
+<details>
+<summary><b>智谱 AI (GLM)</b></summary>
+
+```json
+{
+  "model_name": "glm-4.7",
+  "model": "zhipu/glm-4.7",
+  "api_key": "your-key"
+}
+```
+
+</details>
+
+<details>
+<summary><b>DeepSeek</b></summary>
+
+```json
+{
+  "model_name": "deepseek-chat",
+  "model": "deepseek/deepseek-chat",
+  "api_key": "sk-..."
+}
+```
+
+</details>
+
+<details>
+<summary><b>Anthropic</b></summary>
+
+```json
+{
+  "model_name": "claude-sonnet-4.6",
+  "model": "anthropic/claude-sonnet-4.6",
+  "api_key": "sk-ant-your-key"
+}
+```
+
+> 运行 `picoclaw auth login --provider anthropic` 粘贴 API Token。
+
+如需直连 Anthropic 原生接口（不兼容 OpenAI 格式的端点）：
+
+```json
+{
+  "model_name": "claude-opus-4-6",
+  "model": "anthropic-messages/claude-opus-4-6",
+  "api_key": "sk-ant-your-key",
+  "api_base": "https://api.anthropic.com"
+}
+```
+
+> 当端点不支持 OpenAI 兼容格式（`/v1/chat/completions`），需要 Anthropic 原生 `/v1/messages` 时使用 `anthropic-messages`。
+
+</details>
+
+<details>
+<summary><b>Ollama（本地）</b></summary>
+
+```json
+{
+  "model_name": "llama3",
+  "model": "ollama/llama3"
+}
+```
+
+</details>
+
+<details>
+<summary><b>自定义代理 / LiteLLM</b></summary>
+
+```json
+{
+  "model_name": "my-custom-model",
+  "model": "openai/custom-model",
+  "api_base": "https://my-proxy.com/v1",
+  "api_key": "sk-..."
+}
+```
+
+PicoClaw 只剥离最外层的 `litellm/` 前缀再发送请求，因此 `litellm/lite-gpt4` 发送 `lite-gpt4`，而 `litellm/openai/gpt-4o` 发送 `openai/gpt-4o`。
+
+</details>
+
+#### 负载均衡
+
+为同一模型名称配置多个端点，PicoClaw 会自动轮询：
+
+```json
+{
+  "model_list": [
+    {
+      "model_name": "gpt-5.4",
+      "model": "openai/gpt-5.4",
+      "api_base": "https://api1.example.com/v1",
+      "api_key": "sk-key1"
+    },
+    {
+      "model_name": "gpt-5.4",
+      "model": "openai/gpt-5.4",
+      "api_base": "https://api2.example.com/v1",
+      "api_key": "sk-key2"
+    }
+  ]
+}
+```
+
+#### 从旧版 `providers` 配置迁移
+
+旧版 `providers` 配置**已废弃**，但仍向后兼容。完整迁移指南见 [docs/migration/model-list-migration.md](../migration/model-list-migration.md)。
+
+### Provider 架构
+
+PicoClaw 按协议族路由提供商：
+
+- **OpenAI 兼容**：OpenRouter、Groq、智谱、vLLM 风格端点及大多数其他提供商。
+- **Anthropic**：Claude 原生 API 行为。
+- **Codex/OAuth**：OpenAI OAuth/Token 认证路由。
+
+这使运行时保持轻量，同时让接入新的 OpenAI 兼容后端基本只需配置 `api_base` + `api_key`。
+
+<details>
+<summary><b>智谱（旧版 providers 格式）</b></summary>
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picoclaw/workspace",
+      "model": "glm-4.7",
+      "max_tokens": 8192,
+      "temperature": 0.7,
+      "max_tool_iterations": 20
+    }
+  },
+  "providers": {
+    "zhipu": {
+      "api_key": "Your API Key",
+      "api_base": "https://open.bigmodel.cn/api/paas/v4"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>完整配置示例</b></summary>
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-opus-4-5"
+    }
+  },
+  "session": {
+    "dm_scope": "per-channel-peer",
+    "backlog_limit": 20
+  },
+  "providers": {
+    "openrouter": {
+      "api_key": "sk-or-v1-xxx"
+    },
+    "groq": {
+      "api_key": "gsk_xxx"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "token": "123456:ABC...",
+      "allow_from": ["123456789"]
+    }
+  },
+  "tools": {
+    "web": {
+      "duckduckgo": {
+        "enabled": true,
+        "max_results": 5
+      }
+    }
+  },
+  "heartbeat": {
+    "enabled": true,
+    "interval": 30
+  }
+}
+```
+
+</details>
+
+### 定时任务 / 提醒
+
+PicoClaw 通过 `cron` 工具支持 cron 风格的定时任务。Agent 可以设置、列出和取消在指定时间触发的提醒或周期性任务。
+
+```json
+{
+  "tools": {
+    "cron": {
+      "enabled": true,
+      "exec_timeout_minutes": 5
+    }
+  }
+}
+```
+
+定时任务在重启后持久保存，存储于 `~/.picoclaw/workspace/cron/`。
+
+### 进阶主题
+
+| 主题 | 说明 |
+| ---- | ---- |
+| [敏感数据过滤](../sensitive_data_filtering.md) | 在发送给 LLM 前，从工具结果中过滤 API 密钥和令牌 |
+| [Hook 系统](../hooks/README.zh.md) | 事件驱动 Hook：观察者、拦截器、审批 Hook |
+| [Steering](../steering.md) | 在工具调用间向运行中的 Agent 注入消息 |
+| [SubTurn](../subturn.md) | 子 Agent 协调、并发控制、生命周期管理 |
+| [上下文管理](../agent-refactor/context.md) | 上下文边界检测、主动预算检查、压缩策略 |
