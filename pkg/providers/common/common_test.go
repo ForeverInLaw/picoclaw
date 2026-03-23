@@ -1,10 +1,13 @@
 package common
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -88,6 +91,50 @@ func TestSerializeMessages_WithMedia(t *testing.T) {
 	}
 	if len(content) != 2 {
 		t.Fatalf("expected 2 content parts, got %d", len(content))
+	}
+}
+
+func TestSerializeMessages_WithInlineFileTag(t *testing.T) {
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "report.pdf")
+	pdfBytes := []byte("%PDF-1.4 test content")
+	if err := os.WriteFile(pdfPath, pdfBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := []Message{
+		{Role: "user", Content: "please read this [file:" + pdfPath + "]"},
+	}
+	result := SerializeMessages(messages)
+
+	data, _ := json.Marshal(result)
+	var msgs []map[string]any
+	json.Unmarshal(data, &msgs)
+
+	content, ok := msgs[0]["content"].([]any)
+	if !ok {
+		t.Fatalf("expected array content for file message, got %T", msgs[0]["content"])
+	}
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content parts, got %d", len(content))
+	}
+
+	textPart := content[0].(map[string]any)
+	if textPart["type"] != "text" || textPart["text"] != "please read this [file]" {
+		t.Fatalf("text part mismatch: %v", textPart)
+	}
+
+	filePart := content[1].(map[string]any)
+	if filePart["type"] != "file" {
+		t.Fatalf("expected file part, got %v", filePart["type"])
+	}
+	filePayload := filePart["file"].(map[string]any)
+	if filePayload["filename"] != "report.pdf" {
+		t.Fatalf("filename mismatch: %v", filePayload["filename"])
+	}
+	wantData := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(pdfBytes)
+	if filePayload["file_data"] != wantData {
+		t.Fatalf("file_data mismatch: got %v want %v", filePayload["file_data"], wantData)
 	}
 }
 
