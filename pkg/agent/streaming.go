@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/constants"
 )
 
@@ -35,6 +36,10 @@ type streamingSink interface {
 	Update(ctx context.Context, content string) error
 	Finalize(ctx context.Context, content string) error
 	Cancel(ctx context.Context)
+}
+
+type streamDelegateGetter interface {
+	GetStreamer(ctx context.Context, channel, chatID string) (bus.Streamer, bool)
 }
 
 func newPartialReplyUpdater(manager placeholderUpdater, channel, chatID string) *partialReplyUpdater {
@@ -127,6 +132,23 @@ func isNilPlaceholderUpdater(manager placeholderUpdater) bool {
 	default:
 		return false
 	}
+}
+
+func selectStreamingTargets(
+	ctx context.Context,
+	streamBus streamDelegateGetter,
+	manager placeholderUpdater,
+	channel, chatID string,
+) (streamingSink, *partialReplyUpdater) {
+	updater := newPartialReplyUpdater(manager, channel, chatID)
+	if updater != nil {
+		return nil, updater
+	}
+	if streamBus == nil {
+		return nil, nil
+	}
+	streamer, _ := streamBus.GetStreamer(ctx, channel, chatID)
+	return streamer, nil
 }
 
 func offerStreamingContent(ctx context.Context, streamer streamingSink, updater *partialReplyUpdater, content string) {

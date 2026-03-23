@@ -1948,12 +1948,7 @@ turnLoop:
 				!ts.opts.NoHistory &&
 				!constants.IsInternalChannel(ts.channel)
 			if streamingEnabled {
-				if al.bus != nil {
-					streamer, _ = al.bus.GetStreamer(providerCtx, ts.channel, ts.chatID)
-				}
-				if streamer == nil {
-					streamUpdater = newPartialReplyUpdater(al.channelManager, ts.channel, ts.chatID)
-				}
+				streamer, streamUpdater = selectStreamingTargets(providerCtx, al.bus, al.channelManager, ts.channel, ts.chatID)
 			}
 
 			callProvider := func(ctx context.Context, model string) (*providers.LLMResponse, error) {

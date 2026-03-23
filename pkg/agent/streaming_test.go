@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
 type fakePlaceholderUpdater struct {
@@ -24,6 +26,17 @@ type fakeStreamingSink struct {
 	updates   []string
 	finalized []string
 	canceled  int
+}
+
+type fakeStreamDelegate struct {
+	streamer bus.Streamer
+}
+
+func (f *fakeStreamDelegate) GetStreamer(ctx context.Context, channel, chatID string) (bus.Streamer, bool) {
+	if f.streamer == nil {
+		return nil, false
+	}
+	return f.streamer, true
 }
 
 func (f *fakeStreamingSink) Update(ctx context.Context, content string) error {
@@ -120,6 +133,42 @@ func TestOfferStreamingContent_PrefersStreamerOverPlaceholder(t *testing.T) {
 	}
 	if updater.lastSent != "" || updater.pending != "" {
 		t.Fatalf("placeholder updater should be unused, got lastSent=%q pending=%q", updater.lastSent, updater.pending)
+	}
+}
+
+func TestSelectStreamingTargets_PrefersPlaceholderUpdaterForTelegram(t *testing.T) {
+	streamer := &fakeStreamingSink{}
+	selectedStreamer, updater := selectStreamingTargets(
+		context.Background(),
+		&fakeStreamDelegate{streamer: streamer},
+		&fakePlaceholderUpdater{},
+		"telegram",
+		"123",
+	)
+
+	if selectedStreamer != nil {
+		t.Fatal("expected telegram to prefer placeholder updater over channel streamer")
+	}
+	if updater == nil {
+		t.Fatal("expected placeholder updater for telegram")
+	}
+}
+
+func TestSelectStreamingTargets_UsesStreamerForNonTelegram(t *testing.T) {
+	streamer := &fakeStreamingSink{}
+	selectedStreamer, updater := selectStreamingTargets(
+		context.Background(),
+		&fakeStreamDelegate{streamer: streamer},
+		&fakePlaceholderUpdater{},
+		"discord",
+		"123",
+	)
+
+	if selectedStreamer == nil {
+		t.Fatal("expected non-telegram channel to use streamer")
+	}
+	if updater != nil {
+		t.Fatal("expected no placeholder updater for non-telegram channel")
 	}
 }
 
