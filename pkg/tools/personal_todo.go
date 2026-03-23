@@ -263,13 +263,13 @@ func (t *PersonalTodoTool) respond(
 		if err := t.send(ctx, channel, chatID, prefixPersonalTodo(directPrefix, privateContent)); err != nil {
 			return ErrorResult(fmt.Sprintf(tr.deliveryFailedFmt, err)).WithError(err)
 		}
-		return SilentResult(tr.sentToUser)
+		return SilentResult(tr.sentToUser).WithTerminal()
 	case todoTelegramGroup:
 		if !privateInTelegramGroup {
 			if err := t.send(ctx, channel, chatID, groupAck); err != nil {
 				return ErrorResult(fmt.Sprintf(tr.groupAckFailedFmt, err)).WithError(err)
 			}
-			return SilentResult(tr.groupAckSent)
+			return SilentResult(tr.groupAckSent).WithTerminal()
 		}
 		if strings.TrimSpace(sender.PlatformID) == "" {
 			return ErrorResult(tr.telegramSenderRequired)
@@ -279,12 +279,12 @@ func (t *PersonalTodoTool) respond(
 			if ackErr := t.send(ctx, channel, chatID, failClosed); ackErr != nil {
 				return ErrorResult(fmt.Sprintf(tr.privateDeliveryFailedFmt, err)).WithError(err)
 			}
-			return SilentResult(tr.privateDeliveryFailedHandled)
+			return SilentResult(tr.privateDeliveryFailedHandled).WithTerminal()
 		}
 		if err := t.send(ctx, channel, chatID, groupAck); err != nil {
 			return ErrorResult(fmt.Sprintf(tr.groupAckFailedFmt, err)).WithError(err)
 		}
-		return SilentResult(tr.privatePlusAckSent)
+		return SilentResult(tr.privatePlusAckSent).WithTerminal()
 	default:
 		return ErrorResult(tr.unsupportedChat)
 	}

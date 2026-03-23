@@ -40,6 +40,9 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	if !result.Silent {
 		t.Error("Expected Silent=true for successful send")
 	}
+	if !result.Terminal {
+		t.Error("Expected Terminal=true for successful send")
+	}
 
 	// - ForLLM contains send status description
 	if result.ForLLM != "Message sent to test-channel:test-chat-id" {
@@ -86,6 +89,9 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 
 	if !result.Silent {
 		t.Error("Expected Silent=true")
+	}
+	if !result.Terminal {
+		t.Error("Expected Terminal=true")
 	}
 	if result.ForLLM != "Message sent to custom-channel:custom-chat-id" {
 		t.Errorf("Expected ForLLM 'Message sent to custom-channel:custom-chat-id', got '%s'", result.ForLLM)

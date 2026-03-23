@@ -63,6 +63,9 @@ func TestPersonalTodoTool_Execute_DMFlow(t *testing.T) {
 	if addResult.IsError {
 		t.Fatalf("add Execute() error: %s", addResult.ForLLM)
 	}
+	if !addResult.Terminal {
+		t.Fatal("expected add result to be terminal")
+	}
 	if len(*sent) != 1 || (*sent)[0].chatID != "42" || !strings.Contains((*sent)[0].content, "buy milk") {
 		t.Fatalf("unexpected sent messages after add: %#v", *sent)
 	}
@@ -73,6 +76,9 @@ func TestPersonalTodoTool_Execute_DMFlow(t *testing.T) {
 	})
 	if listResult.IsError {
 		t.Fatalf("list Execute() error: %s", listResult.ForLLM)
+	}
+	if !listResult.Terminal {
+		t.Fatal("expected list result to be terminal")
 	}
 	if len(*sent) != 2 || !strings.Contains((*sent)[1].content, "#1 buy milk") {
 		t.Fatalf("unexpected sent messages after list: %#v", *sent)
@@ -95,6 +101,9 @@ func TestPersonalTodoTool_Execute_TelegramGroupPrivacy(t *testing.T) {
 	if addResult.IsError {
 		t.Fatalf("add Execute() error: %s", addResult.ForLLM)
 	}
+	if !addResult.Terminal {
+		t.Fatal("expected add result to be terminal")
+	}
 	if len(*sent) != 1 {
 		t.Fatalf("group add should send one public ack, got %#v", *sent)
 	}
@@ -105,6 +114,9 @@ func TestPersonalTodoTool_Execute_TelegramGroupPrivacy(t *testing.T) {
 	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
 	if listResult.IsError {
 		t.Fatalf("list Execute() error: %s", listResult.ForLLM)
+	}
+	if !listResult.Terminal {
+		t.Fatal("expected list result to be terminal")
 	}
 	if len(*sent) != 3 {
 		t.Fatalf("group list should send DM + ack, got %#v", *sent)

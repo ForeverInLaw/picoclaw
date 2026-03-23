@@ -23,6 +23,11 @@ type ToolResult struct {
 	// When true, ForUser is ignored even if set.
 	Silent bool `json:"silent"`
 
+	// Terminal indicates that the tool already produced the final user-visible
+	// outcome for the current turn and the agent loop should stop after
+	// recording the result instead of continuing to call tools or the LLM.
+	Terminal bool `json:"terminal"`
+
 	// IsError indicates whether the tool execution failed.
 	// When true, the result should be treated as an error.
 	IsError bool `json:"is_error"`
@@ -165,5 +170,11 @@ func (tr *ToolResult) MarshalJSON() ([]byte, error) {
 //	result := ErrorResult("Operation failed").WithError(err)
 func (tr *ToolResult) WithError(err error) *ToolResult {
 	tr.Err = err
+	return tr
+}
+
+// WithTerminal marks the tool result as a terminal turn outcome.
+func (tr *ToolResult) WithTerminal() *ToolResult {
+	tr.Terminal = true
 	return tr
 }

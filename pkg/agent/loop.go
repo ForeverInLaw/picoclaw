@@ -1742,6 +1742,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var finalContent string
 	var lastToolResultForFallback string
 	var hadToolCalls bool
+	var terminalToolCompleted bool
 	streamProvider, providerCanStream := activeProvider.(providers.StreamingProvider)
 
 turnLoop:
@@ -2481,8 +2482,18 @@ turnLoop:
 			}
 
 			toolStart := time.Now()
+			toolExecCtx := tools.WithToolSender(
+				tools.WithToolReplyToMessageID(
+					tools.WithToolLanguage(
+						tools.WithToolPeerKind(turnCtx, ts.opts.PeerKind),
+						ts.opts.Language,
+					),
+					ts.opts.ReplyToMessageID,
+				),
+				ts.opts.Sender,
+			)
 			toolResult := ts.agent.Tools.ExecuteWithContext(
-				turnCtx,
+				toolExecCtx,
 				toolName,
 				toolArgs,
 				ts.channel,
@@ -2599,6 +2610,42 @@ turnLoop:
 				ts.recordPersistedMessage(toolResultMsg)
 			}
 
+			if toolResult.Terminal && !toolResult.IsError {
+				remaining := len(normalizedToolCalls) - i - 1
+				if remaining > 0 {
+					logger.InfoCF("agent", "Turn checkpoint: skipping remaining tools after terminal result",
+						map[string]any{
+							"agent_id":  ts.agent.ID,
+							"completed": i + 1,
+							"skipped":   remaining,
+							"tool":      toolName,
+						})
+					for j := i + 1; j < len(normalizedToolCalls); j++ {
+						skippedTC := normalizedToolCalls[j]
+						al.emitEvent(
+							EventKindToolExecSkipped,
+							ts.eventMeta("runTurn", "turn.tool.skipped"),
+							ToolExecSkippedPayload{
+								Tool:   skippedTC.Name,
+								Reason: "terminal tool result",
+							},
+						)
+						skippedMsg := providers.Message{
+							Role:       "tool",
+							Content:    "Skipped due to terminal tool result.",
+							ToolCallID: skippedTC.ID,
+						}
+						messages = append(messages, skippedMsg)
+						if !ts.opts.NoHistory {
+							ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
+							ts.recordPersistedMessage(skippedMsg)
+						}
+					}
+				}
+				terminalToolCompleted = true
+				break
+			}
+
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 				pendingMessages = append(pendingMessages, steerMsgs...)
 			}
@@ -2668,18 +2715,23 @@ turnLoop:
 		logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 			"agent_id": ts.agent.ID, "iteration": iteration,
 		})
+		if terminalToolCompleted {
+			break turnLoop
+		}
 	}
 
-	if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
-		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
-			map[string]any{
-				"agent_id":       ts.agent.ID,
-				"steering_count": len(steerMsgs),
-				"session_key":    ts.sessionKey,
-			})
-		pendingMessages = append(pendingMessages, steerMsgs...)
-		finalContent = ""
-		goto turnLoop
+	if !terminalToolCompleted {
+		if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
+			logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
+				map[string]any{
+					"agent_id":       ts.agent.ID,
+					"steering_count": len(steerMsgs),
+					"session_key":    ts.sessionKey,
+				})
+			pendingMessages = append(pendingMessages, steerMsgs...)
+			finalContent = ""
+			goto turnLoop
+		}
 	}
 
 	if ts.hardAbortRequested() {
@@ -2687,7 +2739,7 @@ turnLoop:
 		return al.abortTurn(ts)
 	}
 
-	if finalContent == "" {
+	if finalContent == "" && !terminalToolCompleted {
 		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
 			finalContent = toolExhaustionFallback(ts.opts.Language, lastToolResultForFallback, hadToolCalls)
 		} else {

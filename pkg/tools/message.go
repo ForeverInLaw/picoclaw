@@ -117,8 +117,9 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	t.mu.Unlock()
 	t.sentInRound.Store(true)
 	// Silent: user already received the message directly
-	return &ToolResult{
+	result := &ToolResult{
 		ForLLM: fmt.Sprintf("Message sent to %s:%s", channel, chatID),
 		Silent: true,
 	}
+	return result.WithTerminal()
 }

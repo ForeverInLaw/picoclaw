@@ -9,7 +9,9 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/personaltodo"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 type messageThenDoneProvider struct {
@@ -48,6 +50,50 @@ func (p *messageThenDoneProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+type personalTodoThenOverthinkProvider struct {
+	call int
+}
+
+func (p *personalTodoThenOverthinkProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	p.call++
+	if p.call == 1 {
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   "call_todo_1",
+					Type: "function",
+					Function: &providers.FunctionCall{
+						Name:      "personal_todo",
+						Arguments: `{"action":"list","scope":"open"}`,
+					},
+				},
+			},
+		}, nil
+	}
+	return &providers.LLMResponse{
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:   "call_chat_memory_1",
+				Type: "function",
+				Function: &providers.FunctionCall{
+					Name:      "chat_memory",
+					Arguments: `{"mode":"search","query":"todo list"}`,
+				},
+			},
+		},
+	}, nil
+}
+
+func (p *personalTodoThenOverthinkProvider) GetDefaultModel() string {
+	return "mock-model"
+}
+
 func newMessageDeliveryLoop(t *testing.T) (*AgentLoop, *config.Config, *bus.MessageBus) {
 	t.Helper()
 
@@ -73,6 +119,53 @@ func newMessageDeliveryLoop(t *testing.T) (*AgentLoop, *config.Config, *bus.Mess
 
 	msgBus := bus.NewMessageBus()
 	return NewAgentLoop(cfg, msgBus, &messageThenDoneProvider{}), cfg, msgBus
+}
+
+func newPersonalTodoTerminalLoop(
+	t *testing.T,
+) (*AgentLoop, *config.Config, *bus.MessageBus, *personalTodoThenOverthinkProvider) {
+	t.Helper()
+
+	tmpDir, err := os.MkdirTemp("", "agent-todo-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = tmpDir
+	cfg.Agents.Defaults.Model = "test-model"
+	cfg.Agents.Defaults.MaxTokens = 4096
+	cfg.Agents.Defaults.MaxToolIterations = 10
+	cfg.Agents.Defaults.ToolFeedback.Enabled = false
+	cfg.Tools.Message.Enabled = true
+
+	msgBus := bus.NewMessageBus()
+	provider := &personalTodoThenOverthinkProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	store, err := personaltodo.Open(filepath.Join(tmpDir, "state", "personal_todos.sqlite"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.Add(context.Background(), "telegram:42", "buy milk", "telegram", "42"); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+
+	tool, ok := al.registry.GetDefaultAgent().Tools.Get("personal_todo")
+	if !ok {
+		t.Fatal("personal_todo tool not registered")
+	}
+	todoTool, ok := tool.(*tools.PersonalTodoTool)
+	if !ok {
+		t.Fatalf("personal_todo tool has unexpected type %T", tool)
+	}
+	todoTool.SetSendCallback(func(ctx context.Context, channel, chatID, content string) error {
+		return publishToolMessage(msgBus, ctx, channel, chatID, content)
+	})
+
+	return al, cfg, msgBus, provider
 }
 
 func TestProcessMessage_PersistsDeliveredReplyInsteadOfMetaAck(t *testing.T) {
@@ -174,6 +267,49 @@ func TestProcessMessage_DoesNotPublishDuplicateFinalResponseAfterMessageTool(t *
 				t.Fatalf("expected exactly 1 outbound message, got %d: %+v", len(outbound), outbound)
 			}
 			if outbound[0].Content != "VISIBLE_REPLY" {
+				t.Fatalf("unexpected outbound content: %+v", outbound[0])
+			}
+			return
+		}
+	}
+}
+
+func TestProcessMessage_StopsAfterTerminalPersonalTodoTool(t *testing.T) {
+	al, _, msgBus, provider := newPersonalTodoTerminalLoop(t)
+
+	response, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:42",
+		Sender: bus.SenderInfo{
+			Platform:    "telegram",
+			PlatformID:  "42",
+			CanonicalID: "telegram:42",
+			DisplayName: "Tester",
+		},
+		Peer:    bus.Peer{Kind: "direct", ID: "42"},
+		ChatID:  "42",
+		Content: "какой мой список дел",
+	})
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "" {
+		t.Fatalf("expected empty final response after terminal todo tool, got %q", response)
+	}
+	if provider.call != 1 {
+		t.Fatalf("expected provider to stop after first call, got %d", provider.call)
+	}
+
+	var outbound []bus.OutboundMessage
+	for {
+		select {
+		case msg := <-msgBus.OutboundChan():
+			outbound = append(outbound, msg)
+		default:
+			if len(outbound) != 1 {
+				t.Fatalf("expected exactly 1 outbound message, got %d: %+v", len(outbound), outbound)
+			}
+			if !strings.Contains(outbound[0].Content, "#1 buy milk") {
 				t.Fatalf("unexpected outbound content: %+v", outbound[0])
 			}
 			return
