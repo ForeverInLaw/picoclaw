@@ -91,6 +91,8 @@ type Config struct {
 	Voice     VoiceConfig     `json:"voice"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
+
+	security *SecurityConfig
 }
 
 // FilterSensitiveData filters sensitive values from content before sending to LLM.
