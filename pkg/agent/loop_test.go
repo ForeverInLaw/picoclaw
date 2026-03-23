@@ -112,6 +112,38 @@ func TestSelectCandidates_UsesImageModelForImageInput(t *testing.T) {
 	}
 }
 
+func TestSelectCandidates_UsesImageModelForFileInput(t *testing.T) {
+	textProvider := &mockProvider{}
+	imageProvider := &recordingProvider{}
+	agent := &AgentInstance{
+		ID:            "main",
+		Model:         "text-alias",
+		Provider:      textProvider,
+		Candidates:    []providers.FallbackCandidate{{Provider: "openai", Model: "resolved-text-model"}},
+		ImageModel:    "vision-alias",
+		ImageProvider: imageProvider,
+		ImageCandidates: []providers.FallbackCandidate{
+			{Provider: "openai", Model: "resolved-vision-model"},
+		},
+	}
+	messages := []providers.Message{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: "please read this [file:/tmp/report.pdf]"},
+	}
+
+	gotProvider, gotCandidates, gotModel := (&AgentLoop{}).selectCandidates(agent, "please read this", messages)
+
+	if gotProvider != imageProvider {
+		t.Fatalf("provider = %T, want image provider", gotProvider)
+	}
+	if gotModel != "resolved-vision-model" {
+		t.Fatalf("model = %q, want %q", gotModel, "resolved-vision-model")
+	}
+	if len(gotCandidates) != 1 || gotCandidates[0].Model != "resolved-vision-model" {
+		t.Fatalf("candidates = %#v, want resolved-vision-model", gotCandidates)
+	}
+}
+
 func TestSameTargetReplyToMessageID_OnlyForSameChannelAndChat(t *testing.T) {
 	ctx := tools.WithToolReplyToMessageID(
 		tools.WithToolContext(context.Background(), "telegram", "6669548787"),

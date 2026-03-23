@@ -2762,8 +2762,8 @@ func (al *AgentLoop) selectCandidates(
 	userMsg string,
 	history []providers.Message,
 ) (provider providers.LLMProvider, candidates []providers.FallbackCandidate, model string) {
-	if messageHasImageInput(history) && agent.ImageProvider != nil && len(agent.ImageCandidates) > 0 {
-		logger.InfoCF("agent", "Model routing: image model selected",
+	if messageHasRichMediaInput(history) && agent.ImageProvider != nil && len(agent.ImageCandidates) > 0 {
+		logger.InfoCF("agent", "Model routing: rich media model selected",
 			map[string]any{
 				"agent_id":    agent.ID,
 				"image_model": agent.ImageModel,
@@ -2796,7 +2796,7 @@ func (al *AgentLoop) selectCandidates(
 	return agent.Provider, agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, agent.Router.LightModel())
 }
 
-func messageHasImageInput(messages []providers.Message) bool {
+func messageHasRichMediaInput(messages []providers.Message) bool {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		if msg.Role != "user" {
@@ -2806,6 +2806,9 @@ func messageHasImageInput(messages []providers.Message) bool {
 			if strings.HasPrefix(mediaRef, "data:image/") {
 				return true
 			}
+		}
+		if strings.Contains(msg.Content, "[file:") {
+			return true
 		}
 		return false
 	}
