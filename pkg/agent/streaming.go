@@ -31,6 +31,12 @@ type placeholderUpdater interface {
 	UpdatePlaceholder(ctx context.Context, channel, chatID, content string) bool
 }
 
+type streamingSink interface {
+	Update(ctx context.Context, content string) error
+	Finalize(ctx context.Context, content string) error
+	Cancel(ctx context.Context)
+}
+
 func newPartialReplyUpdater(manager placeholderUpdater, channel, chatID string) *partialReplyUpdater {
 	if isNilPlaceholderUpdater(manager) || channel != "telegram" || chatID == "" || constants.IsInternalChannel(channel) {
 		return nil
@@ -120,6 +126,32 @@ func isNilPlaceholderUpdater(manager placeholderUpdater) bool {
 		return value.IsNil()
 	default:
 		return false
+	}
+}
+
+func offerStreamingContent(ctx context.Context, streamer streamingSink, updater *partialReplyUpdater, content string) {
+	if streamer != nil {
+		_ = streamer.Update(ctx, clampStreamingPreview(content))
+		return
+	}
+	if updater != nil {
+		updater.Offer(content)
+	}
+}
+
+func finalizeStreamingContent(ctx context.Context, streamer streamingSink, updater *partialReplyUpdater, content string) error {
+	if streamer != nil {
+		return streamer.Finalize(ctx, content)
+	}
+	if updater != nil {
+		updater.Flush()
+	}
+	return nil
+}
+
+func cancelStreamingContent(ctx context.Context, streamer streamingSink) {
+	if streamer != nil {
+		streamer.Cancel(ctx)
 	}
 }
 

@@ -1730,6 +1730,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var finalContent string
 	var lastToolResultForFallback string
 	var hadToolCalls bool
+	streamProvider, providerCanStream := activeProvider.(providers.StreamingProvider)
 
 turnLoop:
 	for ts.currentIteration() < ts.agent.MaxIterations || len(pendingMessages) > 0 || func() bool {
@@ -1943,12 +1944,72 @@ turnLoop:
 			al.activeRequests.Add(1)
 			defer al.activeRequests.Done()
 
+			var streamer bus.Streamer
+			var streamUpdater *partialReplyUpdater
+			streamingEnabled := providerCanStream &&
+				streamProvider != nil &&
+				len(activeCandidates) <= 1 &&
+				!ts.opts.NoHistory &&
+				!constants.IsInternalChannel(ts.channel)
+			if streamingEnabled {
+				if al.bus != nil {
+					streamer, _ = al.bus.GetStreamer(providerCtx, ts.channel, ts.chatID)
+				}
+				if streamer == nil {
+					streamUpdater = newPartialReplyUpdater(al.channelManager, ts.channel, ts.chatID)
+				}
+			}
+
+			callProvider := func(ctx context.Context, model string) (*providers.LLMResponse, error) {
+				if streamingEnabled && (streamer != nil || streamUpdater != nil) {
+					var lastSnapshot string
+					response, err := streamProvider.ChatStream(
+						ctx,
+						messagesForCall,
+						toolDefsForCall,
+						model,
+						llmOpts,
+						func(accumulated string) {
+							contentDeltaLen := len(accumulated) - len(lastSnapshot)
+							if contentDeltaLen < 0 {
+								contentDeltaLen = len(accumulated)
+							}
+							lastSnapshot = accumulated
+							al.emitEvent(
+								EventKindLLMDelta,
+								ts.eventMeta("runTurn", "turn.llm.delta"),
+								LLMDeltaPayload{
+									ContentDeltaLen: contentDeltaLen,
+								},
+							)
+							offerStreamingContent(ctx, streamer, streamUpdater, accumulated)
+						},
+					)
+					if err != nil {
+						cancelStreamingContent(ctx, streamer)
+						return nil, err
+					}
+					if len(response.ToolCalls) > 0 {
+						cancelStreamingContent(ctx, streamer)
+					}
+					if len(response.ToolCalls) == 0 && response.Content != "" {
+						if err := finalizeStreamingContent(ctx, streamer, streamUpdater, response.Content); err != nil {
+							logger.WarnCF("agent", "Stream finalize failed", map[string]any{
+								"error": err.Error(),
+							})
+						}
+					}
+					return response, nil
+				}
+				return activeProvider.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
+			}
+
 			if len(activeCandidates) > 1 && al.fallback != nil {
 				fbResult, fbErr := al.fallback.Execute(
 					providerCtx,
 					activeCandidates,
 					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
-						return activeProvider.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
+						return callProvider(ctx, model)
 					},
 				)
 				if fbErr != nil {
@@ -1964,7 +2025,7 @@ turnLoop:
 				}
 				return fbResult.Response, nil
 			}
-			return activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts)
+			return callProvider(providerCtx, llmModel)
 		}
 
 		var response *providers.LLMResponse
