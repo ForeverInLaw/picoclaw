@@ -841,15 +841,6 @@ type ModelConfig struct {
 	secDirty     bool
 }
 
-// APIKey returns the first API key from apiKeys
-func (c *ModelConfig) APIKey() string {
-	if len(c.apiKeys) > 0 {
-		return c.apiKeys[0]
-	}
-	return ""
-}
-}
-
 // Validate checks if the ModelConfig has all required fields.
 func (c *ModelConfig) Validate() error {
 	if c.ModelName == "" {

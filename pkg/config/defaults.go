@@ -51,7 +51,7 @@ func DefaultConfig() *Config {
 						HourlySampleSize: 8,
 					},
 				},
-				SteeringMode:              "one-at-a-time",
+				SteeringMode: "one-at-a-time",
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:       true,
 					MaxArgsLength: 300,
@@ -418,7 +418,7 @@ func DefaultConfig() *Config {
 				ModelName: "MiniMax-M2.5",
 				Model:     "minimax/MiniMax-M2.5",
 				APIBase:   "https://api.minimaxi.com/v1",
-				ExtraBody:  map[string]any{"reasoning_split": true},
+				ExtraBody: map[string]any{"reasoning_split": true},
 			},
 
 			// LongCat - https://longcat.chat/platform
