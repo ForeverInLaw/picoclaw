@@ -33,3 +33,9 @@ Durable tool notes, integration quirks, and environment gotchas live here.
 - Use `fact_check` when the user explicitly asks to verify, fact-check, or check whether a claim or URL is true.
 - Prefer `fact_check` over free-form `web_search` when the task is to produce a verification verdict with sources.
 - If `fact_check` returns `mixed` or `unverified`, do not state the claim as certain.
+
+## Telegram Stickers
+
+- Use `send_sticker` for Telegram sticker sending.
+- Do not use `exec`, `curl`, `read_file`, or config inspection to send Telegram stickers.
+- If sticker sending is unavailable, skip the sticker instead of probing secrets or shelling out.

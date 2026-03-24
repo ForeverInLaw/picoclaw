@@ -241,6 +241,12 @@ func registerSharedTools(
 			})
 			agent.Tools.Register(messageTool)
 		}
+		if cfg.Tools.IsToolEnabled("send_sticker") {
+			agent.Tools.Register(tools.NewSendStickerTool(
+				cfg.Channels.Telegram.Token,
+				cfg.Channels.Telegram.BaseURL,
+			))
+		}
 		if cfg.Tools.IsToolEnabled("personal_todo") {
 			if tool, ok := agent.Tools.Get("personal_todo"); ok {
 				if todoTool, ok := tool.(*tools.PersonalTodoTool); ok {

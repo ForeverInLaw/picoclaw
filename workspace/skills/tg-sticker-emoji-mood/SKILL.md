@@ -1,6 +1,6 @@
 ---
 name: tg-sticker-emoji-mood
-description: Proactively send Telegram stickers that match the conversation mood. Use only in Telegram chats, mostly for casual banter, jokes, greetings, celebration, or light emotional support. Skip for serious technical or task-focused replies. Uses the bundled send_sticker.sh helper.
+description: Proactively send Telegram stickers that match the conversation mood. Use only in Telegram chats, mostly for casual banter, jokes, greetings, celebration, or light emotional support. Skip for serious technical or task-focused replies. Use the native send_sticker tool only.
 metadata:
   openclaw:
     emoji: "📦"
@@ -52,24 +52,24 @@ Do not use any other sticker sets unless the user explicitly updates this allowl
 
 ## How To Send
 
-Use the helper:
+Always use the native `send_sticker` tool.
 
-```bash
-bash {baseDir}/scripts/send_sticker.sh --sticker-set "supermegahype" --emoji "😂"
+Preferred call:
+
+```json
+{"sticker_set":"supermegahype","emoji":"😂"}
 ```
 
-The script resolves the current Telegram chat automatically from the exec tool environment.
+If you already know a Telegram sticker `file_id`, you may call:
 
-If you already know a file_id, use:
-
-```bash
-bash {baseDir}/scripts/send_sticker.sh --sticker "CAACAgIAAxkBA..."
+```json
+{"sticker":"CAACAgIAAxkBA..."}
 ```
 
-To inspect a sticker set:
+If you need to inspect the contents of an allowed set first, use:
 
-```bash
-bash {baseDir}/scripts/send_sticker.sh --list-set "supermegahype"
+```json
+{"list_set":"supermegahype"}
 ```
 
 ## Mood Mapping
@@ -95,6 +95,7 @@ If both seem plausible:
 
 - Only for Telegram.
 - Only use `supermegahype` and `rostikbalbes`.
+- Use `send_sticker` only. Do not use `exec`, `curl`, `read_file`, or inspect config files to send stickers.
 - Never assume the user wants stickers in serious conversations.
 - One sticker max.
 - If a set lookup fails, either try another set once or skip the sticker.
