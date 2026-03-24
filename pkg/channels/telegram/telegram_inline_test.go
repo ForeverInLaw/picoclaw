@@ -42,7 +42,7 @@ func TestBuildTelegramInlineQueryResult_UsesConfiguredPlaceholderAndButton(t *te
 	if !ok {
 		t.Fatalf("content type = %T, want *telego.InputTextMessageContent", article.InputMessageContent)
 	}
-	if content.MessageText != "Думаю..." {
+	if content.MessageText != "> inline query text\n\nДумаю..." {
 		t.Fatalf("content.MessageText = %q", content.MessageText)
 	}
 	if article.ReplyMarkup == nil || len(article.ReplyMarkup.InlineKeyboard) != 1 || len(article.ReplyMarkup.InlineKeyboard[0]) != 1 {
@@ -76,6 +76,9 @@ func TestBuildTelegramInlineInboundMessage_MarksInlineMetadata(t *testing.T) {
 	}
 	if msg.Metadata[telegramInlineMetadataKey] != "true" {
 		t.Fatalf("inline metadata marker missing: %#v", msg.Metadata)
+	}
+	if msg.Metadata[telegramInlineQueryKey] != "сделай summary" {
+		t.Fatalf("inline query metadata = %q", msg.Metadata[telegramInlineQueryKey])
 	}
 	if msg.Content != "сделай summary" {
 		t.Fatalf("msg.Content = %q", msg.Content)

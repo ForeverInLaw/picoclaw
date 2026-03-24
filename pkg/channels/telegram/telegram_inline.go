@@ -19,6 +19,7 @@ const (
 	telegramInlineChatIDPrefix = "inline:"
 	telegramInlineCallbackData = "__picoclaw_inline_ack__"
 	telegramInlineMetadataKey  = "telegram_inline"
+	telegramInlineQueryKey     = "inline_query"
 )
 
 func isTelegramInlineChatID(chatID string) bool {
@@ -60,7 +61,7 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 
 	placeholder := strings.TrimSpace(cfg.PlaceholderText)
 	if placeholder == "" {
-		placeholder = "Thinking... 💭"
+		placeholder = "Думаю..."
 	}
 
 	buttonLabel := strings.TrimSpace(cfg.ButtonLabel)
@@ -78,7 +79,7 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 		ID:    "generate",
 		Title: title,
 		InputMessageContent: &telego.InputTextMessageContent{
-			MessageText: placeholder,
+			MessageText: utils.FormatQuotedMessage(query, placeholder),
 		},
 		ReplyMarkup: &telego.InlineKeyboardMarkup{
 			InlineKeyboard: [][]telego.InlineKeyboardButton{{
@@ -106,6 +107,7 @@ func buildTelegramInlineInboundMessage(result telego.ChosenInlineResult, sender 
 		MessageID: result.ResultID,
 		Metadata: map[string]string{
 			telegramInlineMetadataKey: "true",
+			telegramInlineQueryKey:    strings.TrimSpace(result.Query),
 		},
 	}
 }
