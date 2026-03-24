@@ -83,7 +83,7 @@ func DefaultConfig() *Config {
 					Enabled:          false,
 					ResultTitle:      "Сгенерировать ответ",
 					PlaceholderText:  "Думаю...",
-					ButtonLabel:      "·",
+					ButtonLabel:      "📦",
 					CacheTimeSeconds: 0,
 					IsPersonal:       true,
 				},

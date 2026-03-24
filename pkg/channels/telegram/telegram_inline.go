@@ -66,7 +66,7 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 
 	buttonLabel := strings.TrimSpace(cfg.ButtonLabel)
 	if buttonLabel == "" {
-		buttonLabel = "·"
+		buttonLabel = "📦"
 	}
 
 	description := strings.TrimSpace(query)
