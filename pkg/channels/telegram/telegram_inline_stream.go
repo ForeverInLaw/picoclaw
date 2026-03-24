@@ -31,9 +31,12 @@ func clampTelegramInlineContent(content string) string {
 }
 
 func (c *TelegramChannel) clearInlineReplyMarkup(ctx context.Context, inlineMessageID string) error {
-	_, err := c.bot.EditMessageReplyMarkup(ctx, (&telego.EditMessageReplyMarkupParams{
+	// Omit reply_markup entirely to remove the inline keyboard.
+	// Sending an empty keyboard object can be treated by Telegram as
+	// "keep markup, but with zero rows" instead of clearing it.
+	_, err := c.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
 		InlineMessageID: inlineMessageID,
-	}).WithReplyMarkup(&telego.InlineKeyboardMarkup{}))
+	})
 	return err
 }
 
