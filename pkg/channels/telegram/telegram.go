@@ -50,7 +50,8 @@ type TelegramChannel struct {
 	cancel        context.CancelFunc
 	batchMu       sync.Mutex
 	batches       map[string]*telegramInboundBatch
-	inlineQueries sync.Map
+	inlineMu      sync.RWMutex
+	inlineQueries map[string]string
 
 	registerFunc     func(context.Context, []commands.Definition) error
 	commandRegCancel context.CancelFunc
@@ -100,11 +101,12 @@ func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChann
 	)
 
 	return &TelegramChannel{
-		BaseChannel: base,
-		bot:         bot,
-		config:      cfg,
-		chatIDs:     make(map[string]int64),
-		batches:     make(map[string]*telegramInboundBatch),
+		BaseChannel:   base,
+		bot:           bot,
+		config:        cfg,
+		chatIDs:       make(map[string]int64),
+		batches:       make(map[string]*telegramInboundBatch),
+		inlineQueries: make(map[string]string),
 	}, nil
 }
 

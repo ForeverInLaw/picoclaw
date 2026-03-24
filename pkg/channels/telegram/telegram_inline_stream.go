@@ -102,7 +102,9 @@ func (c *TelegramChannel) rememberInlineQuery(inlineMessageID, query string) {
 	if inlineMessageID == "" || query == "" {
 		return
 	}
-	c.inlineQueries.Store(inlineMessageID, query)
+	c.inlineMu.Lock()
+	c.inlineQueries[inlineMessageID] = query
+	c.inlineMu.Unlock()
 }
 
 func (c *TelegramChannel) inlineQuery(inlineMessageID string) string {
@@ -110,11 +112,9 @@ func (c *TelegramChannel) inlineQuery(inlineMessageID string) string {
 	if inlineMessageID == "" {
 		return ""
 	}
-	value, ok := c.inlineQueries.Load(inlineMessageID)
-	if !ok {
-		return ""
-	}
-	query, _ := value.(string)
+	c.inlineMu.RLock()
+	query := c.inlineQueries[inlineMessageID]
+	c.inlineMu.RUnlock()
 	return strings.TrimSpace(query)
 }
 
