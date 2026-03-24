@@ -177,6 +177,10 @@ func (c *BaseChannel) PublishOutbound(ctx context.Context, msg bus.OutboundMessa
 	return c.bus.PublishOutbound(ctx, msg)
 }
 
+func (c *BaseChannel) PublishInbound(ctx context.Context, msg bus.InboundMessage) error {
+	return c.bus.PublishInbound(ctx, msg)
+}
+
 func (c *BaseChannel) IsAllowed(senderID string) bool {
 	if len(c.allowList) == 0 {
 		return true

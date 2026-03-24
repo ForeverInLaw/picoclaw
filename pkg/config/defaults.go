@@ -79,6 +79,14 @@ func DefaultConfig() *Config {
 					Enabled: true,
 					Text:    "Thinking... 💭",
 				},
+				Inline: TelegramInlineConfig{
+					Enabled:          false,
+					ResultTitle:      "Сгенерировать ответ",
+					PlaceholderText:  "Thinking... 💭",
+					ButtonLabel:      "·",
+					CacheTimeSeconds: 0,
+					IsPersonal:       true,
+				},
 				Batching: TelegramBatchingConfig{
 					Enabled:  true,
 					WindowMS: 2000,

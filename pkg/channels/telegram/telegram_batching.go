@@ -11,7 +11,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/commands"
-	"github.com/sipeed/picoclaw/pkg/identity"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/utils"
@@ -65,14 +64,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 	}
 
 	platformID := fmt.Sprintf("%d", user.ID)
-	senderLabel := c.resolveParticipantLabel(user)
-	sender := bus.SenderInfo{
-		Platform:    "telegram",
-		PlatformID:  platformID,
-		CanonicalID: identity.BuildCanonicalID("telegram", platformID),
-		Username:    user.Username,
-		DisplayName: senderLabel,
-	}
+	sender := c.telegramSenderInfo(user)
 
 	if !c.IsAllowedSender(sender) {
 		logger.DebugCF("telegram", "Message rejected by allowlist", map[string]any{
@@ -150,7 +142,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 		"user_id":      fmt.Sprintf("%d", user.ID),
 		"username":     user.Username,
 		"first_name":   user.FirstName,
-		"sender_label": senderLabel,
+		"sender_label": sender.DisplayName,
 		"chat_label":   strings.TrimSpace(message.Chat.Title),
 		"is_group":     fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}

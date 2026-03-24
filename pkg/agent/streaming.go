@@ -141,6 +141,9 @@ func selectStreamingTargets(
 	channel, chatID string,
 ) (streamingSink, *partialReplyUpdater) {
 	updater := newPartialReplyUpdater(manager, channel, chatID)
+	if channel == "telegram" && strings.HasPrefix(strings.TrimSpace(chatID), "inline:") {
+		updater = nil
+	}
 	if updater != nil {
 		return nil, updater
 	}

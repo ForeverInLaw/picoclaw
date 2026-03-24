@@ -130,6 +130,15 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
+	bh.HandleInlineQuery(func(ctx *th.Context, query telego.InlineQuery) error {
+		return c.handleInlineQuery(ctx, query)
+	})
+	bh.HandleChosenInlineResult(func(ctx *th.Context, result telego.ChosenInlineResult) error {
+		return c.handleChosenInlineResult(ctx, result)
+	})
+	bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
+		return c.handleInlineCallbackQuery(ctx, query)
+	})
 
 	c.SetRunning(true)
 	logger.InfoCF("telegram", "Telegram bot connected", map[string]any{
@@ -236,6 +245,18 @@ func telegramMessageAuthor(message *telego.Message) string {
 func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	if !c.IsRunning() {
 		return channels.ErrNotRunning
+	}
+
+	if inlineMessageID, ok := telegramInlineMessageID(msg.ChatID); ok {
+		if err := c.editInlineMessageText(ctx, inlineMessageID, msg.Content); err != nil {
+			return fmt.Errorf("telegram inline send: %w", channels.ErrTemporary)
+		}
+		if err := c.clearInlineReplyMarkup(ctx, inlineMessageID); err != nil {
+			logger.WarnCF("telegram", "Failed to clear inline keyboard on final send", map[string]any{
+				"error": err.Error(),
+			})
+		}
+		return nil
 	}
 
 	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
@@ -417,6 +438,10 @@ func (c *TelegramChannel) StartTyping(ctx context.Context, chatID string) (func(
 
 // EditMessage implements channels.MessageEditor.
 func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messageID string, content string) error {
+	if inlineMessageID, ok := telegramInlineMessageID(chatID); ok {
+		return c.editInlineMessageText(ctx, inlineMessageID, content)
+	}
+
 	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
 	cid, _, err := parseTelegramChatID(chatID)
 	if err != nil {
@@ -782,6 +807,10 @@ func (c *TelegramChannel) stripBotMention(content string) string {
 func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (channels.Streamer, error) {
 	if !c.config.Channels.Telegram.Streaming.Enabled {
 		return nil, fmt.Errorf("streaming disabled in config")
+	}
+
+	if isTelegramInlineChatID(chatID) {
+		return c.beginInlineStream(chatID)
 	}
 
 	cid, _, err := parseTelegramChatID(chatID)

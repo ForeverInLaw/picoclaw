@@ -90,6 +90,8 @@ type processOptions struct {
 	EnableSummary           bool                // Whether to trigger summarization
 	SendResponse            bool                // Whether to send response via bus
 	NoHistory               bool                // If true, don't load session history (for heartbeat)
+	AllowedTools            []string            // Optional per-turn tool allowlist
+	DisableToolFeedback     bool                // Suppress raw tool feedback for this turn
 	SkipInitialSteeringPoll bool                // If true, skip the steering poll at loop start (used by Continue)
 }
 
@@ -642,6 +644,9 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 
 func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuationTarget, error) {
 	if msg.Channel == "system" {
+		return nil, nil
+	}
+	if isInlineMessage(msg) {
 		return nil, nil
 	}
 
@@ -1331,7 +1336,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return "", routeErr
 	}
 
-	observeChatMemoryInbound(ctx, agent, msg)
+	inlineMode := isInlineMessage(msg)
+	if !inlineMode {
+		observeChatMemoryInbound(ctx, agent, msg)
+	}
 	agent.Tools.ResetRoundDeliveries()
 
 	// Resolve session key from route, while preserving explicit agent-scoped keys.
@@ -1349,21 +1357,27 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		})
 
 	opts := processOptions{
-		SessionKey:        sessionKey,
-		Channel:           msg.Channel,
-		ChatID:            msg.ChatID,
-		PeerKind:          strings.TrimSpace(msg.Peer.Kind),
-		ChatLabel:         strings.TrimSpace(msg.Metadata["chat_label"]),
-		Language:          detectMessageLanguageHint(msg.Content),
-		Sender:            msg.Sender,
-		SenderID:          msg.SenderID,
-		SenderDisplayName: msg.Sender.DisplayName,
-		ReplyToMessageID:  msg.MessageID,
-		UserMessage:       buildConversationUserMessage(msg),
-		Media:             msg.Media,
-		DefaultResponse:   defaultResponse,
-		EnableSummary:     true,
-		SendResponse:      false,
+		SessionKey:          sessionKey,
+		Channel:             msg.Channel,
+		ChatID:              msg.ChatID,
+		PeerKind:            strings.TrimSpace(msg.Peer.Kind),
+		ChatLabel:           strings.TrimSpace(msg.Metadata["chat_label"]),
+		Language:            detectMessageLanguageHint(msg.Content),
+		Sender:              msg.Sender,
+		SenderID:            msg.SenderID,
+		SenderDisplayName:   msg.Sender.DisplayName,
+		ReplyToMessageID:    msg.MessageID,
+		UserMessage:         buildConversationUserMessage(msg),
+		Media:               msg.Media,
+		DefaultResponse:     defaultResponse,
+		EnableSummary:       !inlineMode,
+		SendResponse:        false,
+		NoHistory:           inlineMode,
+		AllowedTools:        nil,
+		DisableToolFeedback: inlineMode,
+	}
+	if inlineMode {
+		opts.AllowedTools = inlineToolAllowlist()
 	}
 
 	// context-dependent commands check their own Runtime fields and report
@@ -1517,7 +1531,9 @@ func (al *AgentLoop) runAgentLoop(
 	opts processOptions,
 ) (string, error) {
 	// Record last channel for heartbeat notifications (skip internal channels and cli)
-	if opts.Channel != "" && opts.ChatID != "" && !constants.IsInternalChannel(opts.Channel) {
+	if opts.Channel != "" && opts.ChatID != "" &&
+		!constants.IsInternalChannel(opts.Channel) &&
+		!(opts.Channel == "telegram" && strings.HasPrefix(strings.TrimSpace(opts.ChatID), "inline:")) {
 		channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
 		if err := al.RecordLastChannel(channelKey); err != nil {
 			logger.WarnCF(
@@ -1692,9 +1708,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	cfg := al.GetConfig()
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
 	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
+	allowedTools := newToolAllowlist(ts.opts.AllowedTools)
 
 	if !ts.opts.NoHistory {
-		toolDefs := ts.agent.Tools.ToProviderDefs()
+		toolDefs := ts.agent.Tools.ToProviderDefsFiltered(allowedTools)
 		if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
@@ -1838,10 +1855,13 @@ turnLoop:
 			})
 
 		gracefulTerminal, _ := ts.gracefulInterruptRequested()
-		providerToolDefs := ts.agent.Tools.ToProviderDefs()
+		providerToolDefs := ts.agent.Tools.ToProviderDefsFiltered(allowedTools)
 
 		// Native web search support (from HEAD)
 		_, hasWebSearch := ts.agent.Tools.Get("web_search")
+		if !allowedTools.Allows("web_search") {
+			hasWebSearch = false
+		}
 		useNativeSearch := al.cfg.Tools.Web.PreferNative &&
 			hasWebSearch &&
 			func() bool {
@@ -2411,7 +2431,9 @@ turnLoop:
 			)
 
 			// Send tool feedback to chat channel if enabled (from HEAD)
-			if al.cfg.Agents.Defaults.ShouldSendToolFeedback(ts.opts.PeerKind, ts.opts.SenderID) && ts.channel != "" {
+			if !ts.opts.DisableToolFeedback &&
+				al.cfg.Agents.Defaults.ShouldSendToolFeedback(ts.opts.PeerKind, ts.opts.SenderID) &&
+				ts.channel != "" {
 				feedbackPreview := utils.Truncate(
 					string(argsJSON),
 					al.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
@@ -2482,24 +2504,37 @@ turnLoop:
 			}
 
 			toolStart := time.Now()
-			toolExecCtx := tools.WithToolSender(
-				tools.WithToolReplyToMessageID(
-					tools.WithToolLanguage(
-						tools.WithToolPeerKind(turnCtx, ts.opts.PeerKind),
-						ts.opts.Language,
+			var toolResult *tools.ToolResult
+			if !allowedTools.Allows(toolName) {
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: "tool not allowed in this context",
+					},
+				)
+				toolResult = tools.ErrorResult(fmt.Sprintf("tool %q is not available in this context", toolName))
+			} else {
+				toolExecCtx := tools.WithToolSender(
+					tools.WithToolReplyToMessageID(
+						tools.WithToolLanguage(
+							tools.WithToolPeerKind(turnCtx, ts.opts.PeerKind),
+							ts.opts.Language,
+						),
+						ts.opts.ReplyToMessageID,
 					),
-					ts.opts.ReplyToMessageID,
-				),
-				ts.opts.Sender,
-			)
-			toolResult := ts.agent.Tools.ExecuteWithContext(
-				toolExecCtx,
-				toolName,
-				toolArgs,
-				ts.channel,
-				ts.chatID,
-				asyncCallback,
-			)
+					ts.opts.Sender,
+				)
+				toolResult = ts.agent.Tools.ExecuteWithContext(
+					toolExecCtx,
+					toolName,
+					toolArgs,
+					ts.channel,
+					ts.chatID,
+					asyncCallback,
+				)
+			}
 			toolDuration := time.Since(toolStart)
 
 			if ts.hardAbortRequested() {

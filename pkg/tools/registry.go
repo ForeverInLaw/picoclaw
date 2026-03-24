@@ -348,12 +348,24 @@ func (r *ToolRegistry) GetDefinitions() []map[string]any {
 // ToProviderDefs converts tool definitions to provider-compatible format.
 // This is the format expected by LLM provider APIs.
 func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
+	return r.ToProviderDefsFiltered(nil)
+}
+
+// ToProviderDefsFiltered converts tool definitions to provider-compatible
+// format, optionally constrained to an allowlist of tool names.
+func (r *ToolRegistry) ToProviderDefsFiltered(allowed map[string]struct{}) []providers.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	sorted := r.sortedToolNames()
 	definitions := make([]providers.ToolDefinition, 0, len(sorted))
 	for _, name := range sorted {
+		if len(allowed) > 0 {
+			if _, ok := allowed[name]; !ok {
+				continue
+			}
+		}
+
 		entry := r.tools[name]
 
 		if !entry.IsCore && entry.TTL <= 0 {

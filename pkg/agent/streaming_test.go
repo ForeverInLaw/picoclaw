@@ -172,6 +172,24 @@ func TestSelectStreamingTargets_UsesStreamerForNonTelegram(t *testing.T) {
 	}
 }
 
+func TestSelectStreamingTargets_UsesStreamerForTelegramInlineTarget(t *testing.T) {
+	streamer := &fakeStreamingSink{}
+	selectedStreamer, updater := selectStreamingTargets(
+		context.Background(),
+		&fakeStreamDelegate{streamer: streamer},
+		&fakePlaceholderUpdater{},
+		"telegram",
+		"inline:abc123",
+	)
+
+	if selectedStreamer == nil {
+		t.Fatal("expected telegram inline target to use streamer")
+	}
+	if updater != nil {
+		t.Fatal("expected no placeholder updater for telegram inline target")
+	}
+}
+
 func TestFinalizeStreamingContent_FallsBackToPlaceholderFlush(t *testing.T) {
 	fake := &fakePlaceholderUpdater{}
 	updater := newPartialReplyUpdater(fake, "telegram", "123")

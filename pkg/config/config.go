@@ -463,6 +463,15 @@ type StreamingConfig struct {
 	MinGrowthChars  int  `json:"min_growth_chars,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_STREAMING_MIN_GROWTH_CHARS"`
 }
 
+type TelegramInlineConfig struct {
+	Enabled          bool   `json:"enabled,omitempty"            env:"PICOCLAW_CHANNELS_TELEGRAM_INLINE_ENABLED"`
+	ResultTitle      string `json:"result_title,omitempty"       env:"PICOCLAW_CHANNELS_TELEGRAM_INLINE_RESULT_TITLE"`
+	PlaceholderText  string `json:"placeholder_text,omitempty"   env:"PICOCLAW_CHANNELS_TELEGRAM_INLINE_PLACEHOLDER_TEXT"`
+	ButtonLabel      string `json:"button_label,omitempty"       env:"PICOCLAW_CHANNELS_TELEGRAM_INLINE_BUTTON_LABEL"`
+	CacheTimeSeconds int    `json:"cache_time_seconds,omitempty" env:"PICOCLAW_CHANNELS_TELEGRAM_INLINE_CACHE_TIME_SECONDS"`
+	IsPersonal       bool   `json:"is_personal,omitempty"        env:"PICOCLAW_CHANNELS_TELEGRAM_INLINE_IS_PERSONAL"`
+}
+
 // TelegramBatchingConfig controls sliding-window batching of inbound Telegram messages.
 type TelegramBatchingConfig struct {
 	Enabled  bool `json:"enabled,omitempty"   env:"PICOCLAW_CHANNELS_TELEGRAM_BATCHING_ENABLED"`
@@ -489,6 +498,7 @@ type TelegramConfig struct {
 	GroupTrigger       GroupTriggerConfig     `json:"group_trigger,omitempty"`
 	Typing             TypingConfig           `json:"typing,omitempty"`
 	Placeholder        PlaceholderConfig      `json:"placeholder,omitempty"`
+	Inline             TelegramInlineConfig   `json:"inline,omitempty"`
 	Batching           TelegramBatchingConfig `json:"batching,omitempty"`
 	Streaming          StreamingConfig        `json:"streaming,omitempty"`
 	ReasoningChannelID string                 `json:"reasoning_channel_id"    env:"PICOCLAW_CHANNELS_TELEGRAM_REASONING_CHANNEL_ID"`
