@@ -23,6 +23,7 @@ func (i *Index) ListObservationsMissingEmbeddings(
 	ctx context.Context,
 	modelName string,
 	limit int,
+	minContentChars int,
 ) ([]struct {
 	ID      int64
 	Content string
@@ -33,15 +34,20 @@ func (i *Index) ListObservationsMissingEmbeddings(
 	if limit <= 0 {
 		limit = 32
 	}
+	if minContentChars < 0 {
+		minContentChars = 0
+	}
 	rows, err := i.db.QueryContext(
 		ctx,
 		`SELECT o.id, o.content
 		 FROM observations o
 		 LEFT JOIN observation_embeddings e ON e.observation_id = o.id AND e.model_name = ?
 		 WHERE e.observation_id IS NULL
+		   AND LENGTH(TRIM(o.content)) >= ?
 		 ORDER BY o.created_at_ms DESC
 		 LIMIT ?`,
 		modelName,
+		minContentChars,
 		limit,
 	)
 	if err != nil {

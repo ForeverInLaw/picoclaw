@@ -371,7 +371,7 @@ func TestService_StartupBackfill_PopulatesMissingEmbeddingsInBackground(t *testi
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		missing, err := idx.ListObservationsMissingEmbeddings(t.Context(), embedder.ModelName(), 8)
+		missing, err := idx.ListObservationsMissingEmbeddings(t.Context(), embedder.ModelName(), 8, embedder.MinContentChars())
 		if err != nil {
 			t.Fatalf("ListObservationsMissingEmbeddings() error: %v", err)
 		}
@@ -389,4 +389,123 @@ func TestService_StartupBackfill_PopulatesMissingEmbeddingsInBackground(t *testi
 	}
 
 	t.Fatal("startup backfill did not complete before deadline")
+}
+
+func TestService_StartupBackfill_SkipsShortRecentMessagesAndContinues(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		resp := map[string]any{"data": make([]map[string]any, 0, len(payload.Input))}
+		for range payload.Input {
+			resp["data"] = append(resp["data"].([]map[string]any), map[string]any{"embedding": []float32{1, 0, 0}})
+		}
+		var buf bytes.Buffer
+		if err := json.NewEncoder(&buf).Encode(resp); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer server.Close()
+
+	idx, err := memoryindex.Open(t.TempDir()+"\\index.sqlite", memoryindex.Config{
+		MaxResults:      5,
+		MaxSnippetChars: 280,
+		MinQueryChars:   3,
+	})
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer idx.Close()
+
+	now := time.Now().UTC()
+	observations := []memoryindex.Observation{
+		{
+			SessionKey: "agent:main:telegram:group:-1001",
+			Channel:    "telegram",
+			ChatID:     "-1001",
+			PeerKind:   "group",
+			ChatLabel:  "Тестовая группа",
+			Role:       "user",
+			SenderID:   "telegram:42",
+			Content:    "ok",
+			CreatedAt:  now.Add(-1 * time.Minute),
+		},
+		{
+			SessionKey: "agent:main:telegram:group:-1001",
+			Channel:    "telegram",
+			ChatID:     "-1001",
+			PeerKind:   "group",
+			ChatLabel:  "Тестовая группа",
+			Role:       "user",
+			SenderID:   "telegram:42",
+			Content:    "yo",
+			CreatedAt:  now.Add(-2 * time.Minute),
+		},
+		{
+			SessionKey: "agent:main:telegram:group:-1001",
+			Channel:    "telegram",
+			ChatID:     "-1001",
+			PeerKind:   "group",
+			ChatLabel:  "Тестовая группа",
+			Role:       "user",
+			SenderID:   "telegram:42",
+			Content:    "this older message is long enough for embeddings",
+			CreatedAt:  now.Add(-3 * time.Minute),
+		},
+	}
+	for _, obs := range observations {
+		if err := idx.AddObservation(t.Context(), obs); err != nil {
+			t.Fatalf("AddObservation() error: %v", err)
+		}
+	}
+
+	embedder := NewEmbedder(&config.ModelConfig{
+		ModelName: "embedder",
+		Model:     "nvidia/llama-nemotron-embed-1b-v2",
+		APIBase:   server.URL,
+		APIKey:    "test-key",
+	}, config.MemoryEmbeddingConfig{
+		Enabled:                true,
+		MaxBatch:               8,
+		MinContentChars:        24,
+		QueryInputType:         "query",
+		DocumentInputType:      "passage",
+		StartupBackfillEnabled: true,
+	})
+
+	service := New(idx, config.MemoryIndexConfig{
+		Enabled: true,
+		Embeddings: config.MemoryEmbeddingConfig{
+			Enabled:                true,
+			ModelName:              "embedder",
+			MaxBatch:               8,
+			MinContentChars:        24,
+			QueryInputType:         "query",
+			DocumentInputType:      "passage",
+			StartupBackfillEnabled: true,
+		},
+	}, embedder)
+	service.backfillRetryDelay = 10 * time.Millisecond
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, err := idx.LoadObservationEmbeddings(t.Context(), []memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}}, embedder.ModelName(), time.Time{}, time.Time{}, 8)
+		if err != nil {
+			t.Fatalf("LoadObservationEmbeddings() error: %v", err)
+		}
+		if len(rows) == 1 {
+			if rows[0].Hit.Content != "this older message is long enough for embeddings" {
+				t.Fatalf("embedded wrong observation: %#v", rows[0].Hit.Content)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatal("startup backfill did not reach older eligible observations")
 }

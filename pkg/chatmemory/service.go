@@ -361,16 +361,18 @@ func (s *Service) ensureEmbeddingsBatch(ctx context.Context) (int, error) {
 	if s.embedder == nil {
 		return 0, nil
 	}
-	missing, err := s.index.ListObservationsMissingEmbeddings(ctx, s.embedder.ModelName(), max(16, s.embedder.MaxBatch()))
+	missing, err := s.index.ListObservationsMissingEmbeddings(
+		ctx,
+		s.embedder.ModelName(),
+		max(16, s.embedder.MaxBatch()),
+		s.embedder.MinContentChars(),
+	)
 	if err != nil || len(missing) == 0 {
 		return 0, err
 	}
 	inputs := make([]string, 0, len(missing))
 	ids := make([]int64, 0, len(missing))
 	for _, row := range missing {
-		if len([]rune(strings.TrimSpace(row.Content))) < s.embedder.MinContentChars() {
-			continue
-		}
 		ids = append(ids, row.ID)
 		inputs = append(inputs, row.Content)
 	}
