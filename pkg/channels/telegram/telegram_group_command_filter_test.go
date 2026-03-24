@@ -324,6 +324,90 @@ func TestHandleMessage_GroupMentionOnly_ReplyToHuman_ObservedOnly(t *testing.T) 
 	}
 }
 
+func TestHandleMessage_GroupMentionOnly_ReplyToOtherBotWithoutUsername_ObservedOnly(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "ответ не нашему боту",
+		MessageID: 48,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        9,
+			FirstName: "Carol",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 41,
+			From: &telego.User{
+				ID:    999,
+				IsBot: true,
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Microsecond)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for passive group message to be forwarded")
+	case inbound := <-messageBus.InboundChan():
+		if got := inbound.Metadata["observe_only"]; got != "true" {
+			t.Fatalf("observe_only=%q want=true", got)
+		}
+		if got := inbound.Metadata["trigger_reason"]; got != "observe_only" {
+			t.Fatalf("trigger_reason=%q want=%q", got, "observe_only")
+		}
+	}
+}
+
+func TestHandleMessage_GroupMentionOnly_ReplyToBot_SetsTriggerReason(t *testing.T) {
+	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
+
+	msg := &telego.Message{
+		Text:      "без упоминания, но ответ боту",
+		MessageID: 49,
+		Chat: telego.Chat{
+			ID:   123,
+			Type: "group",
+		},
+		From: &telego.User{
+			ID:        8,
+			FirstName: "Bob",
+		},
+		ReplyToMessage: &telego.Message{
+			MessageID: 42,
+			From: &telego.User{
+				ID:       1,
+				Username: "testbot",
+				IsBot:    true,
+			},
+		},
+	}
+
+	if err := ch.handleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleMessage error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Microsecond)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for reply-to-bot message to be forwarded")
+	case inbound := <-messageBus.InboundChan():
+		if got := inbound.Metadata["trigger_reason"]; got != "reply_to_bot" {
+			t.Fatalf("trigger_reason=%q want=%q", got, "reply_to_bot")
+		}
+	}
+}
+
 func TestHandleMessage_GroupMentionReply_IncludesQuotedContext(t *testing.T) {
 	ch, messageBus := newGroupMentionOnlyChannel(t, "testbot")
 

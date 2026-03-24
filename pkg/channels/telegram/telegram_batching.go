@@ -99,11 +99,20 @@ func (c *TelegramChannel) buildInboundCandidate(
 	}
 
 	observeOnly := false
+	triggerReason := "none"
 	if message.Chat.Type != "private" {
 		isMentioned := c.isBotMentioned(message)
 		isReplyToBot := c.isReplyToBot(message)
 		isNameTriggered := c.isBotNameTriggered(message)
 		isAddressedToBot := isMentioned || isReplyToBot || isNameTriggered
+		switch {
+		case isMentioned:
+			triggerReason = "mention"
+		case isReplyToBot:
+			triggerReason = "reply_to_bot"
+		case isNameTriggered:
+			triggerReason = "name_trigger"
+		}
 		if isMentioned {
 			content = c.stripBotMention(content)
 		}
@@ -112,6 +121,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 			content = cleaned
 		} else {
 			observeOnly = true
+			triggerReason = "observe_only"
 		}
 	}
 	replyQuotedBody, replyQuotedMedia := c.buildQuotedReplyPayload(ctx, message, storeMedia)
@@ -145,6 +155,9 @@ func (c *TelegramChannel) buildInboundCandidate(
 		"sender_label": sender.DisplayName,
 		"chat_label":   strings.TrimSpace(message.Chat.Title),
 		"is_group":     fmt.Sprintf("%t", message.Chat.Type != "private"),
+	}
+	if message.Chat.Type != "private" {
+		metadata["trigger_reason"] = triggerReason
 	}
 	if observeOnly {
 		metadata["observe_only"] = "true"

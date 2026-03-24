@@ -189,17 +189,20 @@ func (c *TelegramChannel) isReplyToBot(message *telego.Message) bool {
 		return false
 	}
 
-	botUsername := ""
-	if c.bot != nil {
-		botUsername = c.bot.Username()
+	if c.bot == nil {
+		return false
 	}
 
-	switch {
-	case botUsername != "" && replyAuthor.Username != "":
-		return strings.EqualFold(replyAuthor.Username, botUsername)
-	default:
-		return true
+	if botID := c.bot.ID(); botID != 0 && replyAuthor.ID != 0 {
+		return replyAuthor.ID == botID
 	}
+
+	botUsername := c.bot.Username()
+	if botUsername != "" && replyAuthor.Username != "" {
+		return strings.EqualFold(replyAuthor.Username, botUsername)
+	}
+
+	return false
 }
 
 func prependQuotedTelegramReply(message *telego.Message, quotedBody, content string) string {
