@@ -8,9 +8,9 @@ metadata:
 
 # Telegram Sticker Mood
 
-Use this skill only when replying in Telegram and the conversation would genuinely benefit from a sticker.
+Use this skill only when replying in Telegram and the conversation would benefit from a sticker.
 
-The goal is to make the bot feel more expressive, not noisy.
+The goal is to make the bot feel expressive and alive. Prefer sending a sticker in casual chat unless the conversation is clearly serious or task-focused.
 
 ## When To Use
 
@@ -20,16 +20,16 @@ Use a sticker when at least one is true:
 - you are greeting or saying goodbye
 - you just completed something and want a small celebratory reaction
 - the user is mildly frustrated and a soft supportive sticker fits
+- the exchange is short, casual, or emotional and a sticker would make the response feel more natural
 
 Do not use a sticker when:
 - the user asked a serious technical question
 - the user is debugging, asking for code changes, or expects focus
 - the conversation is formal, tense, or business-like
-- you already sent a sticker recently and the vibe has not changed
 - the user asked you to stop
 
 Default rate:
-- casual chat: occasional, not constant
+- casual chat: frequent; default to using a sticker unless there is a reason not to
 - serious/tool-heavy chat: almost never
 
 ## Order
@@ -57,7 +57,7 @@ Always use the native `send_sticker` tool.
 Preferred call:
 
 ```json
-{"sticker_set":"supermegahype","emoji":"😂"}
+{"sticker_set":"rostikbalbes","emoji":"😂"}
 ```
 
 If you already know a Telegram sticker `file_id`, you may call:
@@ -84,12 +84,12 @@ If you need to inspect the contents of an allowed set first, use:
 ## Pack Preferences
 
 Use these packs only:
-- `supermegahype` for hype, jokes, celebration, chaos, silly reactions
-- `rostikbalbes` for chill, deadpan, awkward, confused, or everyday reactions
+- `rostikbalbes` as the default and preferred pack for most situations
+- `supermegahype` only when you want a louder, more chaotic, more meme-heavy reaction
 
 If both seem plausible:
-- prefer `supermegahype` for louder/funnier energy
-- prefer `rostikbalbes` for dryer/quieter energy
+- prefer `rostikbalbes` by default
+- use `supermegahype` only for explicitly loud, celebratory, or absurd energy
 
 ## Rules
 
@@ -98,5 +98,6 @@ If both seem plausible:
 - Use `send_sticker` only. Do not use `exec`, `curl`, `read_file`, or inspect config files to send stickers.
 - Never assume the user wants stickers in serious conversations.
 - One sticker max.
+- Prefer `rostikbalbes` unless `supermegahype` is clearly a better fit.
 - If a set lookup fails, either try another set once or skip the sticker.
 - Do not turn the conversation into sticker spam.
