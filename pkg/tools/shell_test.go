@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -681,5 +683,45 @@ func TestShellTool_URLBypassPrevented(t *testing.T) {
 		if !result.IsError || !strings.Contains(result.ForLLM, "path outside working dir") {
 			t.Errorf("bypass attempt should be blocked: %q\n  got: %s", cmd, result.ForLLM)
 		}
+	}
+}
+
+func TestShellTool_InjectsToolContextEnv(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+
+	ctx := WithToolSender(
+		WithToolReplyToMessageID(
+			WithToolLanguage(
+				WithToolPeerKind(
+					WithToolContext(context.Background(), "telegram", "-100123"),
+					"group",
+				),
+				"ru",
+			),
+			"777",
+		),
+		bus.SenderInfo{
+			CanonicalID: "telegram:42",
+			DisplayName: "Сер",
+			Username:    "nevermorelove",
+		},
+	)
+
+	command := "printf '%s|%s|%s|%s|%s|%s|%s|%s' \"$PICOCLAW_CHANNEL\" \"$PICOCLAW_CHAT_ID\" \"$PICOCLAW_PEER_KIND\" \"$PICOCLAW_LANGUAGE\" \"$PICOCLAW_REPLY_TO_MESSAGE_ID\" \"$PICOCLAW_SENDER_ID\" \"$PICOCLAW_SENDER_USERNAME\" \"$TELEGRAM_CHAT_ID\""
+	if runtime.GOOS == "windows" {
+		command = "Write-Output \"$env:PICOCLAW_CHANNEL|$env:PICOCLAW_CHAT_ID|$env:PICOCLAW_PEER_KIND|$env:PICOCLAW_LANGUAGE|$env:PICOCLAW_REPLY_TO_MESSAGE_ID|$env:PICOCLAW_SENDER_ID|$env:PICOCLAW_SENDER_USERNAME|$env:TELEGRAM_CHAT_ID\""
+	}
+
+	result := tool.Execute(ctx, map[string]any{"command": command})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+
+	want := "telegram|-100123|group|ru|777|telegram:42|nevermorelove|-100123"
+	if !strings.Contains(result.ForUser, want) {
+		t.Fatalf("expected env payload %q, got: %s", want, result.ForUser)
 	}
 }

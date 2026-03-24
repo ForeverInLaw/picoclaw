@@ -272,6 +272,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	cmd.Env = buildExecEnv(ctx)
 
 	prepareCommandForTermination(cmd)
 
@@ -359,6 +360,47 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		ForUser: output,
 		IsError: false,
 	}
+}
+
+func buildExecEnv(ctx context.Context) []string {
+	env := os.Environ()
+
+	channel := strings.TrimSpace(ToolChannel(ctx))
+	chatID := strings.TrimSpace(ToolChatID(ctx))
+	peerKind := strings.TrimSpace(ToolPeerKind(ctx))
+	language := strings.TrimSpace(ToolLanguage(ctx))
+	replyToID := strings.TrimSpace(ToolReplyToMessageID(ctx))
+	sender := ToolSender(ctx)
+
+	if channel != "" {
+		env = append(env, "PICOCLAW_CHANNEL="+channel)
+	}
+	if chatID != "" {
+		env = append(env, "PICOCLAW_CHAT_ID="+chatID)
+	}
+	if peerKind != "" {
+		env = append(env, "PICOCLAW_PEER_KIND="+peerKind)
+	}
+	if language != "" {
+		env = append(env, "PICOCLAW_LANGUAGE="+language)
+	}
+	if replyToID != "" {
+		env = append(env, "PICOCLAW_REPLY_TO_MESSAGE_ID="+replyToID)
+	}
+	if sender.CanonicalID != "" {
+		env = append(env, "PICOCLAW_SENDER_ID="+sender.CanonicalID)
+	}
+	if strings.TrimSpace(sender.DisplayName) != "" {
+		env = append(env, "PICOCLAW_SENDER_NAME="+sender.DisplayName)
+	}
+	if strings.TrimSpace(sender.Username) != "" {
+		env = append(env, "PICOCLAW_SENDER_USERNAME="+sender.Username)
+	}
+	if channel == "telegram" && chatID != "" {
+		env = append(env, "TELEGRAM_CHAT_ID="+chatID)
+	}
+
+	return env
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {
