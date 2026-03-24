@@ -54,6 +54,7 @@ dist/
 
 # Test telegram integration
 cmd/telegram/
+pkg/agent/state/
 
 # Keep embedded backend dist directory placeholder in VCS
 !web/backend/dist/
