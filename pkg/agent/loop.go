@@ -111,6 +111,7 @@ const (
 	metadataKeyTeamID         = "team_id"
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
+	requeueYieldDelay         = 10 * time.Millisecond
 )
 
 func NewAgentLoop(
@@ -1457,13 +1458,19 @@ func (al *AgentLoop) requeueInboundMessage(msg bus.InboundMessage) error {
 	if al.bus == nil {
 		return nil
 	}
-	pubCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	return al.bus.PublishOutbound(pubCtx, bus.OutboundMessage{
-		Channel: msg.Channel,
-		ChatID:  msg.ChatID,
-		Content: msg.Content,
-	})
+	go func(requeued bus.InboundMessage) {
+		time.Sleep(requeueYieldDelay)
+		pubCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := al.bus.PublishInbound(pubCtx, requeued); err != nil {
+			logger.WarnCF("agent", "Failed to publish requeued inbound message", map[string]any{
+				"error":   err.Error(),
+				"channel": requeued.Channel,
+				"chat_id": requeued.ChatID,
+			})
+		}
+	}(msg)
+	return nil
 }
 
 func (al *AgentLoop) processSystemMessage(

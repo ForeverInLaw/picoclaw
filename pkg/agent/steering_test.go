@@ -421,9 +421,15 @@ func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
 	}
 
 	select {
+	case unexpected := <-msgBus.OutboundChan():
+		t.Fatalf("expected no outbound echo when requeueing non-steering message, got %+v", unexpected)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	select {
 	case <-ctx.Done():
-		t.Fatalf("timeout waiting for requeued message on outbound bus")
-	case requeued := <-msgBus.OutboundChan():
+		t.Fatalf("timeout waiting for requeued message on inbound bus")
+	case requeued := <-msgBus.InboundChan():
 		if requeued.Channel != otherMsg.Channel || requeued.ChatID != otherMsg.ChatID ||
 			requeued.Content != otherMsg.Content {
 			t.Fatalf("requeued message mismatch: got %+v want %+v", requeued, otherMsg)
