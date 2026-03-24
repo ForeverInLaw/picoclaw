@@ -134,6 +134,58 @@ func TestReleaseAllIdempotent(t *testing.T) {
 	}
 }
 
+func TestReleaseAll_ForgetOnlyDoesNotDeleteUnderlyingFile(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileMediaStore()
+
+	path := createTempFile(t, dir, "borrowed.jpg")
+	ref, err := store.Store(path, MediaMeta{
+		Source:        "tool:send_file",
+		CleanupPolicy: CleanupPolicyForgetOnly,
+	}, "scope1")
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	if err := store.ReleaseAll("scope1"); err != nil {
+		t.Fatalf("ReleaseAll failed: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("borrowed file should still exist after ReleaseAll: %v", err)
+	}
+	if _, err := store.Resolve(ref); err == nil {
+		t.Fatal("Resolve should fail after ReleaseAll")
+	}
+}
+
+func TestReleaseAll_SharedPathDeletesOnlyAfterFinalDeleteEligibleRef(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileMediaStore()
+
+	path := createTempFile(t, dir, "shared.jpg")
+	if _, err := store.Store(path, MediaMeta{Source: "telegram"}, "scopeA"); err != nil {
+		t.Fatalf("Store(scopeA) failed: %v", err)
+	}
+	if _, err := store.Store(path, MediaMeta{Source: "telegram"}, "scopeB"); err != nil {
+		t.Fatalf("Store(scopeB) failed: %v", err)
+	}
+
+	if err := store.ReleaseAll("scopeA"); err != nil {
+		t.Fatalf("ReleaseAll(scopeA) failed: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("shared file should survive until final ref: %v", err)
+	}
+
+	if err := store.ReleaseAll("scopeB"); err != nil {
+		t.Fatalf("ReleaseAll(scopeB) failed: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("shared file should be deleted after final ref, stat err: %v", err)
+	}
+}
+
 func TestReleaseAllCleansMappingsIfRefsMissing(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileMediaStore()

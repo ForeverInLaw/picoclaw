@@ -106,6 +106,29 @@ func TestSendFileTool_Success(t *testing.T) {
 	}
 }
 
+func TestSendFileTool_SuccessDoesNotDeleteOriginalFileOnRelease(t *testing.T) {
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "photo.png")
+	if err := os.WriteFile(testFile, []byte("fake png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := media.NewFileMediaStore()
+	tool := NewSendFileTool(dir, false, 0, store)
+	tool.SetContext("feishu", "chat123")
+
+	result := tool.Execute(context.Background(), map[string]any{"path": testFile})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if err := store.ReleaseAll("tool:send_file:feishu:chat123"); err != nil {
+		t.Fatalf("ReleaseAll failed: %v", err)
+	}
+	if _, err := os.Stat(testFile); err != nil {
+		t.Fatalf("send_file should not delete original file, stat error: %v", err)
+	}
+}
+
 func TestSendFileTool_CustomFilename(t *testing.T) {
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "img.jpg")
