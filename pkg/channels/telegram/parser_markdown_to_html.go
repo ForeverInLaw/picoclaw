@@ -16,9 +16,10 @@ func markdownToTelegramHTML(text string) string {
 	inlineCodes := extractInlineCodes(text)
 	text = inlineCodes.text
 
-	text = reHeading.ReplaceAllString(text, "$1")
+	blockquotes := extractBlockquotes(text)
+	text = blockquotes.text
 
-	text = reBlockquote.ReplaceAllString(text, "$1")
+	text = reHeading.ReplaceAllString(text, "$1")
 
 	text = escapeHTML(text)
 
@@ -51,6 +52,16 @@ func markdownToTelegramHTML(text string) string {
 			text,
 			fmt.Sprintf("\x00CB%d\x00", i),
 			fmt.Sprintf("<pre><code>%s</code></pre>", escaped),
+		)
+	}
+
+	for i, quote := range blockquotes.quotes {
+		escaped := escapeHTML(quote)
+		escaped = strings.ReplaceAll(escaped, "\n", "<br>")
+		text = strings.ReplaceAll(
+			text,
+			fmt.Sprintf("\x00BQ%d\x00", i),
+			fmt.Sprintf("<blockquote>%s</blockquote>", escaped),
 		)
 	}
 
@@ -101,6 +112,32 @@ func extractInlineCodes(text string) inlineCodeMatch {
 	})
 
 	return inlineCodeMatch{text: text, codes: codes}
+}
+
+type blockquoteMatch struct {
+	text   string
+	quotes []string
+}
+
+func extractBlockquotes(text string) blockquoteMatch {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	quotes := make([]string, 0)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, ">") {
+			continue
+		}
+		content := strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))
+		placeholder := fmt.Sprintf("\x00BQ%d\x00", len(quotes))
+		quotes = append(quotes, content)
+		lines[i] = placeholder
+	}
+
+	return blockquoteMatch{
+		text:   strings.Join(lines, "\n"),
+		quotes: quotes,
+	}
 }
 
 func escapeHTML(text string) string {

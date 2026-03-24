@@ -11,7 +11,6 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 const telegramInlineMessageLimit = 4096
@@ -40,11 +39,12 @@ func (c *TelegramChannel) clearInlineReplyMarkup(ctx context.Context, inlineMess
 
 func (c *TelegramChannel) editInlineMessageText(ctx context.Context, inlineMessageID, content string) error {
 	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
-	clamped := c.renderInlineMessageContent(inlineMessageID, content)
+	clamped := clampTelegramInlineContent(content)
+	parsedContent := parseContent(clamped, useMarkdownV2)
 
 	params := &telego.EditMessageTextParams{
 		InlineMessageID: inlineMessageID,
-		Text:            clamped,
+		Text:            parsedContent,
 	}
 	params.ParseMode = telegramParseMode(useMarkdownV2)
 
@@ -71,61 +71,6 @@ func telegramParseMode(useMarkdownV2 bool) string {
 		return telego.ModeMarkdownV2
 	}
 	return telego.ModeHTML
-}
-
-func renderTelegramInlineQuotedBody(query, body string, useMarkdownV2 bool) string {
-	body = strings.TrimSpace(body)
-	query = strings.TrimSpace(query)
-	if query == "" {
-		if useMarkdownV2 {
-			return markdownToTelegramMarkdownV2(body)
-		}
-		return markdownToTelegramHTML(body)
-	}
-
-	if useMarkdownV2 {
-		return utils.FormatQuotedMessage(query, markdownToTelegramMarkdownV2(body))
-	}
-
-	escapedQuery := escapeHTML(strings.ReplaceAll(strings.ReplaceAll(query, "\r\n", "\n"), "\r", "\n"))
-	escapedQuery = strings.ReplaceAll(escapedQuery, "\n", "<br>")
-	parsedBody := markdownToTelegramHTML(body)
-	if parsedBody == "" {
-		return "<blockquote>" + escapedQuery + "</blockquote>"
-	}
-	return "<blockquote>" + escapedQuery + "</blockquote>\n\n" + parsedBody
-}
-
-func (c *TelegramChannel) rememberInlineQuery(inlineMessageID, query string) {
-	inlineMessageID = strings.TrimSpace(inlineMessageID)
-	query = strings.TrimSpace(query)
-	if inlineMessageID == "" || query == "" {
-		return
-	}
-	c.inlineMu.Lock()
-	c.inlineQueries[inlineMessageID] = query
-	c.inlineMu.Unlock()
-}
-
-func (c *TelegramChannel) inlineQuery(inlineMessageID string) string {
-	inlineMessageID = strings.TrimSpace(inlineMessageID)
-	if inlineMessageID == "" {
-		return ""
-	}
-	c.inlineMu.RLock()
-	query := c.inlineQueries[inlineMessageID]
-	c.inlineMu.RUnlock()
-	return strings.TrimSpace(query)
-}
-
-func (c *TelegramChannel) renderInlineMessageContent(inlineMessageID, body string) string {
-	return clampTelegramInlineContent(
-		renderTelegramInlineQuotedBody(
-			c.inlineQuery(inlineMessageID),
-			body,
-			c.config.Channels.Telegram.UseMarkdownV2,
-		),
-	)
 }
 
 type telegramInlineStreamer struct {

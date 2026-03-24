@@ -78,6 +78,7 @@ type processOptions struct {
 	PeerKind                string              // Peer kind for memory/chat routing
 	ChatLabel               string              // Human-readable chat label
 	Language                string              // Detected language hint for user-facing tool responses
+	ResponseQuote           string              // Optional quote block source shown above assistant output
 	Sender                  bus.SenderInfo      // Structured sender info for tools
 	SenderID                string              // Current sender ID for dynamic context
 	SenderDisplayName       string              // Current sender display name for dynamic context
@@ -1363,6 +1364,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		PeerKind:            strings.TrimSpace(msg.Peer.Kind),
 		ChatLabel:           strings.TrimSpace(msg.Metadata["chat_label"]),
 		Language:            detectMessageLanguageHint(msg.Content),
+		ResponseQuote:       inlineResponseQuote(msg),
 		Sender:              msg.Sender,
 		SenderID:            msg.SenderID,
 		SenderDisplayName:   msg.Sender.DisplayName,
@@ -2011,7 +2013,7 @@ turnLoop:
 									ContentDeltaLen: contentDeltaLen,
 								},
 							)
-							offerStreamingContent(ctx, streamer, streamUpdater, accumulated)
+							offerStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, accumulated))
 						},
 					)
 					if err != nil {
@@ -2022,7 +2024,7 @@ turnLoop:
 						cancelStreamingContent(ctx, streamer)
 					}
 					if len(response.ToolCalls) == 0 && response.Content != "" {
-						if err := finalizeStreamingContent(ctx, streamer, streamUpdater, response.Content); err != nil {
+						if err := finalizeStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, response.Content)); err != nil {
 							logger.WarnCF("agent", "Stream finalize failed", map[string]any{
 								"error": err.Error(),
 							})
@@ -2267,7 +2269,7 @@ turnLoop:
 				pendingMessages = append(pendingMessages, steerMsgs...)
 				continue
 			}
-			finalContent = responseContent
+			finalContent = formatInlineResponse(ts.opts.ResponseQuote, responseContent)
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 				map[string]any{
 					"agent_id":      ts.agent.ID,

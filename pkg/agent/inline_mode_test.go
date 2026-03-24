@@ -59,3 +59,22 @@ func TestInlineToolAllowlist_DefaultsToSafeReadOnlyTools(t *testing.T) {
 		t.Fatal("did not expect message tool to be allowed")
 	}
 }
+
+func TestInlineResponseQuote_UsesMetadataFallbackAndFormatting(t *testing.T) {
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "inline:abc",
+		Content:  "fallback query",
+		Metadata: map[string]string{telegramInlineMetadataKey: "true", telegramInlineQueryKey: "quoted query"},
+	}
+
+	if got := inlineResponseQuote(msg); got != "quoted query" {
+		t.Fatalf("inlineResponseQuote() = %q", got)
+	}
+
+	formatted := formatInlineResponse(inlineResponseQuote(msg), "Думаю...")
+	want := "> quoted query\n\nДумаю..."
+	if formatted != want {
+		t.Fatalf("formatInlineResponse() = %q, want %q", formatted, want)
+	}
+}

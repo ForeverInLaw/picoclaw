@@ -42,16 +42,14 @@ var (
 
 type TelegramChannel struct {
 	*channels.BaseChannel
-	bot           *telego.Bot
-	bh            *th.BotHandler
-	config        *config.Config
-	chatIDs       map[string]int64
-	ctx           context.Context
-	cancel        context.CancelFunc
-	batchMu       sync.Mutex
-	batches       map[string]*telegramInboundBatch
-	inlineMu      sync.RWMutex
-	inlineQueries map[string]string
+	bot     *telego.Bot
+	bh      *th.BotHandler
+	config  *config.Config
+	chatIDs map[string]int64
+	ctx     context.Context
+	cancel  context.CancelFunc
+	batchMu sync.Mutex
+	batches map[string]*telegramInboundBatch
 
 	registerFunc     func(context.Context, []commands.Definition) error
 	commandRegCancel context.CancelFunc
@@ -101,12 +99,11 @@ func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChann
 	)
 
 	return &TelegramChannel{
-		BaseChannel:   base,
-		bot:           bot,
-		config:        cfg,
-		chatIDs:       make(map[string]int64),
-		batches:       make(map[string]*telegramInboundBatch),
-		inlineQueries: make(map[string]string),
+		BaseChannel: base,
+		bot:         bot,
+		config:      cfg,
+		chatIDs:     make(map[string]int64),
+		batches:     make(map[string]*telegramInboundBatch),
 	}, nil
 }
 

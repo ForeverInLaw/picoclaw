@@ -56,11 +56,19 @@ func TestBuildTelegramInlineQueryResult_UsesConfiguredPlaceholderAndButton(t *te
 	}
 }
 
-func TestRenderTelegramInlineQuotedBody_UsesNativeBlockquoteInHTMLMode(t *testing.T) {
-	got := renderTelegramInlineQuotedBody("hello\nworld", "**bold**", false)
-	want := "<blockquote>hello<br>world</blockquote>\n\n<b>bold</b>"
+func TestRenderTelegramInlineInitialContent_UsesNativeBlockquoteInHTMLMode(t *testing.T) {
+	got := renderTelegramInlineInitialContent("hello\nworld", "Думаю...", false)
+	want := "<blockquote>hello<br>world</blockquote>\n\nДумаю..."
 	if got != want {
-		t.Fatalf("renderTelegramInlineQuotedBody() = %q, want %q", got, want)
+		t.Fatalf("renderTelegramInlineInitialContent() = %q, want %q", got, want)
+	}
+}
+
+func TestMarkdownToTelegramHTML_PreservesNativeBlockquote(t *testing.T) {
+	got := markdownToTelegramHTML("> quoted line\n\nplain text")
+	want := "<blockquote>quoted line</blockquote>\n\nplain text"
+	if got != want {
+		t.Fatalf("markdownToTelegramHTML() = %q, want %q", got, want)
 	}
 }
 
