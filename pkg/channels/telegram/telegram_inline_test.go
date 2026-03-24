@@ -29,7 +29,7 @@ func TestBuildTelegramInlineQueryResult_UsesConfiguredPlaceholderAndButton(t *te
 		ResultTitle:     "Генерировать",
 		PlaceholderText: "Думаю...",
 		ButtonLabel:     ".",
-	}, "inline query text")
+	}, "inline query text", false)
 
 	article, ok := result.(*telego.InlineQueryResultArticle)
 	if !ok {
@@ -42,14 +42,25 @@ func TestBuildTelegramInlineQueryResult_UsesConfiguredPlaceholderAndButton(t *te
 	if !ok {
 		t.Fatalf("content type = %T, want *telego.InputTextMessageContent", article.InputMessageContent)
 	}
-	if content.MessageText != "> inline query text\n\nДумаю..." {
+	if content.MessageText != "<blockquote>inline query text</blockquote>\n\nДумаю..." {
 		t.Fatalf("content.MessageText = %q", content.MessageText)
+	}
+	if content.ParseMode != telego.ModeHTML {
+		t.Fatalf("content.ParseMode = %q", content.ParseMode)
 	}
 	if article.ReplyMarkup == nil || len(article.ReplyMarkup.InlineKeyboard) != 1 || len(article.ReplyMarkup.InlineKeyboard[0]) != 1 {
 		t.Fatal("expected single technical inline button")
 	}
 	if article.ReplyMarkup.InlineKeyboard[0][0].CallbackData != telegramInlineCallbackData {
 		t.Fatalf("callback data = %q", article.ReplyMarkup.InlineKeyboard[0][0].CallbackData)
+	}
+}
+
+func TestRenderTelegramInlineQuotedBody_UsesNativeBlockquoteInHTMLMode(t *testing.T) {
+	got := renderTelegramInlineQuotedBody("hello\nworld", "**bold**", false)
+	want := "<blockquote>hello<br>world</blockquote>\n\n<b>bold</b>"
+	if got != want {
+		t.Fatalf("renderTelegramInlineQuotedBody() = %q, want %q", got, want)
 	}
 }
 

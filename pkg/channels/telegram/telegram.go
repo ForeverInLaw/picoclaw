@@ -42,14 +42,15 @@ var (
 
 type TelegramChannel struct {
 	*channels.BaseChannel
-	bot     *telego.Bot
-	bh      *th.BotHandler
-	config  *config.Config
-	chatIDs map[string]int64
-	ctx     context.Context
-	cancel  context.CancelFunc
-	batchMu sync.Mutex
-	batches map[string]*telegramInboundBatch
+	bot           *telego.Bot
+	bh            *th.BotHandler
+	config        *config.Config
+	chatIDs       map[string]int64
+	ctx           context.Context
+	cancel        context.CancelFunc
+	batchMu       sync.Mutex
+	batches       map[string]*telegramInboundBatch
+	inlineQueries sync.Map
 
 	registerFunc     func(context.Context, []commands.Definition) error
 	commandRegCancel context.CancelFunc

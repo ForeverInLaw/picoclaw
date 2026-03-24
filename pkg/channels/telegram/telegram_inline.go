@@ -53,7 +53,7 @@ func (c *TelegramChannel) telegramSenderInfo(user *telego.User) bus.SenderInfo {
 	}
 }
 
-func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query string) telego.InlineQueryResult {
+func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query string, useMarkdownV2 bool) telego.InlineQueryResult {
 	title := strings.TrimSpace(cfg.ResultTitle)
 	if title == "" {
 		title = "Сгенерировать ответ"
@@ -79,7 +79,8 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 		ID:    "generate",
 		Title: title,
 		InputMessageContent: &telego.InputTextMessageContent{
-			MessageText: utils.FormatQuotedMessage(query, placeholder),
+			MessageText: renderTelegramInlineQuotedBody(query, placeholder, useMarkdownV2),
+			ParseMode:   telegramParseMode(useMarkdownV2),
 		},
 		ReplyMarkup: &telego.InlineKeyboardMarkup{
 			InlineKeyboard: [][]telego.InlineKeyboardButton{{
@@ -135,7 +136,7 @@ func (c *TelegramChannel) handleInlineQuery(ctx *th.Context, query telego.Inline
 	trimmedQuery := strings.TrimSpace(query.Query)
 	results := []telego.InlineQueryResult{}
 	if trimmedQuery != "" {
-		results = append(results, buildTelegramInlineQueryResult(inlineCfg, trimmedQuery))
+		results = append(results, buildTelegramInlineQueryResult(inlineCfg, trimmedQuery, c.config.Channels.Telegram.UseMarkdownV2))
 	}
 
 	params := &telego.AnswerInlineQueryParams{
@@ -164,6 +165,7 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 		return nil
 	}
 
+	c.rememberInlineQuery(result.InlineMessageID, result.Query)
 	return c.PublishInbound(ctx, buildTelegramInlineInboundMessage(result, sender))
 }
 
