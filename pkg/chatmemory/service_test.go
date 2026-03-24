@@ -289,3 +289,104 @@ func TestService_Search_EmbeddingPathRespectsUntilWindow(t *testing.T) {
 		t.Fatalf("Search() hits = %#v, want only old hit inside time window", hits)
 	}
 }
+
+func TestService_StartupBackfill_PopulatesMissingEmbeddingsInBackground(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Input     []string `json:"input"`
+			InputType string   `json:"input_type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.InputType != "passage" {
+			t.Fatalf("input_type = %q, want passage", payload.InputType)
+		}
+		resp := map[string]any{"data": make([]map[string]any, 0, len(payload.Input))}
+		for range payload.Input {
+			resp["data"] = append(resp["data"].([]map[string]any), map[string]any{"embedding": []float32{1, 0, 0}})
+		}
+		var buf bytes.Buffer
+		if err := json.NewEncoder(&buf).Encode(resp); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer server.Close()
+
+	idx, err := memoryindex.Open(t.TempDir()+"\\index.sqlite", memoryindex.Config{
+		MaxResults:      5,
+		MaxSnippetChars: 280,
+		MinQueryChars:   3,
+	})
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer idx.Close()
+
+	for i, content := range []string{"first remembered message", "second remembered message"} {
+		if err := idx.AddObservation(t.Context(), memoryindex.Observation{
+			SessionKey: "agent:main:telegram:group:-1001",
+			Channel:    "telegram",
+			ChatID:     "-1001",
+			PeerKind:   "group",
+			ChatLabel:  "Тестовая группа",
+			Role:       "user",
+			SenderID:   "telegram:42",
+			Content:    content,
+			CreatedAt:  time.Now().UTC().Add(-time.Duration(i+1) * time.Minute),
+		}); err != nil {
+			t.Fatalf("AddObservation() error: %v", err)
+		}
+	}
+
+	embedder := NewEmbedder(&config.ModelConfig{
+		ModelName: "embedder",
+		Model:     "nvidia/llama-nemotron-embed-1b-v2",
+		APIBase:   server.URL,
+		APIKey:    "test-key",
+	}, config.MemoryEmbeddingConfig{
+		Enabled:                true,
+		MaxBatch:               8,
+		MinContentChars:        1,
+		QueryInputType:         "query",
+		DocumentInputType:      "passage",
+		StartupBackfillEnabled: true,
+	})
+
+	service := New(idx, config.MemoryIndexConfig{
+		Enabled: true,
+		Embeddings: config.MemoryEmbeddingConfig{
+			Enabled:                true,
+			ModelName:              "embedder",
+			MaxBatch:               8,
+			MinContentChars:        1,
+			QueryInputType:         "query",
+			DocumentInputType:      "passage",
+			StartupBackfillEnabled: true,
+		},
+	}, embedder)
+	service.backfillRetryDelay = 10 * time.Millisecond
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		missing, err := idx.ListObservationsMissingEmbeddings(t.Context(), embedder.ModelName(), 8)
+		if err != nil {
+			t.Fatalf("ListObservationsMissingEmbeddings() error: %v", err)
+		}
+		if len(missing) == 0 {
+			rows, err := idx.LoadObservationEmbeddings(t.Context(), []memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}}, embedder.ModelName(), time.Time{}, time.Time{}, 8)
+			if err != nil {
+				t.Fatalf("LoadObservationEmbeddings() error: %v", err)
+			}
+			if len(rows) != 2 {
+				t.Fatalf("LoadObservationEmbeddings() rows = %d, want 2", len(rows))
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	t.Fatal("startup backfill did not complete before deadline")
+}

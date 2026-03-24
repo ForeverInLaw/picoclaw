@@ -291,11 +291,14 @@ type MemoryIndexConfig struct {
 }
 
 type MemoryEmbeddingConfig struct {
-	Enabled         bool   `json:"enabled,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_ENABLED"`
-	ModelName       string `json:"model_name,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MODEL_NAME"`
-	Dimensions      int    `json:"dimensions,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_DIMENSIONS"`
-	MaxBatch        int    `json:"max_batch,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MAX_BATCH"`
-	MinContentChars int    `json:"min_content_chars,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MIN_CONTENT_CHARS"`
+	Enabled                bool   `json:"enabled,omitempty"                 env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_ENABLED"`
+	ModelName              string `json:"model_name,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MODEL_NAME"`
+	Dimensions             int    `json:"dimensions,omitempty"              env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_DIMENSIONS"`
+	MaxBatch               int    `json:"max_batch,omitempty"               env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MAX_BATCH"`
+	MinContentChars        int    `json:"min_content_chars,omitempty"       env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_MIN_CONTENT_CHARS"`
+	QueryInputType         string `json:"query_input_type,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_QUERY_INPUT_TYPE"`
+	DocumentInputType      string `json:"document_input_type,omitempty"     env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_DOCUMENT_INPUT_TYPE"`
+	StartupBackfillEnabled bool   `json:"startup_backfill_enabled,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_MEMORY_INDEX_EMBEDDINGS_STARTUP_BACKFILL_ENABLED"`
 }
 
 type MemoryRollupConfig struct {

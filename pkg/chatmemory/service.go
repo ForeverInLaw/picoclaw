@@ -3,6 +3,7 @@ package chatmemory
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"slices"
 	"strings"
@@ -36,19 +37,25 @@ type SearchRequest struct {
 }
 
 type Service struct {
-	index    *memoryindex.Index
-	embedder *Embedder
-	cfg      config.MemoryIndexConfig
-	now      func() time.Time
+	index              *memoryindex.Index
+	embedder           *Embedder
+	cfg                config.MemoryIndexConfig
+	now                func() time.Time
+	backfillRetryDelay time.Duration
 }
 
 func New(index *memoryindex.Index, cfg config.MemoryIndexConfig, embedder *Embedder) *Service {
-	return &Service{
-		index:    index,
-		embedder: embedder,
-		cfg:      cfg,
-		now:      time.Now,
+	service := &Service{
+		index:              index,
+		embedder:           embedder,
+		cfg:                cfg,
+		now:                time.Now,
+		backfillRetryDelay: 30 * time.Second,
 	}
+	if cfg.Embeddings.StartupBackfillEnabled {
+		service.startStartupBackfill()
+	}
+	return service
 }
 
 func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.Hit, error) {
@@ -79,7 +86,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 	}
 
 	_ = s.ensureEmbeddings(ctx)
-	queryVec, err := s.embedder.EmbedText(ctx, req.Query)
+	queryVec, err := s.embedder.EmbedQuery(ctx, req.Query)
 	if err != nil || len(queryVec) == 0 {
 		return lexicalHits, nil
 	}
@@ -346,12 +353,17 @@ func (s *Service) ensureRollups(ctx context.Context, scope memoryindex.ChatScope
 }
 
 func (s *Service) ensureEmbeddings(ctx context.Context) error {
+	_, err := s.ensureEmbeddingsBatch(ctx)
+	return err
+}
+
+func (s *Service) ensureEmbeddingsBatch(ctx context.Context) (int, error) {
 	if s.embedder == nil {
-		return nil
+		return 0, nil
 	}
 	missing, err := s.index.ListObservationsMissingEmbeddings(ctx, s.embedder.ModelName(), max(16, s.embedder.MaxBatch()))
 	if err != nil || len(missing) == 0 {
-		return err
+		return 0, err
 	}
 	inputs := make([]string, 0, len(missing))
 	ids := make([]int64, 0, len(missing))
@@ -363,18 +375,52 @@ func (s *Service) ensureEmbeddings(ctx context.Context) error {
 		inputs = append(inputs, row.Content)
 	}
 	if len(inputs) == 0 {
-		return nil
+		return 0, nil
 	}
-	vectors, err := s.embedder.EmbedTexts(ctx, inputs)
+	vectors, err := s.embedder.EmbedDocuments(ctx, inputs)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for idx := range vectors {
 		if err := s.index.UpsertObservationEmbedding(ctx, ids[idx], s.embedder.ModelName(), vectors[idx]); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return len(vectors), nil
+}
+
+func (s *Service) startStartupBackfill() {
+	if s == nil || s.embedder == nil || !s.cfg.Embeddings.Enabled {
+		return
+	}
+	go s.runStartupBackfill(context.Background())
+}
+
+func (s *Service) runStartupBackfill(ctx context.Context) {
+	for {
+		count, err := s.ensureEmbeddingsBatch(ctx)
+		if err != nil {
+			log.Printf("chatmemory: startup embedding backfill failed: %v", err)
+			timer := time.NewTimer(s.backfillDelay())
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				continue
+			}
+		}
+		if count == 0 {
+			return
+		}
+	}
+}
+
+func (s *Service) backfillDelay() time.Duration {
+	if s == nil || s.backfillRetryDelay <= 0 {
+		return 30 * time.Second
+	}
+	return s.backfillRetryDelay
 }
 
 func buildRollupSummary(hits []memoryindex.Hit, sampleSize int) string {

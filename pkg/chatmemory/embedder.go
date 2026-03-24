@@ -15,20 +15,17 @@ import (
 )
 
 type Embedder struct {
-	client          *http.Client
-	apiBase         string
-	apiKey          string
-	modelID         string
-	modelName       string
-	maxBatch        int
-	minContentChars int
-	dimensions      int
-}
-
-type embeddingRequest struct {
-	Model      string   `json:"model"`
-	Input      []string `json:"input"`
-	Dimensions int      `json:"dimensions,omitempty"`
+	client            *http.Client
+	apiBase           string
+	apiKey            string
+	modelID           string
+	modelName         string
+	maxBatch          int
+	minContentChars   int
+	dimensions        int
+	queryInputType    string
+	documentInputType string
+	extraBody         map[string]any
 }
 
 type embeddingResponse struct {
@@ -63,14 +60,17 @@ func NewEmbedder(modelCfg *config.ModelConfig, embeddingCfg config.MemoryEmbeddi
 		timeout = 60
 	}
 	return &Embedder{
-		client:          &http.Client{Timeout: time.Duration(timeout) * time.Second},
-		apiBase:         apiBase,
-		apiKey:          apiKey,
-		modelID:         modelID,
-		modelName:       strings.TrimSpace(modelCfg.ModelName),
-		maxBatch:        maxBatch,
-		minContentChars: minChars,
-		dimensions:      embeddingCfg.Dimensions,
+		client:            &http.Client{Timeout: time.Duration(timeout) * time.Second},
+		apiBase:           apiBase,
+		apiKey:            apiKey,
+		modelID:           modelID,
+		modelName:         strings.TrimSpace(modelCfg.ModelName),
+		maxBatch:          maxBatch,
+		minContentChars:   minChars,
+		dimensions:        embeddingCfg.Dimensions,
+		queryInputType:    normalizeEmbeddingInputType(embeddingCfg.QueryInputType, "query"),
+		documentInputType: normalizeEmbeddingInputType(embeddingCfg.DocumentInputType, "passage"),
+		extraBody:         cloneMap(modelCfg.ExtraBody),
 	}
 }
 
@@ -95,27 +95,33 @@ func (e *Embedder) MinContentChars() int {
 	return e.minContentChars
 }
 
-func (e *Embedder) EmbedText(ctx context.Context, input string) ([]float32, error) {
-	results, err := e.EmbedTexts(ctx, []string{input})
+func (e *Embedder) EmbedQuery(ctx context.Context, input string) ([]float32, error) {
+	results, err := e.embed(ctx, []string{input}, e.queryInputType)
 	if err != nil || len(results) == 0 {
 		return nil, err
 	}
 	return results[0], nil
 }
 
-func (e *Embedder) EmbedTexts(ctx context.Context, inputs []string) ([][]float32, error) {
+func (e *Embedder) EmbedDocuments(ctx context.Context, inputs []string) ([][]float32, error) {
+	return e.embed(ctx, inputs, e.documentInputType)
+}
+
+func (e *Embedder) embed(ctx context.Context, inputs []string, inputType string) ([][]float32, error) {
 	if e == nil || len(inputs) == 0 {
 		return nil, nil
 	}
 	if len(inputs) > e.maxBatch {
 		inputs = inputs[:e.maxBatch]
 	}
-	payload := embeddingRequest{
-		Model: e.modelID,
-		Input: inputs,
-	}
+
+	payload := cloneMap(e.extraBody)
+	payload["model"] = e.modelID
+	payload["input"] = inputs
+	payload["encoding_format"] = "float"
+	payload["input_type"] = normalizeEmbeddingInputType(inputType, "query")
 	if e.dimensions > 0 {
-		payload.Dimensions = e.dimensions
+		payload["dimensions"] = e.dimensions
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -151,6 +157,25 @@ func (e *Embedder) EmbedTexts(ctx context.Context, inputs []string) ([][]float32
 		out = append(out, item.Embedding)
 	}
 	return out, nil
+}
+
+func normalizeEmbeddingInputType(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func cloneMap(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func cosineSimilarity(left, right []float32) float64 {

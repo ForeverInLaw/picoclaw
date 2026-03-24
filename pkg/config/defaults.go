@@ -42,9 +42,12 @@ func DefaultConfig() *Config {
 					MaxSnippetChars: 280,
 					MinQueryChars:   12,
 					Embeddings: MemoryEmbeddingConfig{
-						Enabled:         false,
-						MaxBatch:        16,
-						MinContentChars: 24,
+						Enabled:                false,
+						MaxBatch:               16,
+						MinContentChars:        24,
+						QueryInputType:         "query",
+						DocumentInputType:      "passage",
+						StartupBackfillEnabled: false,
 					},
 					Rollups: MemoryRollupConfig{
 						Enabled:          true,
