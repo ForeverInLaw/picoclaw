@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 type Embedder struct {
@@ -43,10 +42,7 @@ func NewEmbedder(modelCfg *config.ModelConfig, embeddingCfg config.MemoryEmbeddi
 	if apiBase == "" || apiKey == "" {
 		return nil
 	}
-	_, modelID := providers.ExtractProtocol(modelCfg.Model)
-	if modelID == "" {
-		modelID = strings.TrimSpace(modelCfg.Model)
-	}
+	modelID := normalizeEmbeddingModel(modelCfg.Model, apiBase)
 	maxBatch := embeddingCfg.MaxBatch
 	if maxBatch <= 0 {
 		maxBatch = 16
@@ -176,6 +172,30 @@ func cloneMap(source map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func normalizeEmbeddingModel(model, apiBase string) string {
+	model = strings.TrimSpace(model)
+	before, after, ok := strings.Cut(model, "/")
+	if !ok {
+		return model
+	}
+
+	prefix := strings.ToLower(before)
+	switch prefix {
+	case "litellm", "moonshot", "groq", "ollama", "deepseek", "google",
+		"openrouter", "zhipu", "mistral", "vivgrid", "minimax", "novita":
+		return after
+	case "nvidia":
+		lowerAPIBase := strings.ToLower(apiBase)
+		if strings.Contains(lowerAPIBase, "integrate.api.nvidia.com") ||
+			strings.Contains(lowerAPIBase, "grpc.nvcf.nvidia.com") {
+			return after
+		}
+		return model
+	default:
+		return model
+	}
 }
 
 func cosineSimilarity(left, right []float32) float64 {
