@@ -116,6 +116,7 @@ func (e *Embedder) embed(ctx context.Context, inputs []string, inputType string)
 	payload["input"] = inputs
 	payload["encoding_format"] = "float"
 	payload["input_type"] = normalizeEmbeddingInputType(inputType, "query")
+	normalizeEmbeddingModalities(payload, len(inputs))
 	if e.dimensions > 0 {
 		payload["dimensions"] = e.dimensions
 	}
@@ -172,6 +173,34 @@ func cloneMap(source map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func normalizeEmbeddingModalities(payload map[string]any, inputCount int) {
+	if inputCount <= 1 {
+		return
+	}
+	raw, ok := payload["modality"]
+	if !ok {
+		return
+	}
+	switch value := raw.(type) {
+	case []string:
+		if len(value) == 1 {
+			repeated := make([]string, inputCount)
+			for i := range repeated {
+				repeated[i] = value[0]
+			}
+			payload["modality"] = repeated
+		}
+	case []any:
+		if len(value) == 1 {
+			repeated := make([]any, inputCount)
+			for i := range repeated {
+				repeated[i] = value[0]
+			}
+			payload["modality"] = repeated
+		}
+	}
 }
 
 func normalizeEmbeddingModel(model, apiBase string) string {

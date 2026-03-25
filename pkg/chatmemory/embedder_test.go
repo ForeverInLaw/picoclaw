@@ -92,6 +92,10 @@ func TestEmbedder_EmbedDocuments_UsesPassageInputType(t *testing.T) {
 	if got := captured["input_type"]; got != "passage" {
 		t.Fatalf("input_type = %#v, want passage", got)
 	}
+	modality, ok := captured["modality"].([]any)
+	if ok && len(modality) > 0 {
+		t.Fatalf("did not expect modality in request without extraBody, got %#v", captured["modality"])
+	}
 }
 
 func TestNormalizeEmbeddingModel_UsesAPIBaseRules(t *testing.T) {
@@ -103,5 +107,42 @@ func TestNormalizeEmbeddingModel_UsesAPIBaseRules(t *testing.T) {
 	}
 	if got := normalizeEmbeddingModel("openrouter/auto", "https://openrouter.ai/api/v1"); got != "auto" {
 		t.Fatalf("normalizeEmbeddingModel(openrouter) = %q, want %q", got, "auto")
+	}
+}
+
+func TestEmbedder_EmbedDocuments_RepeatsSingleModalityForBatch(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[1,0]},{"embedding":[0,1]}]}`))
+	}))
+	defer server.Close()
+
+	embedder := NewEmbedder(&config.ModelConfig{
+		ModelName: "embedder",
+		Model:     "nvidia/llama-nemotron-embed-1b-v2",
+		APIBase:   server.URL,
+		APIKey:    "test-key",
+		ExtraBody: map[string]any{
+			"modality": []string{"text"},
+			"truncate": "NONE",
+		},
+	}, config.MemoryEmbeddingConfig{
+		Enabled:           true,
+		QueryInputType:    "query",
+		DocumentInputType: "passage",
+	})
+
+	_, err := embedder.EmbedDocuments(t.Context(), []string{"doc one", "doc two"})
+	if err != nil {
+		t.Fatalf("EmbedDocuments() error: %v", err)
+	}
+
+	modality, ok := captured["modality"].([]any)
+	if !ok || len(modality) != 2 || modality[0] != "text" || modality[1] != "text" {
+		t.Fatalf("modality = %#v, want [text text]", captured["modality"])
 	}
 }
