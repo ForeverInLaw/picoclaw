@@ -591,6 +591,33 @@ func (m *countingMockProvider) GetDefaultModel() string {
 	return "counting-mock-model"
 }
 
+type sequenceMockProvider struct {
+	responses []string
+	calls     int
+}
+
+func (m *sequenceMockProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	m.calls++
+	idx := m.calls - 1
+	if idx >= len(m.responses) {
+		idx = len(m.responses) - 1
+	}
+	return &providers.LLMResponse{
+		Content:   m.responses[idx],
+		ToolCalls: []providers.ToolCall{},
+	}, nil
+}
+
+func (m *sequenceMockProvider) GetDefaultModel() string {
+	return "sequence-mock-model"
+}
+
 type toolLimitOnlyProvider struct{}
 
 func (m *toolLimitOnlyProvider) Chat(
@@ -1329,6 +1356,40 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	}
 	if response != defaultResponse {
 		t.Fatalf("response = %q, want %q", response, defaultResponse)
+	}
+}
+
+func TestProcessDirectWithChannel_EmptyResponseRetriesBeforeFallback(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 4,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &sequenceMockProvider{responses: []string{"", "ok after retry"}}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "empty-response-retry", "test", "chat1")
+	if err != nil {
+		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+	}
+	if response != "ok after retry" {
+		t.Fatalf("response = %q, want %q", response, "ok after retry")
+	}
+	if provider.calls != 2 {
+		t.Fatalf("provider calls = %d, want %d", provider.calls, 2)
 	}
 }
 

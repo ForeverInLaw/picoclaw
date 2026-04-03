@@ -113,7 +113,10 @@ const (
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
 	requeueYieldDelay         = 10 * time.Millisecond
+	emptyResponseRetryLimit   = 2
 )
+
+const emptyResponseRetryInstruction = "Your previous response was empty. Retry the same request now and return a non-empty answer, or valid tool calls if tools are needed. Do not return an empty message."
 
 func NewAgentLoop(
 	cfg *config.Config,
@@ -1786,6 +1789,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var lastToolResultForFallback string
 	var hadToolCalls bool
 	var terminalToolCompleted bool
+	var emptyDirectResponseRetries int
 	streamProvider, providerCanStream := activeProvider.(providers.StreamingProvider)
 
 turnLoop:
@@ -2292,6 +2296,23 @@ turnLoop:
 						"steering_count": len(steerMsgs),
 					})
 				pendingMessages = append(pendingMessages, steerMsgs...)
+				continue
+			}
+			if strings.TrimSpace(responseContent) == "" &&
+				!gracefulTerminal &&
+				emptyDirectResponseRetries < emptyResponseRetryLimit {
+				emptyDirectResponseRetries++
+				logger.WarnCF("agent", "LLM returned empty response; retrying turn iteration",
+					map[string]any{
+						"agent_id":    ts.agent.ID,
+						"iteration":   iteration,
+						"retry_count": emptyDirectResponseRetries,
+						"max_retries": emptyResponseRetryLimit,
+					})
+				messages = append(messages, providers.Message{
+					Role:    "system",
+					Content: emptyResponseRetryInstruction,
+				})
 				continue
 			}
 			finalContent = formatInlineResponse(ts.opts.ResponseQuote, responseContent)
