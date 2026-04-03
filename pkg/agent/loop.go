@@ -3038,25 +3038,26 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 		return legacyCompressionResult{}, false
 	}
 
-	// Split at a Turn boundary so no tool-call sequence is torn apart.
-	// parseTurnBoundaries gives us the start of each Turn; we drop the
-	// oldest half of Turns and keep the most recent ones.
+	// Try context-aware compressor first (Hermes-style: tool pruning, head/tail protection, iterative summary).
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if result, ok := al.CompressContext(ctx, agent, sessionKey); ok {
+		return legacyCompressionResult{
+			DroppedMessages:   result.DroppedMessages,
+			RemainingMessages: result.KeptMessages,
+		}, true
+	}
+
+	// Compressor couldn't help (too short or LLM unavailable) — fall back to legacy turn-based drop.
 	turns := parseTurnBoundaries(history)
 	var mid int
 	if len(turns) >= 2 {
 		mid = turns[len(turns)/2]
 	} else {
-		// Fewer than 2 Turns — fall back to message-level midpoint
-		// aligned to the nearest Turn boundary.
 		mid = findSafeBoundary(history, len(history)/2)
 	}
 	var keptHistory []providers.Message
 	if mid <= 0 {
-		// No safe Turn boundary — the entire history is a single Turn
-		// (e.g. one user message followed by a massive tool response).
-		// Keeping everything would leave the agent stuck in a context-
-		// exceeded loop, so fall back to keeping only the most recent
-		// user message. This breaks Turn atomicity as a last resort.
 		for i := len(history) - 1; i >= 0; i-- {
 			if history[i].Role == "user" {
 				keptHistory = []providers.Message{history[i]}
@@ -3068,9 +3069,6 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 	}
 
 	droppedCount := len(history) - len(keptHistory)
-
-	// Record compression in the session summary so BuildMessages includes it
-	// in the system prompt. We do not modify history messages themselves.
 	existingSummary := agent.Sessions.GetSummary(sessionKey)
 	compressionNote := fmt.Sprintf(
 		"[Emergency compression dropped %d oldest messages due to context limit]",
@@ -3080,11 +3078,10 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 		compressionNote = existingSummary + "\n\n" + compressionNote
 	}
 	agent.Sessions.SetSummary(sessionKey, compressionNote)
-
 	agent.Sessions.SetHistory(sessionKey, keptHistory)
 	agent.Sessions.Save(sessionKey)
 
-	logger.WarnCF("agent", "Forced compression executed", map[string]any{
+	logger.WarnCF("agent", "Forced compression executed (legacy fallback)", map[string]any{
 		"session_key":  sessionKey,
 		"dropped_msgs": droppedCount,
 		"new_count":    len(keptHistory),
