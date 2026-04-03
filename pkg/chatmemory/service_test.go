@@ -252,7 +252,7 @@ func TestService_Search_EmbeddingPathRespectsUntilWindow(t *testing.T) {
 		ModelName: "embedder",
 		Model:     "text-embedding-3-small",
 		APIBase:   server.URL,
-		APIKey:    "test-key",
+		APIKeys:   config.SimpleSecureStrings("test-key"),
 	}
 	embedder := NewEmbedder(modelCfg, config.MemoryEmbeddingConfig{
 		Enabled:         true,
@@ -345,7 +345,7 @@ func TestService_StartupBackfill_PopulatesMissingEmbeddingsInBackground(t *testi
 		ModelName: "embedder",
 		Model:     "nvidia/llama-nemotron-embed-1b-v2",
 		APIBase:   server.URL,
-		APIKey:    "test-key",
+		APIKeys:   config.SimpleSecureStrings("test-key"),
 	}, config.MemoryEmbeddingConfig{
 		Enabled:                true,
 		MaxBatch:               8,
@@ -468,7 +468,7 @@ func TestService_StartupBackfill_SkipsShortRecentMessagesAndContinues(t *testing
 		ModelName: "embedder",
 		Model:     "nvidia/llama-nemotron-embed-1b-v2",
 		APIBase:   server.URL,
-		APIKey:    "test-key",
+		APIKeys:   config.SimpleSecureStrings("test-key"),
 	}, config.MemoryEmbeddingConfig{
 		Enabled:                true,
 		MaxBatch:               8,

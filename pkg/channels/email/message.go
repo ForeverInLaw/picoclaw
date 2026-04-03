@@ -146,11 +146,15 @@ func (c *EmailChannel) shouldIgnoreMessage(msg incomingMessage) bool {
 	return false
 }
 
-func (c *EmailChannel) sendSMTPMessage(to string, entry trackedEmail, msg bus.OutboundMessage) error {
-	return c.sendSMTP(to, c.buildMessage(to, entry, msg))
+func (c *EmailChannel) sendSMTPMessage(to string, entry trackedEmail, msg bus.OutboundMessage) (string, error) {
+	messageID, raw := c.buildMessage(to, entry, msg)
+	if err := c.sendSMTP(to, raw); err != nil {
+		return "", err
+	}
+	return messageID, nil
 }
 
-func (c *EmailChannel) buildMessage(to string, entry trackedEmail, msg bus.OutboundMessage) []byte {
+func (c *EmailChannel) buildMessage(to string, entry trackedEmail, msg bus.OutboundMessage) (string, []byte) {
 	subject := replySubject(entry.Subject)
 	messageID := c.nextSMTPMessageID()
 	references := append([]string{}, entry.References...)
@@ -177,7 +181,7 @@ func (c *EmailChannel) buildMessage(to string, entry trackedEmail, msg bus.Outbo
 	qp := quotedprintable.NewWriter(&out)
 	_, _ = qp.Write([]byte(strings.TrimSpace(msg.Content) + "\r\n"))
 	_ = qp.Close()
-	return out.Bytes()
+	return messageID, out.Bytes()
 }
 
 func (c *EmailChannel) sendSMTP(to string, raw []byte) error {

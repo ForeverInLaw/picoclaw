@@ -27,9 +27,9 @@ type CronPayload struct {
 	Kind                 string `json:"kind"`
 	Message              string `json:"message"`
 	Command              string `json:"command,omitempty"`
-	Deliver              bool   `json:"deliver"`
 	Channel              string `json:"channel,omitempty"`
 	To                   string `json:"to,omitempty"`
+	Deliver              bool   `json:"deliver,omitempty"`
 	RequesterCanonicalID string `json:"requester_canonical_id,omitempty"`
 	RequesterPlatformID  string `json:"requester_platform_id,omitempty"`
 	RequesterUsername    string `json:"requester_username,omitempty"`
@@ -432,9 +432,9 @@ func (cs *CronService) AddJob(
 		Payload: CronPayload{
 			Kind:    "agent_turn",
 			Message: message,
-			Deliver: deliver,
 			Channel: channel,
 			To:      to,
+			Deliver: deliver,
 		},
 		State: CronJobState{
 			NextRunAtMS: cs.computeNextRun(&schedule, now),

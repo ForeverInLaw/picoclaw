@@ -88,6 +88,15 @@ func (t *PersonalTodoTool) SetSendCallback(callback PersonalTodoSendCallback) {
 	t.sendCallback = callback
 }
 
+func (t *PersonalTodoTool) Close() error {
+	if t == nil || t.store == nil {
+		return nil
+	}
+	err := t.store.Close()
+	t.store = nil
+	return err
+}
+
 func (t *PersonalTodoTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	if t == nil || t.store == nil {
 		return ErrorResult("personal todo is not configured")

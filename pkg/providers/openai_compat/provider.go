@@ -36,15 +36,40 @@ type Provider struct {
 	maxTokensField string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
 	httpClient     *http.Client
 	extraBody      map[string]any // Additional fields to inject into request body
+	userAgent      string
 }
 
 type Option func(*Provider)
 
 const defaultRequestTimeout = common.DefaultRequestTimeout
 
+var stripModelPrefixProviders = map[string]struct{}{
+	"litellm":    {},
+	"venice":     {},
+	"moonshot":   {},
+	"nvidia":     {},
+	"groq":       {},
+	"ollama":     {},
+	"deepseek":   {},
+	"google":     {},
+	"openrouter": {},
+	"zhipu":      {},
+	"mistral":    {},
+	"vivgrid":    {},
+	"minimax":    {},
+	"novita":     {},
+	"lmstudio":   {},
+}
+
 func WithMaxTokensField(maxTokensField string) Option {
 	return func(p *Provider) {
 		p.maxTokensField = maxTokensField
+	}
+}
+
+func WithUserAgent(userAgent string) Option {
+	return func(p *Provider) {
+		p.userAgent = userAgent
 	}
 }
 
@@ -180,6 +205,9 @@ func (p *Provider) Chat(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if p.userAgent != "" {
+		req.Header.Set("User-Agent", p.userAgent)
+	}
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
@@ -244,172 +272,134 @@ func (p *Provider) ChatStream(
 		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
-	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if !strings.Contains(contentType, "text/event-stream") {
-		return common.ReadAndParseResponse(resp, p.apiBase)
-	}
-
-	return parseStreamingResponse(resp.Body, onChunk)
+	return parseStreamResponse(ctx, resp.Body, onChunk)
 }
 
-type streamedToolCall struct {
-	ID               string
-	Type             string
-	Name             string
-	Arguments        string
-	ThoughtSignature string
-}
-
-func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLMResponse, error) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	var dataLines []string
-	var content strings.Builder
-	var reasoningContent strings.Builder
-	var reasoning strings.Builder
-	var reasoningDetails []ReasoningDetail
-	var toolCalls []streamedToolCall
+// parseStreamResponse parses an OpenAI-compatible SSE stream.
+func parseStreamResponse(
+	ctx context.Context,
+	reader io.Reader,
+	onChunk func(accumulated string),
+) (*LLMResponse, error) {
+	var textContent strings.Builder
 	var finishReason string
 	var usage *UsageInfo
 
-	processEvent := func(raw string) error {
-		raw = strings.TrimSpace(raw)
-		if raw == "" || raw == "[DONE]" {
-			return nil
+	// Tool call assembly: OpenAI streams tool calls as incremental deltas
+	type toolAccum struct {
+		id       string
+		name     string
+		argsJSON strings.Builder
+	}
+	activeTools := map[int]*toolAccum{}
+
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 1MB initial, 10MB max
+	for scanner.Scan() {
+		// Check for context cancellation between chunks
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		line := scanner.Text()
+
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
 		}
 
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content          string            `json:"content"`
-					ReasoningContent string            `json:"reasoning_content"`
-					Reasoning        string            `json:"reasoning"`
-					ReasoningDetails []ReasoningDetail `json:"reasoning_details"`
-					ToolCalls        []struct {
+					Content   string `json:"content"`
+					ToolCalls []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
-						Type     string `json:"type"`
 						Function *struct {
 							Name      string `json:"name"`
 							Arguments string `json:"arguments"`
 						} `json:"function"`
-						ExtraContent *struct {
-							Google *struct {
-								ThoughtSignature string `json:"thought_signature"`
-							} `json:"google"`
-						} `json:"extra_content"`
 					} `json:"tool_calls"`
 				} `json:"delta"`
-				FinishReason string `json:"finish_reason"`
+				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *UsageInfo `json:"usage"`
 		}
 
-		if err := json.Unmarshal([]byte(raw), &chunk); err != nil {
-			return fmt.Errorf("failed to decode streaming chunk: %w", err)
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue // skip malformed chunks
 		}
 
 		if chunk.Usage != nil {
 			usage = chunk.Usage
 		}
 
-		for _, choice := range chunk.Choices {
-			if choice.Delta.Content != "" {
-				content.WriteString(choice.Delta.Content)
-				if onUpdate != nil {
-					onUpdate(content.String())
-				}
-			}
-			if choice.Delta.ReasoningContent != "" {
-				reasoningContent.WriteString(choice.Delta.ReasoningContent)
-			}
-			if choice.Delta.Reasoning != "" {
-				reasoning.WriteString(choice.Delta.Reasoning)
-			}
-			if len(choice.Delta.ReasoningDetails) > 0 {
-				reasoningDetails = append(reasoningDetails, choice.Delta.ReasoningDetails...)
-			}
-			for _, tc := range choice.Delta.ToolCalls {
-				for len(toolCalls) <= tc.Index {
-					toolCalls = append(toolCalls, streamedToolCall{})
-				}
-				current := &toolCalls[tc.Index]
-				if tc.ID != "" {
-					current.ID = tc.ID
-				}
-				if tc.Type != "" {
-					current.Type = tc.Type
-				}
-				if tc.Function != nil {
-					if tc.Function.Name != "" {
-						current.Name = tc.Function.Name
-					}
-					current.Arguments += tc.Function.Arguments
-				}
-				if tc.ExtraContent != nil && tc.ExtraContent.Google != nil &&
-					tc.ExtraContent.Google.ThoughtSignature != "" {
-					current.ThoughtSignature = tc.ExtraContent.Google.ThoughtSignature
-				}
-			}
-			if choice.FinishReason != "" {
-				finishReason = choice.FinishReason
-			}
-		}
-
-		return nil
-	}
-
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r")
-		if line == "" {
-			if len(dataLines) > 0 {
-				if err := processEvent(strings.Join(dataLines, "\n")); err != nil {
-					return nil, err
-				}
-				dataLines = dataLines[:0]
-			}
+		if len(chunk.Choices) == 0 {
 			continue
 		}
-		if strings.HasPrefix(line, "data:") {
-			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+
+		choice := chunk.Choices[0]
+
+		// Accumulate text content
+		if choice.Delta.Content != "" {
+			textContent.WriteString(choice.Delta.Content)
+			if onChunk != nil {
+				onChunk(textContent.String())
+			}
+		}
+
+		// Accumulate tool call deltas
+		for _, tc := range choice.Delta.ToolCalls {
+			acc, ok := activeTools[tc.Index]
+			if !ok {
+				acc = &toolAccum{}
+				activeTools[tc.Index] = acc
+			}
+			if tc.ID != "" {
+				acc.id = tc.ID
+			}
+			if tc.Function != nil {
+				if tc.Function.Name != "" {
+					acc.name = tc.Function.Name
+				}
+				if tc.Function.Arguments != "" {
+					acc.argsJSON.WriteString(tc.Function.Arguments)
+				}
+			}
+		}
+
+		if choice.FinishReason != nil {
+			finishReason = *choice.FinishReason
 		}
 	}
+
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed reading streaming response: %w", err)
-	}
-	if len(dataLines) > 0 {
-		if err := processEvent(strings.Join(dataLines, "\n")); err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("streaming read error: %w", err)
 	}
 
-	normalizedToolCalls := make([]ToolCall, 0, len(toolCalls))
-	for _, tc := range toolCalls {
-		if tc.ID == "" && tc.Name == "" && tc.Arguments == "" {
+	// Assemble tool calls from accumulated deltas
+	var toolCalls []ToolCall
+	for i := 0; i < len(activeTools); i++ {
+		acc, ok := activeTools[i]
+		if !ok {
 			continue
 		}
-		arguments := make(map[string]any)
-		if strings.TrimSpace(tc.Arguments) != "" {
-			if err := json.Unmarshal([]byte(tc.Arguments), &arguments); err != nil {
-				log.Printf("openai_compat stream: failed to decode tool call arguments for %q: %v", tc.Name, err)
-				arguments["raw"] = tc.Arguments
+		args := make(map[string]any)
+		raw := acc.argsJSON.String()
+		if raw != "" {
+			if err := json.Unmarshal([]byte(raw), &args); err != nil {
+				log.Printf("openai_compat stream: failed to decode tool call arguments for %q: %v", acc.name, err)
+				args["raw"] = raw
 			}
 		}
-		toolCall := ToolCall{
-			ID:        tc.ID,
-			Type:      tc.Type,
-			Name:      tc.Name,
-			Arguments: arguments,
-		}
-		if tc.ThoughtSignature != "" {
-			toolCall.ExtraContent = &ExtraContent{
-				Google: &GoogleExtra{
-					ThoughtSignature: tc.ThoughtSignature,
-				},
-			}
-		}
-		normalizedToolCalls = append(normalizedToolCalls, toolCall)
+		toolCalls = append(toolCalls, ToolCall{
+			ID:        acc.id,
+			Name:      acc.name,
+			Arguments: args,
+		})
 	}
 
 	if finishReason == "" {
@@ -417,13 +407,10 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 	}
 
 	return &LLMResponse{
-		Content:          content.String(),
-		ReasoningContent: reasoningContent.String(),
-		Reasoning:        reasoning.String(),
-		ReasoningDetails: reasoningDetails,
-		ToolCalls:        normalizedToolCalls,
-		FinishReason:     finishReason,
-		Usage:            usage,
+		Content:      textContent.String(),
+		ToolCalls:    toolCalls,
+		FinishReason: finishReason,
+		Usage:        usage,
 	}, nil
 }
 
@@ -438,20 +425,11 @@ func normalizeModel(model, apiBase string) string {
 	}
 
 	prefix := strings.ToLower(before)
-	switch prefix {
-	case "litellm", "moonshot", "groq", "ollama", "deepseek", "google",
-		"openrouter", "zhipu", "mistral", "vivgrid", "minimax", "novita":
+	if _, ok := stripModelPrefixProviders[prefix]; ok {
 		return after
-	case "nvidia":
-		lowerAPIBase := strings.ToLower(apiBase)
-		if strings.Contains(lowerAPIBase, "integrate.api.nvidia.com") ||
-			strings.Contains(lowerAPIBase, "grpc.nvcf.nvidia.com") {
-			return after
-		}
-		return model
-	default:
-		return model
 	}
+
+	return model
 }
 
 func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {

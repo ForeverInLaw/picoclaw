@@ -107,7 +107,7 @@ func newMessageDeliveryLoop(t *testing.T) (*AgentLoop, *config.Config, *bus.Mess
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -134,7 +134,7 @@ func newPersonalTodoTerminalLoop(
 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
-	cfg.Agents.Defaults.Model = "test-model"
+	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 	cfg.Agents.Defaults.ToolFeedback.Enabled = false

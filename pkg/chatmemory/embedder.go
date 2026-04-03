@@ -38,7 +38,7 @@ func NewEmbedder(modelCfg *config.ModelConfig, embeddingCfg config.MemoryEmbeddi
 		return nil
 	}
 	apiBase := strings.TrimRight(strings.TrimSpace(modelCfg.APIBase), "/")
-	apiKey := strings.TrimSpace(modelCfg.APIKey)
+	apiKey := strings.TrimSpace(modelCfg.APIKey())
 	if apiBase == "" || apiKey == "" {
 		return nil
 	}

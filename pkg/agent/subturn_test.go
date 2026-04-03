@@ -844,13 +844,14 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         t.TempDir(),
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 		},
 	}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), panicProvider)
+	t.Cleanup(al.Close)
 
 	parent := &turnState{
 		ctx:            context.Background(),
@@ -938,8 +939,8 @@ func TestGetActiveTurn(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Model:    "gpt-4o-mini",
-				Provider: "mock",
+				ModelName: "gpt-4o-mini",
+				Provider:  "mock",
 			},
 		},
 	}
@@ -996,8 +997,8 @@ func TestGetActiveTurn_WithChildren(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Model:    "gpt-4o-mini",
-				Provider: "mock",
+				ModelName: "gpt-4o-mini",
+				Provider:  "mock",
 			},
 		},
 	}
@@ -1077,8 +1078,8 @@ func TestInjectFollowUp(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Model:    "gpt-4o-mini",
-				Provider: "mock",
+				ModelName: "gpt-4o-mini",
+				Provider:  "mock",
 			},
 		},
 	}
@@ -1106,8 +1107,8 @@ func TestAPIAliases(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Model:    "gpt-4o-mini",
-				Provider: "mock",
+				ModelName: "gpt-4o-mini",
+				Provider:  "mock",
 			},
 		},
 	}
@@ -1145,8 +1146,8 @@ func TestInterruptHard_Alias(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Model:    "gpt-4o-mini",
-				Provider: "mock",
+				ModelName: "gpt-4o-mini",
+				Provider:  "mock",
 			},
 		},
 	}

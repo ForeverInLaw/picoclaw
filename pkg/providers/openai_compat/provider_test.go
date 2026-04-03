@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -368,54 +367,6 @@ func TestProviderChat_SuccessResponseUsesStreamingDecoder(t *testing.T) {
 	}
 }
 
-func TestProviderChatStream_EmitsSnapshots(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/chat/completions" {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-
-		var reqBody map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if reqBody["stream"] != true {
-			http.Error(w, "expected stream=true", http.StatusBadRequest)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n")
-		fmt.Fprint(w, "data: [DONE]\n\n")
-	}))
-	defer server.Close()
-
-	p := NewProvider("key", server.URL, "")
-
-	var snapshots []string
-	out, err := p.ChatStream(
-		t.Context(),
-		[]Message{{Role: "user", Content: "hi"}},
-		nil,
-		"gpt-4o",
-		nil,
-		func(content string) { snapshots = append(snapshots, content) },
-	)
-	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
-	}
-	if out.Content != "Hello world" {
-		t.Fatalf("Content = %q, want %q", out.Content, "Hello world")
-	}
-	want := []string{"Hello", "Hello world"}
-	if !slices.Equal(snapshots, want) {
-		t.Fatalf("snapshots = %#v, want %#v", snapshots, want)
-	}
-}
-
 func TestProviderChat_LargeHTMLResponsePreviewIsTruncated(t *testing.T) {
 	body := append([]byte("<!DOCTYPE html><html><body>"), bytes.Repeat([]byte("A"), 2048)...)
 	body = append(body, []byte("</body></html>")...)
@@ -481,7 +432,7 @@ func TestProviderChat_StripsMoonshotPrefixAndNormalizesKimiTemperature(t *testin
 	}
 }
 
-func TestProviderChat_StripsGroqOllamaDeepseekVivgridNovitaPrefixes(t *testing.T) {
+func TestProviderChat_StripsKnownProviderPrefixes(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -522,6 +473,16 @@ func TestProviderChat_StripsGroqOllamaDeepseekVivgridNovitaPrefixes(t *testing.T
 			name:      "strips ollama prefix",
 			input:     "ollama/qwen2.5:14b",
 			wantModel: "qwen2.5:14b",
+		},
+		{
+			name:      "strips lmstudio prefix and keeps nested model",
+			input:     "lmstudio/openai/gpt-oss-20b",
+			wantModel: "openai/gpt-oss-20b",
+		},
+		{
+			name:      "strips venice prefix",
+			input:     "venice/venice-uncensored",
+			wantModel: "venice-uncensored",
 		},
 		{
 			name:      "strips deepseek prefix",
@@ -628,11 +589,11 @@ func TestNormalizeModel_UsesAPIBase(t *testing.T) {
 	if got := normalizeModel("deepseek/deepseek-chat", "https://api.deepseek.com/v1"); got != "deepseek-chat" {
 		t.Fatalf("normalizeModel(deepseek) = %q, want %q", got, "deepseek-chat")
 	}
-	if got := normalizeModel("nvidia/nemotron-3-super-120b-a12b", "https://integrate.api.nvidia.com/v1"); got != "nemotron-3-super-120b-a12b" {
-		t.Fatalf("normalizeModel(nvidia official) = %q, want %q", got, "nemotron-3-super-120b-a12b")
+	if got := normalizeModel("lmstudio/openai/gpt-oss-20b", "http://localhost:1234/v1"); got != "openai/gpt-oss-20b" {
+		t.Fatalf("normalizeModel(lmstudio) = %q, want %q", got, "openai/gpt-oss-20b")
 	}
-	if got := normalizeModel("nvidia/nemotron-3-super-120b-a12b", "https://aio.ooy.cz/api/ai/proxy"); got != "nvidia/nemotron-3-super-120b-a12b" {
-		t.Fatalf("normalizeModel(nvidia proxy) = %q, want %q", got, "nvidia/nemotron-3-super-120b-a12b")
+	if got := normalizeModel("venice/venice-uncensored", "https://api.venice.ai/api/v1"); got != "venice-uncensored" {
+		t.Fatalf("normalizeModel(venice) = %q, want %q", got, "venice-uncensored")
 	}
 	if got := normalizeModel("openrouter/auto", "https://openrouter.ai/api/v1"); got != "openrouter/auto" {
 		t.Fatalf("normalizeModel(openrouter) = %q, want %q", got, "openrouter/auto")

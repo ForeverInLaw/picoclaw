@@ -143,15 +143,15 @@ func (c *EmailChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (c *EmailChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+func (c *EmailChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
-		return channels.ErrNotRunning
+		return nil, channels.ErrNotRunning
 	}
 	if strings.TrimSpace(msg.Content) == "" {
-		return nil
+		return nil, nil
 	}
 	if strings.TrimSpace(msg.ChatID) == "" {
-		return fmt.Errorf("email recipient is empty: %w", channels.ErrSendFailed)
+		return nil, fmt.Errorf("email recipient is empty: %w", channels.ErrSendFailed)
 	}
 
 	entry, ok := c.lookupTrackedMessage(msg.ReplyToMessageID)
@@ -162,8 +162,9 @@ func (c *EmailChannel) Send(ctx context.Context, msg bus.OutboundMessage) error 
 		})
 	}
 
-	if err := c.sendSMTPMessage(msg.ChatID, entry, msg); err != nil {
-		return err
+	messageID, err := c.sendSMTPMessage(msg.ChatID, entry, msg)
+	if err != nil {
+		return nil, err
 	}
 	if ok {
 		if err := c.markAnswered(msg.ReplyToMessageID, entry); err != nil {
@@ -173,7 +174,10 @@ func (c *EmailChannel) Send(ctx context.Context, msg bus.OutboundMessage) error 
 			})
 		}
 	}
-	return nil
+	if messageID == "" {
+		return nil, nil
+	}
+	return []string{messageID}, nil
 }
 
 func (c *EmailChannel) runLoop() {

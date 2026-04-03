@@ -336,6 +336,9 @@ func (a *AgentInstance) Close() error {
 	if a.MemoryIndex != nil {
 		_ = a.MemoryIndex.Close()
 	}
+	if a.Tools != nil {
+		a.Tools.Close()
+	}
 	if a.Sessions != nil {
 		return a.Sessions.Close()
 	}
@@ -426,6 +429,27 @@ func initChatMemoryService(
 		}
 	}
 	return chatmemory.New(idx, defaults.MemoryIndex, embedder)
+}
+
+func buildModelListResolver(cfg *config.Config) func(raw string) (resolved string, ok bool) {
+	return func(raw string) (string, bool) {
+		if cfg == nil {
+			return "", false
+		}
+		modelName := strings.TrimSpace(raw)
+		if modelName == "" {
+			return "", false
+		}
+		modelCfg, err := cfg.GetModelConfig(modelName)
+		if err != nil || modelCfg == nil {
+			return "", false
+		}
+		resolved := strings.TrimSpace(modelCfg.Model)
+		if resolved == "" {
+			return "", false
+		}
+		return resolved, true
+	}
 }
 
 func expandHome(path string) string {

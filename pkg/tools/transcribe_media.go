@@ -7,15 +7,15 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/voice"
 )
 
 type TranscribeMediaTool struct {
 	workspace      string
 	restrict       bool
 	mediaStore     media.MediaStore
-	transcriber    voice.Transcriber
+	transcriber    asr.Transcriber
 	allowReadPaths []*regexp.Regexp
 }
 
@@ -23,7 +23,7 @@ func NewTranscribeMediaTool(
 	workspace string,
 	restrict bool,
 	store media.MediaStore,
-	transcriber voice.Transcriber,
+	transcriber asr.Transcriber,
 	allowReadPaths ...[]*regexp.Regexp,
 ) *TranscribeMediaTool {
 	var patterns []*regexp.Regexp

@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/voice"
 )
 
 type fakeTranscriber struct {
-	resp *voice.TranscriptionResponse
+	resp *asr.TranscriptionResponse
 	err  error
 	path string
 }
@@ -21,7 +21,7 @@ func (f *fakeTranscriber) Name() string {
 	return "fake"
 }
 
-func (f *fakeTranscriber) Transcribe(_ context.Context, audioFilePath string) (*voice.TranscriptionResponse, error) {
+func (f *fakeTranscriber) Transcribe(_ context.Context, audioFilePath string) (*asr.TranscriptionResponse, error) {
 	f.path = audioFilePath
 	return f.resp, f.err
 }
@@ -34,7 +34,7 @@ func TestTranscribeMediaTool_PathSource(t *testing.T) {
 	}
 
 	tr := &fakeTranscriber{
-		resp: &voice.TranscriptionResponse{
+		resp: &asr.TranscriptionResponse{
 			Text:     "hello world",
 			Language: "en-US",
 			Duration: 1.5,
@@ -71,7 +71,7 @@ func TestTranscribeMediaTool_MediaRefSource(t *testing.T) {
 	}
 
 	tr := &fakeTranscriber{
-		resp: &voice.TranscriptionResponse{Text: "media transcript"},
+		resp: &asr.TranscriptionResponse{Text: "media transcript"},
 	}
 	tool := NewTranscribeMediaTool(dir, true, store, tr)
 

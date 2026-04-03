@@ -24,7 +24,7 @@ func TestEmbedder_EmbedQuery_UsesQueryInputTypeAndExtraBody(t *testing.T) {
 		ModelName: "embedder",
 		Model:     "openai/nvidia/llama-nemotron-embed-1b-v2",
 		APIBase:   server.URL,
-		APIKey:    "test-key",
+		APIKeys:   config.SimpleSecureStrings("test-key"),
 		ExtraBody: map[string]any{
 			"modality": []string{"text"},
 			"truncate": "NONE",
@@ -75,7 +75,7 @@ func TestEmbedder_EmbedDocuments_UsesPassageInputType(t *testing.T) {
 		ModelName: "embedder",
 		Model:     "nvidia/llama-nemotron-embed-1b-v2",
 		APIBase:   server.URL,
-		APIKey:    "test-key",
+		APIKeys:   config.SimpleSecureStrings("test-key"),
 	}, config.MemoryEmbeddingConfig{
 		Enabled:           true,
 		QueryInputType:    "query",
@@ -125,7 +125,7 @@ func TestEmbedder_EmbedDocuments_RepeatsSingleModalityForBatch(t *testing.T) {
 		ModelName: "embedder",
 		Model:     "nvidia/llama-nemotron-embed-1b-v2",
 		APIBase:   server.URL,
-		APIKey:    "test-key",
+		APIKeys:   config.SimpleSecureStrings("test-key"),
 		ExtraBody: map[string]any{
 			"modality": []string{"text"},
 			"truncate": "NONE",

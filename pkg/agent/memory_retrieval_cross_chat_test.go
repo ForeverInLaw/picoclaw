@@ -48,7 +48,7 @@ func TestLookupRetrievedMemories_DirectChatCanRecallAccessibleGroup(t *testing.T
 		Role:       "user",
 		SenderID:   "telegram:42",
 		Content:    "[telegram_group_message]\nsender_label: Сер\n\nОбсуждали sqlite retrieval и память группы",
-		CreatedAt:  time.Date(2026, 3, 18, 10, 0, 0, 0, time.UTC),
+		CreatedAt:  time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("AddObservation() error: %v", err)
 	}

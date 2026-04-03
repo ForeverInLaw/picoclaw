@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/commands"
@@ -32,7 +33,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
-	"github.com/sipeed/picoclaw/pkg/voice"
 )
 
 type AgentLoop struct {
@@ -49,10 +49,11 @@ type AgentLoop struct {
 	// Runtime state
 	running        atomic.Bool
 	summarizing    sync.Map
+	contextManager ContextManager
 	fallback       *providers.FallbackChain
 	channelManager *channels.Manager
 	mediaStore     media.MediaStore
-	transcriber    voice.Transcriber
+	transcriber    asr.Transcriber
 	cmdRegistry    *commands.Registry
 	mcp            mcpRuntime
 	hookRuntime    hookRuntime
@@ -123,7 +124,7 @@ func NewAgentLoop(
 
 	// Set up shared fallback chain
 	cooldown := providers.NewCooldownTracker()
-	fallbackChain := providers.NewFallbackChain(cooldown)
+	fallbackChain := providers.NewFallbackChain(cooldown, nil)
 
 	// Create state manager using default agent's workspace for channel recording
 	defaultAgent := registry.GetDefaultAgent()
@@ -146,6 +147,7 @@ func NewAgentLoop(
 	}
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
+	al.contextManager = al.resolveContextManager()
 
 	// Register shared tools to all agents (now that al is created)
 	registerSharedTools(al, cfg, msgBus, registry, provider)
@@ -170,25 +172,22 @@ func registerSharedTools(
 		}
 
 		searchOpts := tools.WebSearchToolOptions{
-			BraveAPIKeys:         config.MergeAPIKeys(cfg.Tools.Web.Brave.APIKey, cfg.Tools.Web.Brave.APIKeys),
+			BraveAPIKeys:         cfg.Tools.Web.Brave.APIKeys.Values(),
 			BraveMaxResults:      cfg.Tools.Web.Brave.MaxResults,
 			BraveEnabled:         cfg.Tools.Web.Brave.Enabled,
-			TavilyAPIKeys:        config.MergeAPIKeys(cfg.Tools.Web.Tavily.APIKey, cfg.Tools.Web.Tavily.APIKeys),
+			TavilyAPIKeys:        cfg.Tools.Web.Tavily.APIKeys.Values(),
 			TavilyBaseURL:        cfg.Tools.Web.Tavily.BaseURL,
 			TavilyMaxResults:     cfg.Tools.Web.Tavily.MaxResults,
 			TavilyEnabled:        cfg.Tools.Web.Tavily.Enabled,
 			DuckDuckGoMaxResults: cfg.Tools.Web.DuckDuckGo.MaxResults,
 			DuckDuckGoEnabled:    cfg.Tools.Web.DuckDuckGo.Enabled,
-			PerplexityAPIKeys: config.MergeAPIKeys(
-				cfg.Tools.Web.Perplexity.APIKey,
-				cfg.Tools.Web.Perplexity.APIKeys,
-			),
+			PerplexityAPIKeys:    cfg.Tools.Web.Perplexity.APIKeys.Values(),
 			PerplexityMaxResults: cfg.Tools.Web.Perplexity.MaxResults,
 			PerplexityEnabled:    cfg.Tools.Web.Perplexity.Enabled,
 			SearXNGBaseURL:       cfg.Tools.Web.SearXNG.BaseURL,
 			SearXNGMaxResults:    cfg.Tools.Web.SearXNG.MaxResults,
 			SearXNGEnabled:       cfg.Tools.Web.SearXNG.Enabled,
-			GLMSearchAPIKey:      cfg.Tools.Web.GLMSearch.APIKey,
+			GLMSearchAPIKey:      cfg.Tools.Web.GLMSearch.APIKey.String(),
 			GLMSearchBaseURL:     cfg.Tools.Web.GLMSearch.BaseURL,
 			GLMSearchEngine:      cfg.Tools.Web.GLMSearch.SearchEngine,
 			GLMSearchMaxResults:  cfg.Tools.Web.GLMSearch.MaxResults,
@@ -244,7 +243,7 @@ func registerSharedTools(
 		}
 		if cfg.Tools.IsToolEnabled("send_sticker") {
 			agent.Tools.Register(tools.NewSendStickerTool(
-				cfg.Channels.Telegram.Token,
+				cfg.Channels.Telegram.Token.String(),
 				cfg.Channels.Telegram.BaseURL,
 			))
 		}
@@ -275,9 +274,20 @@ func registerSharedTools(
 		find_skills_enable := cfg.Tools.IsToolEnabled("find_skills")
 		install_skills_enable := cfg.Tools.IsToolEnabled("install_skill")
 		if skills_enabled && (find_skills_enable || install_skills_enable) {
+			clawHubConfig := cfg.Tools.Skills.Registries.ClawHub
 			registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
 				MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
-				ClawHub:               skills.ClawHubConfig(cfg.Tools.Skills.Registries.ClawHub),
+				ClawHub: skills.ClawHubConfig{
+					Enabled:         clawHubConfig.Enabled,
+					BaseURL:         clawHubConfig.BaseURL,
+					AuthToken:       clawHubConfig.AuthToken.String(),
+					SearchPath:      clawHubConfig.SearchPath,
+					SkillsPath:      clawHubConfig.SkillsPath,
+					DownloadPath:    clawHubConfig.DownloadPath,
+					Timeout:         clawHubConfig.Timeout,
+					MaxZipSize:      clawHubConfig.MaxZipSize,
+					MaxResponseSize: clawHubConfig.MaxResponseSize,
+				},
 			})
 
 			if find_skills_enable {
@@ -991,7 +1001,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.registry = registry
 
 	// Also update fallback chain with new config
-	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker())
+	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), nil)
 
 	al.mu.Unlock()
 
@@ -1051,8 +1061,8 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	})
 }
 
-// SetTranscriber injects a voice transcriber for agent-level audio transcription.
-func (al *AgentLoop) SetTranscriber(t voice.Transcriber) {
+// SetTranscriber injects an ASR transcriber for agent-level audio transcription.
+func (al *AgentLoop) SetTranscriber(t asr.Transcriber) {
 	al.transcriber = t
 }
 
@@ -1766,6 +1776,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			ts.agent.Sessions.AddMessage(ts.sessionKey, rootMsg.Role, rootMsg.Content)
 		}
 		ts.recordPersistedMessage(rootMsg)
+		ts.ingestMessage(ctx, al, rootMsg)
 		recordMemoryObservation(ctx, ts.agent, ts.sessionKey, ts.channel, ts.chatID, ts.opts.PeerKind, ts.opts.ChatLabel, "user", ts.opts.SenderID, ts.userMessage)
 	}
 
@@ -1842,6 +1853,7 @@ turnLoop:
 				if !ts.opts.NoHistory {
 					ts.agent.Sessions.AddFullMessage(ts.sessionKey, pm)
 					ts.recordPersistedMessage(pm)
+					ts.ingestMessage(ctx, al, pm)
 				}
 				logger.InfoCF("agent", "Injected steering message into context",
 					map[string]any{
@@ -2339,6 +2351,7 @@ turnLoop:
 		if !ts.opts.NoHistory {
 			ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
 			ts.recordPersistedMessage(assistantMsg)
+			ts.ingestMessage(ctx, al, assistantMsg)
 		}
 
 		ts.setPhase(TurnPhaseTools)
@@ -2658,6 +2671,7 @@ turnLoop:
 			if !ts.opts.NoHistory {
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)
 				ts.recordPersistedMessage(toolResultMsg)
+				ts.ingestMessage(ctx, al, toolResultMsg)
 			}
 
 			if toolResult.Terminal && !toolResult.IsError {
@@ -2689,6 +2703,7 @@ turnLoop:
 						if !ts.opts.NoHistory {
 							ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
 							ts.recordPersistedMessage(skippedMsg)
+							ts.ingestMessage(ctx, al, skippedMsg)
 						}
 					}
 				}
@@ -2739,6 +2754,7 @@ turnLoop:
 						if !ts.opts.NoHistory {
 							ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
 							ts.recordPersistedMessage(skippedMsg)
+							ts.ingestMessage(ctx, al, skippedMsg)
 						}
 					}
 				}
@@ -2814,6 +2830,7 @@ turnLoop:
 			finalMsg := providers.Message{Role: "assistant", Content: finalContent}
 			ts.agent.Sessions.AddMessage(ts.sessionKey, finalMsg.Role, finalMsg.Content)
 			ts.recordPersistedMessage(finalMsg)
+			ts.ingestMessage(ctx, al, finalMsg)
 			recordMemoryObservation(ctx, ts.agent, ts.sessionKey, ts.channel, ts.chatID, ts.opts.PeerKind, ts.opts.ChatLabel, "assistant", "", finalContent)
 		}
 		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
@@ -2977,7 +2994,7 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, tur
 	}
 }
 
-type compressionResult struct {
+type legacyCompressionResult struct {
 	DroppedMessages   int
 	RemainingMessages int
 }
@@ -2994,10 +3011,10 @@ type compressionResult struct {
 // prompt is built dynamically by BuildMessages and is NOT stored here.
 // The compression note is recorded in the session summary so that
 // BuildMessages can include it in the next system prompt.
-func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
+func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (legacyCompressionResult, bool) {
 	history := agent.Sessions.GetHistory(sessionKey)
 	if len(history) <= 2 {
-		return compressionResult{}, false
+		return legacyCompressionResult{}, false
 	}
 
 	// Split at a Turn boundary so no tool-call sequence is torn apart.
@@ -3052,7 +3069,7 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 		"new_count":    len(keptHistory),
 	})
 
-	return compressionResult{
+	return legacyCompressionResult{
 		DroppedMessages:   droppedCount,
 		RemainingMessages: len(keptHistory),
 	}, true
@@ -3593,4 +3610,28 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 		return nil, false
 	}
 	return defaultAgent.Provider, true
+}
+
+// resolveContextManager selects the ContextManager implementation based on config.
+func (al *AgentLoop) resolveContextManager() ContextManager {
+	name := al.cfg.Agents.Defaults.ContextManager
+	if name == "" || name == "legacy" {
+		return &legacyContextManager{al: al}
+	}
+	factory, ok := lookupContextManager(name)
+	if !ok {
+		logger.WarnCF("agent", "Unknown context manager, falling back to legacy", map[string]any{
+			"name": name,
+		})
+		return &legacyContextManager{al: al}
+	}
+	cm, err := factory(al.cfg.Agents.Defaults.ContextManagerConfig, al)
+	if err != nil {
+		logger.WarnCF("agent", "Failed to create context manager, falling back to legacy", map[string]any{
+			"name":  name,
+			"error": err.Error(),
+		})
+		return &legacyContextManager{al: al}
+	}
+	return cm
 }

@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/audio/asr"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/voice"
 )
 
 type stubTranscriber struct {
@@ -20,12 +20,12 @@ type stubTranscriber struct {
 
 func (s *stubTranscriber) Name() string { return "stub" }
 
-func (s *stubTranscriber) Transcribe(_ context.Context, audioFilePath string) (*voice.TranscriptionResponse, error) {
+func (s *stubTranscriber) Transcribe(_ context.Context, audioFilePath string) (*asr.TranscriptionResponse, error) {
 	if err := s.errors[audioFilePath]; err != nil {
 		return nil, err
 	}
 	if text, ok := s.results[audioFilePath]; ok {
-		return &voice.TranscriptionResponse{Text: text}, nil
+		return &asr.TranscriptionResponse{Text: text}, nil
 	}
 	return nil, errors.New("missing stub result")
 }

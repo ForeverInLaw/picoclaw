@@ -25,14 +25,16 @@ import (
 
 type fakeChannel struct{ id string }
 
-func (f *fakeChannel) Name() string                                            { return "fake" }
-func (f *fakeChannel) Start(ctx context.Context) error                         { return nil }
-func (f *fakeChannel) Stop(ctx context.Context) error                          { return nil }
-func (f *fakeChannel) Send(ctx context.Context, msg bus.OutboundMessage) error { return nil }
-func (f *fakeChannel) IsRunning() bool                                         { return true }
-func (f *fakeChannel) IsAllowed(string) bool                                   { return true }
-func (f *fakeChannel) IsAllowedSender(sender bus.SenderInfo) bool              { return true }
-func (f *fakeChannel) ReasoningChannelID() string                              { return f.id }
+func (f *fakeChannel) Name() string                    { return "fake" }
+func (f *fakeChannel) Start(ctx context.Context) error { return nil }
+func (f *fakeChannel) Stop(ctx context.Context) error  { return nil }
+func (f *fakeChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+	return nil, nil
+}
+func (f *fakeChannel) IsRunning() bool                            { return true }
+func (f *fakeChannel) IsAllowed(string) bool                      { return true }
+func (f *fakeChannel) IsAllowedSender(sender bus.SenderInfo) bool { return true }
+func (f *fakeChannel) ReasoningChannelID() string                 { return f.id }
 
 type recordingProvider struct {
 	lastMessages []providers.Message
@@ -68,7 +70,7 @@ func newTestAgentLoop(
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -172,7 +174,7 @@ func TestProcessMessage_IncludesCurrentSenderAndChatInDynamicContext(t *testing.
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -232,7 +234,7 @@ func TestProcessMessage_ObserveOnly_SkipsProviderAndPersistsUserMessage(t *testi
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				MemoryIndex: config.MemoryIndexConfig{
@@ -348,7 +350,7 @@ func TestNewAgentLoop_StateInitialized(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -384,7 +386,7 @@ func TestToolRegistry_ToolRegistration(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -441,7 +443,7 @@ func TestToolRegistry_GetDefinitions(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -477,7 +479,7 @@ func TestAgentLoop_GetStartupInfo(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
-	cfg.Agents.Defaults.Model = "test-model"
+	cfg.Agents.Defaults.ModelName = "test-model"
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 
@@ -521,7 +523,7 @@ func TestAgentLoop_Stop(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -625,8 +627,10 @@ func (m *mockCustomTool) Description() string {
 
 func (m *mockCustomTool) Parameters() map[string]any {
 	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{},
+		"type": "object",
+		"properties": map[string]any{
+			"task": map[string]any{"type": "string"},
+		},
 	}
 }
 
@@ -727,7 +731,7 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -783,7 +787,7 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -863,22 +867,22 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
 				Provider:          "openai",
-				Model:             "local",
+				ModelName:         "local",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 		},
-		ModelList: []config.ModelConfig{
+		ModelList: config.SecureModelList{
 			{
 				ModelName: "local",
 				Model:     "openai/local-model",
-				APIKey:    "test-key",
+				APIKeys:   config.SimpleSecureStrings("test-key"),
 				APIBase:   "https://local.example.invalid/v1",
 			},
 			{
 				ModelName: "deepseek",
 				Model:     "openrouter/deepseek/deepseek-v3.2",
-				APIKey:    "test-key",
+				APIKeys:   config.SimpleSecureStrings("test-key"),
 				APIBase:   "https://openrouter.ai/api/v1",
 			},
 		},
@@ -934,16 +938,16 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
 				Provider:          "openai",
-				Model:             "local",
+				ModelName:         "local",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 		},
-		ModelList: []config.ModelConfig{
+		ModelList: config.SecureModelList{
 			{
 				ModelName: "local",
 				Model:     "openai/local-model",
-				APIKey:    "test-key",
+				APIKeys:   config.SimpleSecureStrings("test-key"),
 				APIBase:   "https://local.example.invalid/v1",
 			},
 		},
@@ -1009,22 +1013,22 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
 				Provider:          "openai",
-				Model:             "local",
+				ModelName:         "local",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 		},
-		ModelList: []config.ModelConfig{
+		ModelList: config.SecureModelList{
 			{
 				ModelName: "local",
 				Model:     "openai/Qwen3.5-35B-A3B",
-				APIKey:    "local-key",
+				APIKeys:   config.SimpleSecureStrings("local-key"),
 				APIBase:   localServer.URL,
 			},
 			{
 				ModelName: "deepseek",
 				Model:     "openrouter/deepseek/deepseek-v3.2",
-				APIKey:    "remote-key",
+				APIKeys:   config.SimpleSecureStrings("remote-key"),
 				APIBase:   remoteServer.URL,
 			},
 		},
@@ -1115,7 +1119,7 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1157,7 +1161,7 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1228,7 +1232,7 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1308,7 +1312,7 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
@@ -1339,7 +1343,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 1,
 			},
@@ -1355,8 +1359,9 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
-	if response != toolLimitResponse {
-		t.Fatalf("response = %q, want %q", response, toolLimitResponse)
+	want := toolExhaustionFallback("", "tool limit test result", true)
+	if response != want {
+		t.Fatalf("response = %q, want %q", response, want)
 	}
 
 	defaultAgent := al.registry.GetDefaultAgent()
@@ -1375,8 +1380,8 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		t.Fatalf("history len = %d, want 4", len(history))
 	}
 	assertRoles(t, history, "user", "assistant", "tool", "assistant")
-	if history[3].Content != toolLimitResponse {
-		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+	if history[3].Content != want {
+		t.Fatalf("final assistant content = %q, want %q", history[3].Content, want)
 	}
 }
 
@@ -1396,7 +1401,7 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1448,7 +1453,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1518,7 +1523,7 @@ func TestHandleReasoning(t *testing.T) {
 			Agents: config.AgentsConfig{
 				Defaults: config.AgentDefaults{
 					Workspace:         tmpDir,
-					Model:             "test-model",
+					ModelName:         "test-model",
 					MaxTokens:         4096,
 					MaxToolIterations: 10,
 				},

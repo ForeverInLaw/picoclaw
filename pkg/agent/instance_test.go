@@ -23,7 +23,7 @@ func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
@@ -35,6 +35,7 @@ func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 
 	provider := &mockProvider{}
 	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+	t.Cleanup(func() { _ = agent.Close() })
 
 	if agent.MaxTokens != 1234 {
 		t.Fatalf("MaxTokens = %d, want %d", agent.MaxTokens, 1234)
@@ -55,7 +56,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenZero(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
@@ -67,6 +68,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenZero(t *testing.T) {
 
 	provider := &mockProvider{}
 	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+	t.Cleanup(func() { _ = agent.Close() })
 
 	if agent.Temperature != 0.0 {
 		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 0.0)
@@ -84,7 +86,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
-				Model:             "test-model",
+				ModelName:         "test-model",
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
@@ -93,6 +95,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 
 	provider := &mockProvider{}
 	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+	t.Cleanup(func() { _ = agent.Close() })
 
 	if agent.Temperature != 0.7 {
 		t.Fatalf("Temperature = %f, want %f", agent.Temperature, 0.7)
@@ -138,10 +141,10 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 				Agents: config.AgentsConfig{
 					Defaults: config.AgentDefaults{
 						Workspace: tmpDir,
-						Model:     tt.aliasName,
+						ModelName: tt.aliasName,
 					},
 				},
-				ModelList: []config.ModelConfig{
+				ModelList: config.SecureModelList{
 					{
 						ModelName: tt.aliasName,
 						Model:     tt.modelName,
@@ -152,6 +155,7 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 
 			provider := &mockProvider{}
 			agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, provider)
+			t.Cleanup(func() { _ = agent.Close() })
 
 			if len(agent.Candidates) != 1 {
 				t.Fatalf("len(Candidates) = %d, want 1", len(agent.Candidates))
@@ -179,23 +183,24 @@ func TestNewAgentInstance_ConfiguresImageProviderFromModelList(t *testing.T) {
 				Temperature: nil,
 			},
 		},
-		ModelList: []config.ModelConfig{
+		ModelList: config.SecureModelList{
 			{
 				ModelName: "text-model",
 				Model:     "openai/plain-text-model",
-				APIKey:    "text-key",
+				APIKeys:   config.SimpleSecureStrings("text-key"),
 				APIBase:   "https://text.example/v1",
 			},
 			{
 				ModelName: "vision-model",
 				Model:     "openai/vision-model",
-				APIKey:    "vision-key",
+				APIKeys:   config.SimpleSecureStrings("vision-key"),
 				APIBase:   "https://vision.example/v1",
 			},
 		},
 	}
 
 	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	t.Cleanup(func() { _ = agent.Close() })
 
 	if agent.ImageModel != "vision-model" {
 		t.Fatalf("ImageModel = %q, want %q", agent.ImageModel, "vision-model")
@@ -252,6 +257,7 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadListAndExec(t *testing.T) {
 	}
 
 	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	t.Cleanup(func() { _ = agent.Close() })
 
 	readTool, ok := agent.Tools.Get("read_file")
 	if !ok {
@@ -314,6 +320,7 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 	}
 
 	agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	t.Cleanup(func() { _ = agent.Close() })
 	if agent == nil {
 		t.Fatal("expected agent instance, got nil")
 	}

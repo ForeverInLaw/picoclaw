@@ -94,6 +94,8 @@ Your workspace is at: %s
 - Memory: %s/memory/MEMORY.md
 - Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
 - Skills: %s/skills/{skill-name}/SKILL.md
+- Learnings: %s/.learnings/{LEARNINGS,ERRORS,FEATURE_REQUESTS}.md
+- Tools Notes: %s/TOOLS.md
 
 ## Important Rules
 
@@ -112,7 +114,7 @@ Your workspace is at: %s
 7. **Fact check** - When the user explicitly asks to verify, fact-check, or check whether a claim or URL is true, you MUST use the fact_check tool. Do not replace this with free-form web_search or guessing. If fact_check returns mixed or unverified, do not present the claim as established fact; state the verdict and cite the sources.
 
 %s`,
-		version, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, toolDiscovery)
+		version, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, toolDiscovery)
 }
 
 func (cb *ContextBuilder) getDiscoveryRule() string {
@@ -456,6 +458,9 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	if agentDefinition.User != nil {
 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
 	}
+	if data, err := os.ReadFile(filepath.Join(cb.workspace, "TOOLS.md")); err == nil {
+		fmt.Fprintf(&sb, "## %s\n\nTools Notes:\n\n%s\n\n", "TOOLS.md", data)
+	}
 
 	if agentDefinition.Source != AgentDefinitionSourceAgent {
 		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
@@ -693,8 +698,18 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	// like DeepSeek that enforce: "An assistant message with 'tool_calls' must
 	// be followed by tool messages responding to each 'tool_call_id'."
 	final := make([]providers.Message, 0, len(sanitized))
+	seenToolCallID := make(map[string]bool)
 	for i := 0; i < len(sanitized); i++ {
 		msg := sanitized[i]
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			if seenToolCallID[msg.ToolCallID] {
+				logger.DebugCF("agent", "Dropping duplicate tool result", map[string]any{
+					"tool_call_id": msg.ToolCallID,
+				})
+				continue
+			}
+			seenToolCallID[msg.ToolCallID] = true
+		}
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			// Collect expected tool_call IDs
 			expected := make(map[string]bool, len(msg.ToolCalls))

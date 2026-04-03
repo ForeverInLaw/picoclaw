@@ -25,12 +25,13 @@ type Tool interface {
 type toolCtxKey struct{ name string }
 
 var (
-	ctxKeyChannel   = &toolCtxKey{"channel"}
-	ctxKeyChatID    = &toolCtxKey{"chatID"}
-	ctxKeyPeerKind  = &toolCtxKey{"peerKind"}
-	ctxKeyLanguage  = &toolCtxKey{"language"}
-	ctxKeyReplyToID = &toolCtxKey{"replyToMessageID"}
-	ctxKeySender    = &toolCtxKey{"sender"}
+	ctxKeyChannel          = &toolCtxKey{"channel"}
+	ctxKeyChatID           = &toolCtxKey{"chatID"}
+	ctxKeyMessageID        = &toolCtxKey{"messageID"}
+	ctxKeyPeerKind         = &toolCtxKey{"peerKind"}
+	ctxKeyLanguage         = &toolCtxKey{"language"}
+	ctxKeyReplyToMessageID = &toolCtxKey{"replyToMessageID"}
+	ctxKeySender           = &toolCtxKey{"sender"}
 )
 
 // WithToolContext returns a child context carrying channel and chatID.
@@ -45,6 +46,22 @@ func WithToolPeerKind(ctx context.Context, peerKind string) context.Context {
 	return context.WithValue(ctx, ctxKeyPeerKind, peerKind)
 }
 
+// WithToolMessageContext returns a child context carrying inbound message IDs.
+func WithToolMessageContext(ctx context.Context, messageID, replyToMessageID string) context.Context {
+	ctx = context.WithValue(ctx, ctxKeyMessageID, messageID)
+	ctx = context.WithValue(ctx, ctxKeyReplyToMessageID, replyToMessageID)
+	return ctx
+}
+
+// WithToolInboundContext returns a child context carrying channel/chat and inbound IDs.
+func WithToolInboundContext(
+	ctx context.Context,
+	channel, chatID, messageID, replyToMessageID string,
+) context.Context {
+	ctx = WithToolContext(ctx, channel, chatID)
+	return WithToolMessageContext(ctx, messageID, replyToMessageID)
+}
+
 // WithToolLanguage returns a child context carrying the preferred response language.
 func WithToolLanguage(ctx context.Context, language string) context.Context {
 	return context.WithValue(ctx, ctxKeyLanguage, language)
@@ -52,7 +69,7 @@ func WithToolLanguage(ctx context.Context, language string) context.Context {
 
 // WithToolReplyToMessageID returns a child context carrying the inbound message ID.
 func WithToolReplyToMessageID(ctx context.Context, replyToMessageID string) context.Context {
-	return context.WithValue(ctx, ctxKeyReplyToID, replyToMessageID)
+	return context.WithValue(ctx, ctxKeyReplyToMessageID, replyToMessageID)
 }
 
 // WithToolSender returns a child context carrying structured sender identity.
@@ -78,6 +95,12 @@ func ToolPeerKind(ctx context.Context) string {
 	return v
 }
 
+// ToolMessageID extracts the current inbound message ID from ctx, or "" if unset.
+func ToolMessageID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyMessageID).(string)
+	return v
+}
+
 // ToolLanguage extracts the preferred response language from ctx, or "" if unset.
 func ToolLanguage(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyLanguage).(string)
@@ -86,7 +109,7 @@ func ToolLanguage(ctx context.Context) string {
 
 // ToolReplyToMessageID extracts the inbound reply-to message ID from ctx, or "" if unset.
 func ToolReplyToMessageID(ctx context.Context) string {
-	v, _ := ctx.Value(ctxKeyReplyToID).(string)
+	v, _ := ctx.Value(ctxKeyReplyToMessageID).(string)
 	return v
 }
 
