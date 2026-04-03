@@ -36,6 +36,44 @@ func (f *fakeChannel) IsAllowed(string) bool                      { return true 
 func (f *fakeChannel) IsAllowedSender(sender bus.SenderInfo) bool { return true }
 func (f *fakeChannel) ReasoningChannelID() string                 { return f.id }
 
+type inlineRecordingChannel struct {
+	fakeChannel
+	sent          []bus.OutboundMessage
+	edited        []string
+	streamUpdates []string
+	streamFinal   []string
+}
+
+func (c *inlineRecordingChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+	c.sent = append(c.sent, msg)
+	return []string{"sent-1"}, nil
+}
+
+func (c *inlineRecordingChannel) EditMessage(ctx context.Context, chatID string, messageID string, content string) error {
+	c.edited = append(c.edited, fmt.Sprintf("%s|%s|%s", chatID, messageID, content))
+	return nil
+}
+
+func (c *inlineRecordingChannel) BeginStream(ctx context.Context, chatID string) (channels.Streamer, error) {
+	return &inlineRecordingStreamer{channel: c}, nil
+}
+
+type inlineRecordingStreamer struct {
+	channel *inlineRecordingChannel
+}
+
+func (s *inlineRecordingStreamer) Update(ctx context.Context, content string) error {
+	s.channel.streamUpdates = append(s.channel.streamUpdates, content)
+	return nil
+}
+
+func (s *inlineRecordingStreamer) Finalize(ctx context.Context, content string) error {
+	s.channel.streamFinal = append(s.channel.streamFinal, content)
+	return nil
+}
+
+func (s *inlineRecordingStreamer) Cancel(ctx context.Context) {}
+
 type recordingProvider struct {
 	lastMessages []providers.Message
 }
@@ -56,6 +94,28 @@ func (r *recordingProvider) Chat(
 
 func (r *recordingProvider) GetDefaultModel() string {
 	return "mock-model"
+}
+
+type streamingRecordingProvider struct {
+	recordingProvider
+	updates []string
+}
+
+func (r *streamingRecordingProvider) ChatStream(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+	onUpdate func(content string),
+) (*providers.LLMResponse, error) {
+	r.lastMessages = append([]providers.Message(nil), messages...)
+	onUpdate("partial")
+	r.updates = append(r.updates, "partial")
+	return &providers.LLMResponse{
+		Content:   "Mock response",
+		ToolCalls: []providers.ToolCall{},
+	}, nil
 }
 
 func newTestAgentLoop(
@@ -220,6 +280,83 @@ func TestProcessMessage_IncludesCurrentSenderAndChatInDynamicContext(t *testing.
 	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
 	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
 		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
+	}
+}
+
+func TestProcessMessage_InlineUsesStreamerEvenWithoutHistory(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &streamingRecordingProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	chManager, err := channels.NewManager(&config.Config{}, msgBus, nil)
+	if err != nil {
+		t.Fatalf("Failed to create channel manager: %v", err)
+	}
+	inlineChannel := &inlineRecordingChannel{}
+	chManager.RegisterChannel("telegram", inlineChannel)
+	al.SetChannelManager(chManager)
+
+	response, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel: "telegram",
+		ChatID:  "inline:inline-msg-1",
+		Content: "summarize this",
+		Metadata: map[string]string{
+			telegramInlineMetadataKey: "true",
+			telegramInlineQueryKey:    "summarize this",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != formatInlineResponse("summarize this", "Mock response") {
+		t.Fatalf("processMessage() response = %q", response)
+	}
+	if len(inlineChannel.streamUpdates) == 0 {
+		t.Fatal("expected inline stream updates to be sent")
+	}
+	if !slices.Equal(inlineChannel.streamFinal, []string{formatInlineResponse("summarize this", "Mock response")}) {
+		t.Fatalf("stream final = %#v", inlineChannel.streamFinal)
+	}
+	if len(inlineChannel.sent) != 0 {
+		t.Fatalf("expected no fallback send for inline stream, got %#v", inlineChannel.sent)
+	}
+}
+
+func TestPublishResponseIfNeeded_InlineTelegramUsesEditMessage(t *testing.T) {
+	al := &AgentLoop{}
+	msgBus := bus.NewMessageBus()
+	chManager, err := channels.NewManager(&config.Config{}, msgBus, nil)
+	if err != nil {
+		t.Fatalf("Failed to create channel manager: %v", err)
+	}
+	inlineChannel := &inlineRecordingChannel{}
+	chManager.RegisterChannel("telegram", inlineChannel)
+	al.SetChannelManager(chManager)
+
+	al.publishResponseIfNeeded(context.Background(), "telegram", "inline:inline-msg-2", "final answer")
+
+	if !slices.Equal(inlineChannel.edited, []string{"inline:inline-msg-2||final answer"}) {
+		t.Fatalf("edited = %#v", inlineChannel.edited)
+	}
+	if len(inlineChannel.sent) != 0 {
+		t.Fatalf("expected no Send() calls, got %#v", inlineChannel.sent)
 	}
 }
 

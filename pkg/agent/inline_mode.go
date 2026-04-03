@@ -16,7 +16,11 @@ func isInlineMessage(msg bus.InboundMessage) bool {
 	if strings.EqualFold(msg.Metadata[telegramInlineMetadataKey], "true") {
 		return true
 	}
-	return msg.Channel == "telegram" && strings.HasPrefix(strings.TrimSpace(msg.ChatID), "inline:")
+	return isInlineChatTarget(msg.Channel, msg.ChatID)
+}
+
+func isInlineChatTarget(channel, chatID string) bool {
+	return channel == "telegram" && strings.HasPrefix(strings.TrimSpace(chatID), "inline:")
 }
 
 func inlineToolAllowlist() []string {

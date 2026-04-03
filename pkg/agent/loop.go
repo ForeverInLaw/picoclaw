@@ -631,6 +631,22 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 		return
 	}
 
+	if isInlineChatTarget(channel, chatID) && al.channelManager != nil {
+		if ch, ok := al.channelManager.GetChannel(channel); ok {
+			if editor, ok := ch.(channels.MessageEditor); ok {
+				if err := editor.EditMessage(ctx, chatID, "", response); err == nil {
+					logger.InfoCF("agent", "Published inline response via message edit",
+						map[string]any{
+							"channel":     channel,
+							"chat_id":     chatID,
+							"content_len": len(response),
+						})
+					return
+				}
+			}
+		}
+	}
+
 	alreadySent := false
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	if defaultAgent != nil {
@@ -1561,7 +1577,7 @@ func (al *AgentLoop) runAgentLoop(
 	// Record last channel for heartbeat notifications (skip internal channels and cli)
 	if opts.Channel != "" && opts.ChatID != "" &&
 		!constants.IsInternalChannel(opts.Channel) &&
-		!(opts.Channel == "telegram" && strings.HasPrefix(strings.TrimSpace(opts.ChatID), "inline:")) {
+		!isInlineChatTarget(opts.Channel, opts.ChatID) {
 		channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
 		if err := al.RecordLastChannel(channelKey); err != nil {
 			logger.WarnCF(
@@ -2011,10 +2027,11 @@ turnLoop:
 
 			var streamer bus.Streamer
 			var streamUpdater *partialReplyUpdater
+			inlineTarget := isInlineChatTarget(ts.channel, ts.chatID)
 			streamingEnabled := providerCanStream &&
 				streamProvider != nil &&
 				len(activeCandidates) <= 1 &&
-				!ts.opts.NoHistory &&
+				(!ts.opts.NoHistory || inlineTarget) &&
 				!constants.IsInternalChannel(ts.channel)
 			if streamingEnabled {
 				streamer, streamUpdater = selectStreamingTargets(providerCtx, al.bus, al.channelManager, ts.channel, ts.chatID)
