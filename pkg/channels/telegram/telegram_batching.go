@@ -94,8 +94,11 @@ func (c *TelegramChannel) buildInboundCandidate(
 	}
 
 	content, mediaPaths := c.buildTelegramMessagePayload(ctx, message, storeMedia)
+	if content == "" && len(mediaPaths) == 0 {
+		return nil, nil
+	}
 	if content == "" {
-		content = "[empty message]"
+		content = "[media only]"
 	}
 
 	observeOnly := false

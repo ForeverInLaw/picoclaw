@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -508,6 +509,52 @@ func TestParseTelegramChatID_InvalidThreadID(t *testing.T) {
 	_, _, err := parseTelegramChatID("-100123/not-a-thread")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid thread ID")
+}
+
+func TestEditMessage_InlineChatIDUsesInlineMessageAPI(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return &ta.Response{Ok: true, Result: []byte("true")}, nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	err := ch.EditMessage(context.Background(), telegramInlineChatID("inline-msg-42"), "not-a-number", "hello **inline**")
+	require.NoError(t, err)
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "editMessageText")
+
+	var params map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &params))
+	assert.Equal(t, "inline-msg-42", params["inline_message_id"])
+	_, hasChatID := params["chat_id"]
+	assert.False(t, hasChatID)
+	_, hasMessageID := params["message_id"]
+	assert.False(t, hasMessageID)
+	assert.Equal(t, telego.ModeHTML, params["parse_mode"])
+	assert.Equal(t, "hello <b>inline</b>", params["text"])
+}
+
+func TestBeginStream_InlineChatIDReturnsInlineStreamer(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			return &ta.Response{Ok: true, Result: []byte("true")}, nil
+		},
+	}
+	ch := newTestChannel(t, caller)
+	ch.config.Channels.Telegram.Streaming.Enabled = true
+	ch.config.Channels.Telegram.Streaming.ThrottleSeconds = 7
+	ch.config.Channels.Telegram.Streaming.MinGrowthChars = 321
+
+	streamer, err := ch.BeginStream(context.Background(), telegramInlineChatID("inline-msg-99"))
+	require.NoError(t, err)
+
+	inlineStreamer, ok := streamer.(*telegramInlineStreamer)
+	require.True(t, ok, "expected inline streamer, got %T", streamer)
+	assert.Equal(t, "inline-msg-99", inlineStreamer.inlineMessageID)
+	assert.Equal(t, 7*time.Second, inlineStreamer.throttleInterval)
+	assert.Equal(t, 321, inlineStreamer.minGrowth)
+	assert.Same(t, ch, inlineStreamer.channel)
 }
 
 func TestSend_WithForumThreadID(t *testing.T) {
