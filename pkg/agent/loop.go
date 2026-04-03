@@ -2997,7 +2997,8 @@ func publishToolMessage(msgBus *bus.MessageBus, toolCtx context.Context, channel
 	})
 }
 
-// maybeSummarize triggers summarization if the session history exceeds thresholds.
+// maybeSummarize triggers asynchronous proactive context compression
+// if the session history exceeds configured thresholds.
 func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, turnScope turnEventScope) {
 	newHistory := agent.Sessions.GetHistory(sessionKey)
 	tokenEstimate := al.estimateTokens(newHistory)
@@ -3008,6 +3009,14 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, tur
 		if _, loading := al.summarizing.LoadOrStore(summarizeKey, true); !loading {
 			go func() {
 				defer al.summarizing.Delete(summarizeKey)
+				defer func() {
+					if r := recover(); r != nil {
+						logger.WarnCF("agent", "Proactive compression panic recovered", map[string]any{
+							"session_key": sessionKey,
+							"panic":       r,
+						})
+					}
+				}()
 				logger.Debug("Memory threshold reached. Optimizing conversation history...")
 				al.summarizeSession(agent, sessionKey, turnScope)
 			}()
@@ -3181,100 +3190,20 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 	return sb.String()
 }
 
-// summarizeSession summarizes the conversation history for a session.
+// summarizeSession applies proactive context compression without destructive fallback.
 func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, turnScope turnEventScope) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	history := agent.Sessions.GetHistory(sessionKey)
-	summary := agent.Sessions.GetSummary(sessionKey)
-
-	// Keep the most recent Turns for continuity, aligned to a Turn boundary
-	// so that no tool-call sequence is split.
-	if len(history) <= 4 {
-		return
-	}
-
-	safeCut := findSafeBoundary(history, len(history)-4)
-	if safeCut <= 0 {
-		return
-	}
-	keepCount := len(history) - safeCut
-	toSummarize := history[:safeCut]
-
-	// Oversized Message Guard
-	maxMessageTokens := agent.ContextWindow / 2
-	validMessages := make([]providers.Message, 0)
-	omitted := false
-
-	for _, m := range toSummarize {
-		if m.Role != "user" && m.Role != "assistant" {
-			continue
-		}
-		msgTokens := len(m.Content) / 2
-		if msgTokens > maxMessageTokens {
-			omitted = true
-			continue
-		}
-		validMessages = append(validMessages, m)
-	}
-
-	if len(validMessages) == 0 {
-		return
-	}
-
-	const (
-		maxSummarizationMessages = 10
-		llmMaxRetries            = 3
-		llmTemperature           = 0.3
-		fallbackMaxContentLength = 200
-	)
-
-	// Multi-Part Summarization
-	var finalSummary string
-	if len(validMessages) > maxSummarizationMessages {
-		mid := len(validMessages) / 2
-
-		mid = al.findNearestUserMessage(validMessages, mid)
-
-		part1 := validMessages[:mid]
-		part2 := validMessages[mid:]
-
-		s1, _ := al.summarizeBatch(ctx, agent, part1, "")
-		s2, _ := al.summarizeBatch(ctx, agent, part2, "")
-
-		mergePrompt := fmt.Sprintf(
-			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
-			s1,
-			s2,
-		)
-
-		resp, err := al.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
-		if err == nil && resp.Content != "" {
-			finalSummary = resp.Content
-		} else {
-			finalSummary = s1 + " " + s2
-		}
-	} else {
-		finalSummary, _ = al.summarizeBatch(ctx, agent, validMessages, summary)
-	}
-
-	if omitted && finalSummary != "" {
-		finalSummary += "\n[Note: Some oversized messages were omitted from this summary for efficiency.]"
-	}
-
-	if finalSummary != "" {
-		agent.Sessions.SetSummary(sessionKey, finalSummary)
-		agent.Sessions.TruncateHistory(sessionKey, keepCount)
-		agent.Sessions.Save(sessionKey)
+	if result, ok := al.compressContext(ctx, agent, sessionKey, false); ok && result.SummaryLen > 0 {
 		al.emitEvent(
 			EventKindSessionSummarize,
 			turnScope.meta(0, "summarizeSession", "turn.session.summarize"),
 			SessionSummarizePayload{
-				SummarizedMessages: len(validMessages),
-				KeptMessages:       keepCount,
-				SummaryLen:         len(finalSummary),
-				OmittedOversized:   omitted,
+				SummarizedMessages: result.CompressedMessages,
+				KeptMessages:       result.KeptMessages,
+				SummaryLen:         result.SummaryLen,
+				OmittedOversized:   false,
 			},
 		)
 	}

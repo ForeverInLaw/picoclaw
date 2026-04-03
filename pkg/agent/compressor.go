@@ -21,11 +21,12 @@ const (
 
 // CompressionResult describes what the compressor did.
 type CompressionResult struct {
-	DroppedMessages   int
-	KeptMessages      int
-	SummaryLen        int
-	PrunedToolOutputs int
-	IterativeSummary  bool
+	DroppedMessages    int
+	KeptMessages       int
+	CompressedMessages int
+	SummaryLen         int
+	PrunedToolOutputs  int
+	IterativeSummary   bool
 }
 
 // CompressContext applies token-based context compression with:
@@ -39,6 +40,15 @@ func (al *AgentLoop) CompressContext(
 	agent *AgentInstance,
 	sessionKey string,
 ) (CompressionResult, bool) {
+	return al.compressContext(ctx, agent, sessionKey, true)
+}
+
+func (al *AgentLoop) compressContext(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+	allowFallbackDrop bool,
+) (CompressionResult, bool) {
 	history := agent.Sessions.GetHistory(sessionKey)
 	if len(history) <= 4 {
 		return CompressionResult{}, false
@@ -49,27 +59,34 @@ func (al *AgentLoop) CompressContext(
 
 	// Step 2: Compute token budget boundaries.
 	tailBudget := al.computeTailBudget(agent.ContextWindow)
-	headCount := 3
+	minHeadMessages := 3
+	middleStart := nextTurnBoundaryAtOrAfter(history, minHeadMessages)
+	if middleStart <= 0 || middleStart >= len(history) {
+		return CompressionResult{}, false
+	}
 
 	// Step 3: Find tail boundary by cumulative tokens from end.
-	tailStart := 0
+	rawTailStart := 0
 	runningTokens := 0
 	for i := len(history) - 1; i >= 0; i-- {
 		toks := estimateMessageTokensForBudget(history[i])
 		runningTokens += toks
-		if runningTokens > tailBudget && i > headCount {
-			tailStart = i + 1
+		if runningTokens > tailBudget && i > middleStart {
+			rawTailStart = i + 1
 			break
 		}
 	}
-	if tailStart < headCount+2 {
-		tailStart = headCount + 2
+	if rawTailStart < middleStart+1 {
+		rawTailStart = middleStart + 1
 	}
 
 	// Step 4: The middle section is what we compress.
-	middleStart := headCount
-	if tailStart <= headCount {
-		tailStart = headCount + 2
+	tailStart := findSafeBoundary(history, rawTailStart)
+	if tailStart <= middleStart {
+		tailStart = nextTurnBoundaryAtOrAfter(history, rawTailStart)
+	}
+	if tailStart <= middleStart || tailStart > len(history) {
+		return CompressionResult{}, false
 	}
 	middle := history[middleStart:tailStart]
 	if len(middle) == 0 {
@@ -83,9 +100,16 @@ func (al *AgentLoop) CompressContext(
 	existing := agent.Sessions.GetSummary(sessionKey)
 	middleSummary := al.compressMiddle(ctx, agent, middle, existing)
 	if middleSummary == "" {
+		if !allowFallbackDrop {
+			return CompressionResult{
+				KeptMessages:       len(history),
+				CompressedMessages: len(middle),
+				PrunedToolOutputs:  pruned,
+			}, false
+		}
 		// Compression failed — truncate.
-		kept := make([]providers.Message, 0, headCount+1+len(history)-tailStart)
-		kept = append(kept, history[:headCount]...)
+		kept := make([]providers.Message, 0, middleStart+1+len(history)-tailStart)
+		kept = append(kept, history[:middleStart]...)
 		if len(middle) > 0 {
 			kept = append(kept, middle[0])
 		}
@@ -98,19 +122,16 @@ func (al *AgentLoop) CompressContext(
 		agent.Sessions.SetSummary(sessionKey, note)
 		agent.Sessions.Save(sessionKey)
 		return CompressionResult{
-			DroppedMessages:   len(history) - len(kept),
-			KeptMessages:      len(kept),
-			PrunedToolOutputs: pruned,
+			DroppedMessages:    len(history) - len(kept),
+			KeptMessages:       len(kept),
+			CompressedMessages: len(middle),
+			PrunedToolOutputs:  pruned,
 		}, true
 	}
 
-	// Step 6: Rebuild history with summary in the middle.
-	kept := make([]providers.Message, 0, headCount+1+len(history)-tailStart)
+	// Step 6: Rebuild history; the merged summary lives in session summary only.
+	kept := make([]providers.Message, 0, middleStart+len(history)-tailStart)
 	kept = append(kept, history[:middleStart]...)
-	kept = append(kept, providers.Message{
-		Role:    "assistant",
-		Content: middleSummary,
-	})
 	kept = append(kept, history[tailStart:]...)
 
 	agent.Sessions.SetHistory(sessionKey, kept)
@@ -131,16 +152,17 @@ func (al *AgentLoop) CompressContext(
 		})
 
 	return CompressionResult{
-		DroppedMessages:   dropped,
-		KeptMessages:      len(kept),
-		SummaryLen:        len(middleSummary),
-		PrunedToolOutputs: pruned,
-		IterativeSummary:  iterative,
+		DroppedMessages:    dropped,
+		KeptMessages:       len(kept),
+		CompressedMessages: len(middle),
+		SummaryLen:         len(middleSummary),
+		PrunedToolOutputs:  pruned,
+		IterativeSummary:   iterative,
 	}, true
 }
 
-// pruneOldToolOutputs replaces content of old tool messages in the first 60% of
-// history with a placeholder, keeping only the first tool output per group.
+// pruneOldToolOutputs replaces content of older tool-result messages in the first
+// 60% of history with a placeholder after the first such message in that window.
 // Returns the number of pruned outputs.
 func (al *AgentLoop) pruneOldToolOutputs(history []providers.Message) int {
 	if len(history) < 6 {
@@ -161,6 +183,18 @@ func (al *AgentLoop) pruneOldToolOutputs(history []providers.Message) int {
 		}
 	}
 	return pruned
+}
+
+func nextTurnBoundaryAtOrAfter(history []providers.Message, minIndex int) int {
+	if minIndex <= 0 {
+		return 0
+	}
+	for _, idx := range parseTurnBoundaries(history) {
+		if idx >= minIndex {
+			return idx
+		}
+	}
+	return len(history)
 }
 
 // computeTailBudget returns the token budget for tail protection.

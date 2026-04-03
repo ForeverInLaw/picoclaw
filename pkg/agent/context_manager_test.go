@@ -322,10 +322,10 @@ func TestLegacyCompact_Overflow(t *testing.T) {
 		t.Fatalf("expected compressed history, got %d messages (was %d)", len(newHistory), len(history))
 	}
 
-	// Summary should contain compression note
+	// Summary should be updated by the compressor
 	summary := defaultAgent.Sessions.GetSummary("session-overflow")
-	if !strings.Contains(summary, "Emergency compression") {
-		t.Fatalf("expected compression note in summary, got %q", summary)
+	if strings.TrimSpace(summary) == "" {
+		t.Fatalf("expected non-empty summary after compression, got %q", summary)
 	}
 
 	// Event should carry the proactive reason
@@ -503,6 +503,58 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 	newHistory := defaultAgent.Sessions.GetHistory("session-threshold")
 	if len(newHistory) >= len(history) {
 		t.Fatalf("expected summarization to reduce history from %d messages, got %d", len(history), len(newHistory))
+	}
+}
+
+func TestLegacyCompact_PostTurn_LLMFailurePreservesHistory(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:                 t.TempDir(),
+				ModelName:                 "test-model",
+				MaxTokens:                 4096,
+				MaxToolIterations:         10,
+				ContextWindow:             32000,
+				SummarizeMessageThreshold: 2,
+				SummarizeTokenPercent:     75,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: ""})
+	t.Cleanup(al.Close)
+
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "head-1"},
+		{Role: "assistant", Content: "head-2"},
+		{Role: "user", Content: strings.Repeat("m", 12000)},
+		{Role: "assistant", Content: strings.Repeat("n", 12000)},
+		{Role: "user", Content: strings.Repeat("t", 12000)},
+		{Role: "assistant", Content: strings.Repeat("z", 12000)},
+	}
+	defaultAgent.Sessions.SetHistory("session-summary-empty", history)
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-summary-empty",
+		Reason:     ContextCompressReasonSummarize,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	newHistory := defaultAgent.Sessions.GetHistory("session-summary-empty")
+	if len(newHistory) != len(history) {
+		t.Fatalf("expected history unchanged when proactive summary fails, got %d from %d", len(newHistory), len(history))
+	}
+	if got := defaultAgent.Sessions.GetSummary("session-summary-empty"); got != "" {
+		t.Fatalf("expected summary to remain empty on proactive failure, got %q", got)
 	}
 }
 
