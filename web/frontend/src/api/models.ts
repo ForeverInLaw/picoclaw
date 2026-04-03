@@ -19,8 +19,12 @@ export interface ModelInfo {
   thinking_level?: string
   extra_body?: Record<string, any>
   // Meta
-  configured: boolean
+  enabled: boolean
+  available: boolean
+  status: string
   is_default: boolean
+  is_virtual: boolean
+  configured?: boolean
 }
 
 interface ModelsListResponse {
