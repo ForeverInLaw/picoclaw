@@ -259,17 +259,97 @@ func normalizeGeminiToolTurns(messages []Message) []Message {
 		return messages
 	}
 
-	normalized := make([]Message, len(messages))
-	copy(normalized, messages)
+	toolCallNames := make(map[string]string)
+	normalized := make([]Message, 0, len(messages))
 
-	for i := range normalized {
-		if normalized[i].Role == "assistant" && len(normalized[i].ToolCalls) > 0 {
-			normalized[i].Content = ""
-			normalized[i].ReasoningContent = ""
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		rememberToolCallNames(toolCallNames, msg.ToolCalls)
+
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			msg.ToolCalls = nil
+			msg.Content = ""
+			msg.ReasoningContent = ""
+			if strings.TrimSpace(msg.Content) == "" &&
+				strings.TrimSpace(msg.ReasoningContent) == "" &&
+				len(msg.Media) == 0 {
+				continue
+			}
+			normalized = append(normalized, msg)
+			continue
 		}
+
+		if msg.Role == "tool" {
+			toolName := resolveGeminiToolResponseName(msg.ToolCallID, toolCallNames)
+			label := toolName
+			if label == "" {
+				label = "tool"
+			}
+			normalized = append(normalized, Message{
+				Role:    "user",
+				Content: fmt.Sprintf("Tool %s result:\n%s", label, msg.Content),
+			})
+			continue
+		}
+
+		normalized = append(normalized, msg)
 	}
 
 	return normalized
+}
+
+func rememberToolCallNames(toolCallNames map[string]string, calls []ToolCall) {
+	for _, tc := range calls {
+		if tc.ID == "" {
+			continue
+		}
+		name := strings.TrimSpace(tc.Name)
+		if name == "" && tc.Function != nil {
+			name = strings.TrimSpace(tc.Function.Name)
+		}
+		if name == "" {
+			continue
+		}
+		toolCallNames[tc.ID] = name
+	}
+}
+
+func resolveGeminiToolResponseName(toolCallID string, toolCallNames map[string]string) string {
+	if toolCallID == "" {
+		return ""
+	}
+	if name := strings.TrimSpace(toolCallNames[toolCallID]); name != "" {
+		return name
+	}
+	return sanitizeToolResultName(toolCallID)
+}
+
+func sanitizeToolResultName(toolCallID string) string {
+	if toolCallID == "" {
+		return ""
+	}
+	var b strings.Builder
+	for i, r := range toolCallID {
+		isAlpha := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		isDigit := r >= '0' && r <= '9'
+		isUnderscore := r == '_'
+		if i == 0 && !(isAlpha || isUnderscore) {
+			b.WriteString("tool_")
+		}
+		if isAlpha || isDigit || isUnderscore {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	name := strings.Trim(b.String(), "_")
+	if name == "" {
+		name = "tool_result"
+	}
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	return name
 }
 
 func (p *Provider) Chat(

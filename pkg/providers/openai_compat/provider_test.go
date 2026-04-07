@@ -897,7 +897,7 @@ func TestProviderChat_CompactsHistoricalToolTurnsForGeminiLikeModels(t *testing.
 	}
 }
 
-func TestProviderChat_PreservesTrailingToolTurnsForGeminiLikeModels(t *testing.T) {
+func TestProviderChat_FlattensTrailingToolTurnsForGeminiLikeModels(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -932,17 +932,20 @@ func TestProviderChat_PreservesTrailingToolTurnsForGeminiLikeModels(t *testing.T
 	}
 
 	wireMsgs := requestBody["messages"].([]any)
-	if len(wireMsgs) != 3 {
-		t.Fatalf("len(messages) = %d, want trailing tool turn preserved", len(wireMsgs))
+	if len(wireMsgs) != 2 {
+		t.Fatalf("len(messages) = %d, want flattened tool turn", len(wireMsgs))
 	}
 
-	toolMsg := wireMsgs[2].(map[string]any)
-	if toolMsg["name"] != "web_search" {
-		t.Fatalf("tool name = %v, want web_search", toolMsg["name"])
+	toolMsg := wireMsgs[1].(map[string]any)
+	if toolMsg["role"] != "user" {
+		t.Fatalf("role = %v, want user", toolMsg["role"])
+	}
+	if !strings.Contains(toolMsg["content"].(string), "Tool web_search result:") {
+		t.Fatalf("content = %v, want flattened tool result marker", toolMsg["content"])
 	}
 }
 
-func TestProviderChat_StripsAssistantContentWhenToolCallsPresentForGeminiLikeModels(t *testing.T) {
+func TestProviderChat_DropsAssistantToolCallTurnWhenFlattenedForGeminiLikeModels(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -978,12 +981,11 @@ func TestProviderChat_StripsAssistantContentWhenToolCallsPresentForGeminiLikeMod
 	}
 
 	wireMsgs := requestBody["messages"].([]any)
-	assistantMsg := wireMsgs[1].(map[string]any)
-	if assistantMsg["content"] != "" {
-		t.Fatalf("assistant content = %v, want empty string for gemini tool-call turn", assistantMsg["content"])
+	if len(wireMsgs) != 2 {
+		t.Fatalf("len(messages) = %d, want user + flattened tool result", len(wireMsgs))
 	}
-	if _, ok := assistantMsg["tool_calls"]; !ok {
-		t.Fatal("assistant tool_calls missing after normalization")
+	if role := wireMsgs[1].(map[string]any)["role"]; role != "user" {
+		t.Fatalf("flattened tool result role = %v, want user", role)
 	}
 }
 
