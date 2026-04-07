@@ -2301,10 +2301,7 @@ turnLoop:
 			})
 
 		if len(response.ToolCalls) == 0 || gracefulTerminal {
-			responseContent := response.Content
-			if responseContent == "" && response.ReasoningContent != "" {
-				responseContent = response.ReasoningContent
-			}
+			responseContent := sanitizeVisibleAssistantContent(response.Content)
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 				logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
 					map[string]any{

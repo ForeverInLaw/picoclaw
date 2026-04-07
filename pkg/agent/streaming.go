@@ -155,6 +155,7 @@ func selectStreamingTargets(
 }
 
 func offerStreamingContent(ctx context.Context, streamer streamingSink, updater *partialReplyUpdater, content string) {
+	content = sanitizeVisibleAssistantContent(content)
 	if streamer != nil {
 		_ = streamer.Update(ctx, clampStreamingPreview(content))
 		return
@@ -165,6 +166,7 @@ func offerStreamingContent(ctx context.Context, streamer streamingSink, updater 
 }
 
 func finalizeStreamingContent(ctx context.Context, streamer streamingSink, updater *partialReplyUpdater, content string) error {
+	content = sanitizeVisibleAssistantContent(content)
 	if streamer != nil {
 		return streamer.Finalize(ctx, content)
 	}
