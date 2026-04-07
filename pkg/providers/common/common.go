@@ -77,6 +77,7 @@ func NewHTTPClient(proxy string) *http.Client {
 type openaiMessage struct {
 	Role             string     `json:"role"`
 	Content          string     `json:"content"`
+	Name             string     `json:"name,omitempty"`
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
@@ -92,12 +93,17 @@ var filePathTagPattern = regexp.MustCompile(`\[file:([^\]]+)\]`)
 //   - Preserves ToolCallID, ToolCalls, and ReasoningContent for all messages
 func SerializeMessages(messages []Message) []any {
 	out := make([]any, 0, len(messages))
+	toolCallNames := make(map[string]string)
 	for _, m := range messages {
+		recordToolCallNames(toolCallNames, m.ToolCalls)
+
 		sanitizedContent, fileParts := buildFilePartsFromContent(m.Content)
+		toolResponseName := resolveToolResponseNameForWire(m.ToolCallID, toolCallNames)
 		if len(m.Media) == 0 && len(fileParts) == 0 {
 			out = append(out, openaiMessage{
 				Role:             m.Role,
 				Content:          sanitizedContent,
+				Name:             toolResponseName,
 				ReasoningContent: m.ReasoningContent,
 				ToolCalls:        m.ToolCalls,
 				ToolCallID:       m.ToolCallID,
@@ -140,6 +146,9 @@ func SerializeMessages(messages []Message) []any {
 			"role":    m.Role,
 			"content": parts,
 		}
+		if toolResponseName != "" {
+			msg["name"] = toolResponseName
+		}
 		if m.ToolCallID != "" {
 			msg["tool_call_id"] = m.ToolCallID
 		}
@@ -152,6 +161,65 @@ func SerializeMessages(messages []Message) []any {
 		out = append(out, msg)
 	}
 	return out
+}
+
+func recordToolCallNames(toolCallNames map[string]string, calls []ToolCall) {
+	for _, tc := range calls {
+		if tc.ID == "" {
+			continue
+		}
+		name := strings.TrimSpace(tc.Name)
+		if name == "" && tc.Function != nil {
+			name = strings.TrimSpace(tc.Function.Name)
+		}
+		if name == "" {
+			continue
+		}
+		toolCallNames[tc.ID] = name
+	}
+}
+
+func resolveToolResponseNameForWire(toolCallID string, toolCallNames map[string]string) string {
+	if toolCallID == "" {
+		return ""
+	}
+	if name := strings.TrimSpace(toolCallNames[toolCallID]); name != "" {
+		return name
+	}
+	return sanitizeToolResponseFallback(toolCallID)
+}
+
+func sanitizeToolResponseFallback(toolCallID string) string {
+	if toolCallID == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(toolCallID) + 5)
+	for i, r := range toolCallID {
+		isAlpha := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		isDigit := r >= '0' && r <= '9'
+		isUnderscore := r == '_'
+		if i == 0 {
+			if !(isAlpha || isUnderscore) {
+				b.WriteString("tool_")
+			}
+		}
+		if isAlpha || isDigit || isUnderscore {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+
+	name := strings.Trim(b.String(), "_")
+	if name == "" {
+		name = "tool_response"
+	}
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	return name
 }
 
 func buildFilePartsFromContent(content string) (string, []map[string]any) {

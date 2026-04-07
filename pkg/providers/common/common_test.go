@@ -191,6 +191,59 @@ func TestSerializeMessages_MediaWithToolCallID(t *testing.T) {
 	}
 }
 
+func TestSerializeMessages_ToolMessageIncludesResolvedName(t *testing.T) {
+	messages := []Message{
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{
+					ID:   "chatcmpl-tool-bff012b42f706536",
+					Type: "function",
+					Function: &FunctionCall{
+						Name:      "web_search",
+						Arguments: `{"query":"test"}`,
+					},
+				},
+			},
+		},
+		{
+			Role:       "tool",
+			Content:    "ok",
+			ToolCallID: "chatcmpl-tool-bff012b42f706536",
+		},
+	}
+
+	result := SerializeMessages(messages)
+
+	data, _ := json.Marshal(result)
+	var msgs []map[string]any
+	json.Unmarshal(data, &msgs)
+
+	if got := msgs[1]["name"]; got != "web_search" {
+		t.Fatalf("tool message name = %v, want web_search", got)
+	}
+}
+
+func TestSerializeMessages_ToolMessageFallbackNameIsSanitized(t *testing.T) {
+	messages := []Message{
+		{
+			Role:       "tool",
+			Content:    "ok",
+			ToolCallID: "chatcmpl-tool-bff012b42f706536",
+		},
+	}
+
+	result := SerializeMessages(messages)
+
+	data, _ := json.Marshal(result)
+	var msgs []map[string]any
+	json.Unmarshal(data, &msgs)
+
+	if got := msgs[0]["name"]; got != "chatcmpl_tool_bff012b42f706536" {
+		t.Fatalf("fallback tool name = %v, want sanitized call id", got)
+	}
+}
+
 func TestSerializeMessages_StripsSystemParts(t *testing.T) {
 	messages := []Message{
 		{
