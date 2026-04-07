@@ -102,7 +102,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 			// System message must contain identity (static) and time (dynamic)
 			sys := msgs[0].Content
-			if !strings.Contains(sys, "picoclaw") {
+			if !strings.Contains(sys, "Коробка") {
 				t.Error("system message missing identity")
 			}
 			if !strings.Contains(sys, ".learnings/") {
@@ -699,7 +699,7 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 					errs <- "empty prompt returned"
 					return
 				}
-				if !strings.Contains(result, "picoclaw") {
+				if !strings.Contains(result, "Коробка") {
 					errs <- "prompt missing identity"
 					return
 				}
