@@ -840,6 +840,108 @@ func TestSerializeMessages_MediaWithToolCallID(t *testing.T) {
 	}
 }
 
+func TestProviderChat_CompactsHistoricalToolTurnsForGeminiLikeModels(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	messages := []protocoltypes.Message{
+		{Role: "user", Content: "rickroll pls"},
+		{
+			Role:    "assistant",
+			Content: "Готово",
+			ToolCalls: []protocoltypes.ToolCall{{
+				ID:   "call_abc123",
+				Type: "function",
+				Function: &protocoltypes.FunctionCall{
+					Name:      "send_file",
+					Arguments: `{"path":"/tmp/rickroll.mp4"}`,
+				},
+			}},
+		},
+		{Role: "tool", Content: "sent", ToolCallID: "call_abc123"},
+		{Role: "assistant", Content: ""},
+		{Role: "user", Content: "next message"},
+	}
+
+	if _, err := p.Chat(t.Context(), messages, nil, "gemma-4-31b-it", nil); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	wireMsgs, ok := requestBody["messages"].([]any)
+	if !ok {
+		t.Fatalf("request messages type = %T, want []any", requestBody["messages"])
+	}
+	if len(wireMsgs) != 3 {
+		t.Fatalf("len(messages) = %d, want 3 after compaction", len(wireMsgs))
+	}
+
+	firstAssistant, ok := wireMsgs[1].(map[string]any)
+	if !ok {
+		t.Fatalf("assistant message type = %T, want map[string]any", wireMsgs[1])
+	}
+	if _, exists := firstAssistant["tool_calls"]; exists {
+		t.Fatal("historical assistant tool_calls should be removed for gemini-like requests")
+	}
+	if firstAssistant["content"] != "Готово" {
+		t.Fatalf("assistant content = %v, want Готово", firstAssistant["content"])
+	}
+}
+
+func TestProviderChat_PreservesTrailingToolTurnsForGeminiLikeModels(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	messages := []protocoltypes.Message{
+		{Role: "user", Content: "current question"},
+		{
+			Role: "assistant",
+			ToolCalls: []protocoltypes.ToolCall{{
+				ID:   "call_live",
+				Type: "function",
+				Function: &protocoltypes.FunctionCall{
+					Name:      "web_search",
+					Arguments: `{"query":"news"}`,
+				},
+			}},
+		},
+		{Role: "tool", Content: "results", ToolCallID: "call_live"},
+	}
+
+	if _, err := p.Chat(t.Context(), messages, nil, "gemma-4-31b-it", nil); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	wireMsgs := requestBody["messages"].([]any)
+	if len(wireMsgs) != 3 {
+		t.Fatalf("len(messages) = %d, want trailing tool turn preserved", len(wireMsgs))
+	}
+
+	toolMsg := wireMsgs[2].(map[string]any)
+	if toolMsg["name"] != "web_search" {
+		t.Fatalf("tool name = %v, want web_search", toolMsg["name"])
+	}
+}
+
 // chatWithCacheKey sets up a test server, sends a Chat request with prompt_cache_key,
 // and returns the decoded request body for assertion.
 func chatWithCacheKey(t *testing.T, apiBase string) map[string]any {

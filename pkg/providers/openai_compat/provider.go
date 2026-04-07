@@ -125,6 +125,9 @@ func (p *Provider) buildRequestBody(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) map[string]any {
 	model = normalizeModel(model, p.apiBase)
+	if shouldCompactHistoricalToolTurns(model, p.apiBase) {
+		messages = compactHistoricalToolTurns(messages)
+	}
 
 	requestBody := map[string]any{
 		"model":    model,
@@ -179,6 +182,69 @@ func (p *Provider) buildRequestBody(
 	}
 
 	return requestBody
+}
+
+func shouldCompactHistoricalToolTurns(model, apiBase string) bool {
+	lowerModel := strings.ToLower(model)
+	if strings.Contains(lowerModel, "gemini") || strings.Contains(lowerModel, "gemma") {
+		return true
+	}
+
+	lowerBase := strings.ToLower(strings.TrimSpace(apiBase))
+	return strings.Contains(lowerBase, "generativelanguage.googleapis.com") ||
+		strings.Contains(lowerBase, "googleapis.com") ||
+		strings.Contains(lowerBase, "golem.redstone.md") ||
+		strings.Contains(lowerBase, "aio.ooy.cz")
+}
+
+func compactHistoricalToolTurns(messages []Message) []Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	var turnStarts []int
+	for i, msg := range messages {
+		if msg.Role == "user" {
+			turnStarts = append(turnStarts, i)
+		}
+	}
+	if len(turnStarts) <= 1 {
+		return messages
+	}
+
+	compacted := make([]Message, 0, len(messages))
+	for turnIdx, start := range turnStarts {
+		end := len(messages)
+		if turnIdx+1 < len(turnStarts) {
+			end = turnStarts[turnIdx+1]
+		}
+
+		turn := messages[start:end]
+		isLastTurn := turnIdx == len(turnStarts)-1
+		if isLastTurn {
+			compacted = append(compacted, turn...)
+			continue
+		}
+
+		for _, msg := range turn {
+			switch msg.Role {
+			case "tool":
+				continue
+			case "assistant":
+				msg.ToolCalls = nil
+				if strings.TrimSpace(msg.Content) == "" &&
+					strings.TrimSpace(msg.ReasoningContent) == "" &&
+					len(msg.Media) == 0 {
+					continue
+				}
+				compacted = append(compacted, msg)
+			default:
+				compacted = append(compacted, msg)
+			}
+		}
+	}
+
+	return compacted
 }
 
 func (p *Provider) Chat(
