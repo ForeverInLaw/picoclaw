@@ -128,6 +128,9 @@ func (p *Provider) buildRequestBody(
 	if shouldCompactHistoricalToolTurns(model, p.apiBase) {
 		messages = compactHistoricalToolTurns(messages)
 	}
+	if shouldNormalizeGeminiToolTurns(model, p.apiBase) {
+		messages = normalizeGeminiToolTurns(messages)
+	}
 
 	requestBody := map[string]any{
 		"model":    model,
@@ -197,6 +200,10 @@ func shouldCompactHistoricalToolTurns(model, apiBase string) bool {
 		strings.Contains(lowerBase, "aio.ooy.cz")
 }
 
+func shouldNormalizeGeminiToolTurns(model, apiBase string) bool {
+	return shouldCompactHistoricalToolTurns(model, apiBase)
+}
+
 func compactHistoricalToolTurns(messages []Message) []Message {
 	if len(messages) == 0 {
 		return messages
@@ -245,6 +252,24 @@ func compactHistoricalToolTurns(messages []Message) []Message {
 	}
 
 	return compacted
+}
+
+func normalizeGeminiToolTurns(messages []Message) []Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	normalized := make([]Message, len(messages))
+	copy(normalized, messages)
+
+	for i := range normalized {
+		if normalized[i].Role == "assistant" && len(normalized[i].ToolCalls) > 0 {
+			normalized[i].Content = ""
+			normalized[i].ReasoningContent = ""
+		}
+	}
+
+	return normalized
 }
 
 func (p *Provider) Chat(
