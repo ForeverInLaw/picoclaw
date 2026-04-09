@@ -43,14 +43,15 @@ var (
 
 type TelegramChannel struct {
 	*channels.BaseChannel
-	bot     *telego.Bot
-	bh      *th.BotHandler
-	config  *config.Config
-	chatIDs map[string]int64
-	ctx     context.Context
-	cancel  context.CancelFunc
-	batchMu sync.Mutex
-	batches map[string]*telegramInboundBatch
+	bot       *telego.Bot
+	bh        *th.BotHandler
+	config    *config.Config
+	chatIDs   map[string]int64
+	chatIDsMu sync.RWMutex
+	ctx       context.Context
+	cancel    context.CancelFunc
+	batchMu   sync.Mutex
+	batches   map[string]*telegramInboundBatch
 
 	registerFunc     func(context.Context, []commands.Definition) error
 	commandRegCancel context.CancelFunc
@@ -106,6 +107,19 @@ func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChann
 		chatIDs:     make(map[string]int64),
 		batches:     make(map[string]*telegramInboundBatch),
 	}, nil
+}
+
+func (c *TelegramChannel) setChatID(platformID string, chatID int64) {
+	c.chatIDsMu.Lock()
+	defer c.chatIDsMu.Unlock()
+	c.chatIDs[platformID] = chatID
+}
+
+func (c *TelegramChannel) getChatID(platformID string) (int64, bool) {
+	c.chatIDsMu.RLock()
+	defer c.chatIDsMu.RUnlock()
+	chatID, ok := c.chatIDs[platformID]
+	return chatID, ok
 }
 
 func (c *TelegramChannel) Start(ctx context.Context) error {

@@ -74,7 +74,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 	}
 
 	chatID := message.Chat.ID
-	c.chatIDs[platformID] = chatID
+	c.setChatID(platformID, chatID)
 
 	chatIDStr := fmt.Sprintf("%d", chatID)
 	messageIDStr := fmt.Sprintf("%d", message.MessageID)

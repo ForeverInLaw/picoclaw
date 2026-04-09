@@ -2,7 +2,9 @@ package telegram
 
 import (
 	"context"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +41,24 @@ func recvInbound(t *testing.T, ch <-chan bus.InboundMessage, timeout time.Durati
 	case <-time.After(timeout):
 		t.Fatal("timeout waiting for inbound message")
 		return bus.InboundMessage{}
+	}
+}
+
+func TestTelegramChannel_SetChatIDConcurrent(t *testing.T) {
+	ch, _ := newBatchingTestChannel(t, 30)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ch.setChatID(strconv.Itoa(i%8), int64(1000+i))
+		}(i)
+	}
+	wg.Wait()
+
+	if _, ok := ch.getChatID("0"); !ok {
+		t.Fatal("expected chat ID for key 0")
 	}
 }
 
