@@ -2,7 +2,12 @@ import { IconLoader2, IconPlus, IconStar } from "@tabler/icons-react"
 import { useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { type ModelInfo, getModels, setDefaultModel } from "@/api/models"
+import {
+  type ModelInfo,
+  getModels,
+  setDefaultImageModel,
+  setDefaultModel,
+} from "@/api/models"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 
@@ -40,6 +45,7 @@ interface ProviderGroup {
   label: string
   models: ModelInfo[]
   hasDefault: boolean
+  hasImageDefault: boolean
   availableCount: number
 }
 
@@ -55,6 +61,9 @@ export function ModelsPage() {
   const [settingDefaultIndex, setSettingDefaultIndex] = useState<number | null>(
     null,
   )
+  const [settingImageDefaultIndex, setSettingImageDefaultIndex] = useState<
+    number | null
+  >(null)
 
   const fetchModels = useCallback(async () => {
     try {
@@ -62,6 +71,8 @@ export function ModelsPage() {
       const sorted = [...data.models].sort((a, b) => {
         if (a.is_default && !b.is_default) return -1
         if (!a.is_default && b.is_default) return 1
+        if (a.is_image_default && !b.is_image_default) return -1
+        if (!a.is_image_default && b.is_image_default) return 1
         if (a.available && !b.available) return -1
         if (!a.available && b.available) return 1
         return a.model_name.localeCompare(b.model_name)
@@ -93,6 +104,20 @@ export function ModelsPage() {
     }
   }
 
+  const handleSetImageDefault = async (model: ModelInfo) => {
+    if (model.is_image_default) return
+
+    setSettingImageDefaultIndex(model.index)
+    try {
+      await setDefaultImageModel(model.model_name)
+      await fetchModels()
+    } catch {
+      // ignore
+    } finally {
+      setSettingImageDefaultIndex(null)
+    }
+  }
+
   const grouped: Record<string, { label: string; models: ModelInfo[] }> = {}
   for (const model of models) {
     const providerKey = getProviderKey(model.model)
@@ -115,12 +140,15 @@ export function ModelsPage() {
         label: group.label,
         models: group.models,
         hasDefault: group.models.some((model) => model.is_default),
+        hasImageDefault: group.models.some((model) => model.is_image_default),
         availableCount,
       }
     })
     .sort((a, b) => {
       if (a.hasDefault && !b.hasDefault) return -1
       if (!a.hasDefault && b.hasDefault) return 1
+      if (a.hasImageDefault && !b.hasImageDefault) return -1
+      if (!a.hasImageDefault && b.hasImageDefault) return 1
 
       if (a.availableCount !== b.availableCount) {
         return b.availableCount - a.availableCount
@@ -184,8 +212,10 @@ export function ModelsPage() {
                 models={providerGroup.models}
                 onEdit={setEditingModel}
                 onSetDefault={handleSetDefault}
+                onSetImageDefault={handleSetImageDefault}
                 onDelete={setDeletingModel}
                 settingDefaultIndex={settingDefaultIndex}
+                settingImageDefaultIndex={settingImageDefaultIndex}
               />
             ))}
           </div>

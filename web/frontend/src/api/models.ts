@@ -23,6 +23,7 @@ export interface ModelInfo {
   available: boolean
   status: string
   is_default: boolean
+  is_image_default: boolean
   is_virtual: boolean
   configured?: boolean
 }
@@ -31,12 +32,14 @@ interface ModelsListResponse {
   models: ModelInfo[]
   total: number
   default_model: string
+  default_image_model: string
 }
 
 interface ModelActionResponse {
   status: string
   index?: number
   default_model?: string
+  default_image_model?: string
 }
 
 const BASE_URL = ""
@@ -88,6 +91,22 @@ export async function setDefaultModel(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model_name: modelName }),
   })
+
+  await refreshGatewayState()
+  return response
+}
+
+export async function setDefaultImageModel(
+  modelName: string,
+): Promise<ModelActionResponse> {
+  const response = await request<ModelActionResponse>(
+    "/api/models/default-image",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_name: modelName }),
+    },
+  )
 
   await refreshGatewayState()
   return response

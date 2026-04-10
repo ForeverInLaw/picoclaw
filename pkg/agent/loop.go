@@ -278,6 +278,9 @@ func registerSharedTools(
 			)
 			agent.Tools.Register(sendFileTool)
 		}
+		if cfg.Tools.IsToolEnabled("generate_image") {
+			agent.Tools.Register(tools.NewGenerateImageTool(al.GetConfig))
+		}
 
 		// Skill discovery and installation tools
 		skills_enabled := cfg.Tools.IsToolEnabled("skills")
@@ -1072,13 +1075,13 @@ func (al *AgentLoop) GetConfig() *config.Config {
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	al.mediaStore = s
 
-	// Propagate store to send_file tools in all agents.
+	// Propagate store to all media-aware tools in all agents.
 	registry := al.GetRegistry()
-	registry.ForEachTool("send_file", func(t tools.Tool) {
-		if sf, ok := t.(*tools.SendFileTool); ok {
-			sf.SetMediaStore(s)
+	for _, agentID := range registry.ListAgentIDs() {
+		if agent, ok := registry.GetAgent(agentID); ok {
+			agent.Tools.SetMediaStore(s)
 		}
-	})
+	}
 
 	al.syncVoiceTools()
 }

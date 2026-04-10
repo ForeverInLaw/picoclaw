@@ -166,6 +166,7 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 
 	parts = append(parts, "# Tooling note\n\nUse `message` only for a single outbound message. If you need to send multiple messages, language variants, or destinations in one step, use `send_messages`.")
 	parts = append(parts, "# Voice note\n\nIf `transcribe_media` is available, use it to transcribe audio or voice media to text. Audio transcription may already be configured through the current ASR backend, including NVIDIA Riva when enabled.")
+	parts = append(parts, "# Image generation note\n\nIf `generate_image` is available and the user asks you to create an image, use it. Do not choose a model manually; it uses the configured default image-generation model. If you want to improve or rewrite the user's prompt, ask first and wait for consent.")
 
 	// Join with "---" separator
 	return strings.Join(parts, "\n\n---\n\n")

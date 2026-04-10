@@ -470,6 +470,84 @@ func TestHandleSetDefaultModel_RejectsNonexistentModel(t *testing.T) {
 	}
 }
 
+func TestHandleSetDefaultImageModel_PersistsSelection(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "text-default", Model: "openai/gpt-4o-mini", APIKeys: config.SimpleSecureStrings("sk-text")},
+		{ModelName: "image-default", Model: "openai/gpt-image-1", APIKeys: config.SimpleSecureStrings("sk-image")},
+	}
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/default-image", bytes.NewBufferString(`{
+		"model_name": "image-default"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	cfg, err = config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if got := cfg.Agents.Defaults.ImageGenerationModel; got != "image-default" {
+		t.Fatalf("image_generation_model = %q, want %q", got, "image-default")
+	}
+}
+
+func TestHandleDeleteModel_ClearsDefaultImageModel(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "text-default", Model: "openai/gpt-4o-mini", APIKeys: config.SimpleSecureStrings("sk-text")},
+		{ModelName: "image-default", Model: "openai/gpt-image-1", APIKeys: config.SimpleSecureStrings("sk-image")},
+	}
+	cfg.Agents.Defaults.ImageGenerationModel = "image-default"
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/models/1", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	cfg, err = config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if got := cfg.Agents.Defaults.ImageGenerationModel; got != "" {
+		t.Fatalf("image_generation_model = %q, want empty", got)
+	}
+}
+
 func TestMaskAPIKey(t *testing.T) {
 	tests := []struct {
 		name string

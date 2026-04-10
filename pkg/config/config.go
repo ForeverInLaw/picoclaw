@@ -270,6 +270,7 @@ type AgentDefaults struct {
 	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
 	ImageModel                string             `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
+	ImageGenerationModel      string             `json:"image_generation_model,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_GENERATION_MODEL"`
 	MaxTokens                 int                `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
 	ContextWindow             int                `json:"context_window,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64           `json:"temperature,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
@@ -1002,6 +1003,7 @@ type ToolsConfig struct {
 	ListDir         ToolConfig         `json:"list_dir"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
 	Message         ToolConfig         `json:"message"           yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_MESSAGE_"`
 	ReadFile        ReadFileToolConfig `json:"read_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
+	GenerateImage   ToolConfig         `json:"generate_image"    yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_GENERATE_IMAGE_"`
 	SendFile        ToolConfig         `json:"send_file"         yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
 	SendMessages    ToolConfig         `json:"send_messages"     yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_MESSAGES_"`
 	SendTTS         ToolConfig         `json:"send_tts"          yaml:"-"                                                       envPrefix:"PICOCLAW_TOOLS_SEND_TTS_"`
@@ -1446,6 +1448,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.Message.Enabled
 	case "read_file":
 		return t.ReadFile.Enabled
+	case "generate_image":
+		return t.GenerateImage.Enabled
 	case "send_messages":
 		return t.SendMessages.Enabled
 	case "spawn":

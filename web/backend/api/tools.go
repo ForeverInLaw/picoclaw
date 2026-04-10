@@ -95,6 +95,12 @@ var toolCatalog = []toolCatalogEntry{
 		ConfigKey:   "message",
 	},
 	{
+		Name:        "generate_image",
+		Description: "Generate an image with the configured default image-generation model and send it to the active chat.",
+		Category:    "communication",
+		ConfigKey:   "generate_image",
+	},
+	{
 		Name:        "send_file",
 		Description: "Send an outbound file or media attachment to the active chat.",
 		Category:    "communication",
@@ -289,6 +295,8 @@ func applyToolState(cfg *config.Config, toolName string, enabled bool) error {
 		cfg.Tools.WebFetch.Enabled = enabled
 	case "message":
 		cfg.Tools.Message.Enabled = enabled
+	case "generate_image":
+		cfg.Tools.GenerateImage.Enabled = enabled
 	case "send_file":
 		cfg.Tools.SendFile.Enabled = enabled
 	case "find_skills":

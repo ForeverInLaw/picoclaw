@@ -12,8 +12,10 @@ interface ProviderSectionProps {
   models: ModelInfo[]
   onEdit: (model: ModelInfo) => void
   onSetDefault: (model: ModelInfo) => void
+  onSetImageDefault: (model: ModelInfo) => void
   onDelete: (model: ModelInfo) => void
   settingDefaultIndex: number | null
+  settingImageDefaultIndex: number | null
 }
 
 export function ProviderSection({
@@ -22,8 +24,10 @@ export function ProviderSection({
   models,
   onEdit,
   onSetDefault,
+  onSetImageDefault,
   onDelete,
   settingDefaultIndex,
+  settingImageDefaultIndex,
 }: ProviderSectionProps) {
   const [open, setOpen] = useState(true)
 
@@ -61,8 +65,10 @@ export function ProviderSection({
               model={model}
               onEdit={onEdit}
               onSetDefault={onSetDefault}
+              onSetImageDefault={onSetImageDefault}
               onDelete={onDelete}
               settingDefault={settingDefaultIndex === model.index}
+              settingImageDefault={settingImageDefaultIndex === model.index}
             />
           ))}
         </div>

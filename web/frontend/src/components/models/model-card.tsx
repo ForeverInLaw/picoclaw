@@ -2,6 +2,7 @@ import {
   IconEdit,
   IconKey,
   IconLoader2,
+  IconSparkles,
   IconStar,
   IconStarFilled,
   IconTrash,
@@ -15,16 +16,20 @@ interface ModelCardProps {
   model: ModelInfo
   onEdit: (model: ModelInfo) => void
   onSetDefault: (model: ModelInfo) => void
+  onSetImageDefault: (model: ModelInfo) => void
   onDelete: (model: ModelInfo) => void
   settingDefault: boolean
+  settingImageDefault: boolean
 }
 
 export function ModelCard({
   model,
   onEdit,
   onSetDefault,
+  onSetImageDefault,
   onDelete,
   settingDefault,
+  settingImageDefault,
 }: ModelCardProps) {
   const { t } = useTranslation()
   const isOAuth = model.auth_method === "oauth"
@@ -32,6 +37,8 @@ export function ModelCard({
   const statusLabel = t(`models.status.${status}`)
   const canSetDefault =
     model.available && !model.is_default && !model.is_virtual
+  const canSetImageDefault =
+    model.available && !model.is_image_default && !model.is_virtual
 
   return (
     <div
@@ -65,6 +72,11 @@ export function ModelCard({
               {t("models.badge.default")}
             </span>
           )}
+          {model.is_image_default && (
+            <span className="bg-amber-500/10 text-amber-600 dark:text-amber-300 shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium">
+              {t("models.badge.imageDefault")}
+            </span>
+          )}
           {model.is_virtual && (
             <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium">
               {t("models.badge.virtual")}
@@ -95,6 +107,21 @@ export function ModelCard({
               )}
             </Button>
           )}
+
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onSetImageDefault(model)}
+            disabled={settingImageDefault || !canSetImageDefault}
+            title={t("models.action.setImageDefault")}
+            className={model.is_image_default ? "text-amber-500" : undefined}
+          >
+            {settingImageDefault ? (
+              <IconLoader2 className="size-3.5 animate-spin" />
+            ) : (
+              <IconSparkles className="size-3.5" />
+            )}
+          </Button>
 
           <Button
             variant="ghost"

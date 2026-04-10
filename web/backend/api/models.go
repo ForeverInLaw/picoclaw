@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -17,6 +18,7 @@ func (h *Handler) registerModelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/models", h.handleListModels)
 	mux.HandleFunc("POST /api/models", h.handleAddModel)
 	mux.HandleFunc("POST /api/models/default", h.handleSetDefaultModel)
+	mux.HandleFunc("POST /api/models/default-image", h.handleSetDefaultImageModel)
 	mux.HandleFunc("PUT /api/models/{index}", h.handleUpdateModel)
 	mux.HandleFunc("DELETE /api/models/{index}", h.handleDeleteModel)
 }
@@ -40,11 +42,12 @@ type modelResponse struct {
 	ThinkingLevel  string         `json:"thinking_level,omitempty"`
 	ExtraBody      map[string]any `json:"extra_body,omitempty"`
 	// Meta
-	Enabled   bool   `json:"enabled"`
-	Available bool   `json:"available"`
-	Status    string `json:"status"`
-	IsDefault bool   `json:"is_default"`
-	IsVirtual bool   `json:"is_virtual"`
+	Enabled        bool   `json:"enabled"`
+	Available      bool   `json:"available"`
+	Status         string `json:"status"`
+	IsDefault      bool   `json:"is_default"`
+	IsImageDefault bool   `json:"is_image_default"`
+	IsVirtual      bool   `json:"is_virtual"`
 }
 
 // handleListModels returns all model_list entries with masked API keys.
@@ -58,6 +61,7 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defaultModel := cfg.Agents.Defaults.GetModelName()
+	defaultImageModel := strings.TrimSpace(cfg.Agents.Defaults.ImageGenerationModel)
 	modelStatuses := make([]modelConfigurationSummary, len(cfg.ModelList))
 
 	var wg sync.WaitGroup
@@ -91,15 +95,17 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			Available:      modelStatuses[i].Available,
 			Status:         modelStatuses[i].Status,
 			IsDefault:      m.ModelName == defaultModel,
+			IsImageDefault: m.ModelName == defaultImageModel,
 			IsVirtual:      m.IsVirtual(),
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"models":        models,
-		"total":         len(models),
-		"default_model": defaultModel,
+		"models":              models,
+		"total":               len(models),
+		"default_model":       defaultModel,
+		"default_image_model": defaultImageModel,
 	})
 }
 
@@ -259,6 +265,9 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 	if cfg.Agents.Defaults.ModelName == deletedModelName {
 		cfg.Agents.Defaults.ModelName = ""
 	}
+	if cfg.Agents.Defaults.ImageGenerationModel == deletedModelName {
+		cfg.Agents.Defaults.ImageGenerationModel = ""
+	}
 
 	if err := config.SaveConfig(h.configPath, cfg); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
@@ -329,6 +338,68 @@ func (h *Handler) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":        "ok",
 		"default_model": req.ModelName,
+	})
+}
+
+// handleSetDefaultImageModel sets the default image-generation model for all agents.
+//
+//	POST /api/models/default-image
+func (h *Handler) handleSetDefaultImageModel(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var req struct {
+		ModelName string `json:"model_name"`
+	}
+	if err = json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.ModelName == "" {
+		http.Error(w, "model_name is required", http.StatusBadRequest)
+		return
+	}
+
+	cfg, err := config.LoadConfig(h.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	found := false
+	isVirtual := false
+	for _, m := range cfg.ModelList {
+		if m.ModelName == req.ModelName {
+			found = true
+			isVirtual = m.IsVirtual()
+			break
+		}
+	}
+	if !found {
+		http.Error(w, fmt.Sprintf("Model %q not found in model_list", req.ModelName), http.StatusNotFound)
+		return
+	}
+	if isVirtual {
+		http.Error(w, fmt.Sprintf("Cannot set virtual model %q as default image model", req.ModelName), http.StatusBadRequest)
+		return
+	}
+
+	cfg.Agents.Defaults.ImageGenerationModel = req.ModelName
+
+	if err := config.SaveConfig(h.configPath, cfg); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":              "ok",
+		"default_image_model": req.ModelName,
 	})
 }
 

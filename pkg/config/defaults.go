@@ -535,6 +535,9 @@ func DefaultConfig() *Config {
 				Mode:            ReadFileModeBytes,
 				MaxReadFileSize: 64 * 1024, // 64KB
 			},
+			GenerateImage: ToolConfig{
+				Enabled: true,
+			},
 			SendMessages: ToolConfig{
 				Enabled: true,
 			},

@@ -177,11 +177,13 @@
     },
     "badge": {
       "default": "Default",
+      "imageDefault": "Image Default",
       "virtual": "Virtual"
     },
     "action": {
       "edit": "Edit API key",
       "setDefault": "Set as default",
+      "setImageDefault": "Set as default image model",
       "delete": "Delete model"
     },
     "defaultOnSave": {

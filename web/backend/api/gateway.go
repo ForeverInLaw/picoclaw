@@ -292,6 +292,9 @@ func computeConfigSignature(cfg *config.Config) string {
 	if cfg.Tools.Message.Enabled {
 		toolSignatures = append(toolSignatures, "message")
 	}
+	if cfg.Tools.GenerateImage.Enabled {
+		toolSignatures = append(toolSignatures, "generate_image")
+	}
 	if cfg.Tools.SendFile.Enabled {
 		toolSignatures = append(toolSignatures, "send_file")
 	}

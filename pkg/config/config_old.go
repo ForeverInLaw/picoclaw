@@ -19,6 +19,7 @@ type agentDefaultsV0 struct {
 	ModelFallbacks            []string       `json:"model_fallbacks,omitempty"`
 	ImageModel                string         `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string       `json:"image_model_fallbacks,omitempty"`
+	ImageGenerationModel      string         `json:"image_generation_model,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_GENERATION_MODEL"`
 	MaxTokens                 int            `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
 	Temperature               *float64       `json:"temperature,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations         int            `json:"max_tool_iterations"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
@@ -75,6 +76,7 @@ type toolsConfigV0 struct {
 	ListDir         ToolConfig          `json:"list_dir"                                                 envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
 	Message         ToolConfig          `json:"message"                                                  envPrefix:"PICOCLAW_TOOLS_MESSAGE_"`
 	ReadFile        ReadFileToolConfig  `json:"read_file"                                                envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
+	GenerateImage   ToolConfig          `json:"generate_image"                                           envPrefix:"PICOCLAW_TOOLS_GENERATE_IMAGE_"`
 	SendFile        ToolConfig          `json:"send_file"                                                envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
 	SendMessages    ToolConfig          `json:"send_messages"                                            envPrefix:"PICOCLAW_TOOLS_SEND_MESSAGES_"`
 	Spawn           ToolConfig          `json:"spawn"                                                    envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
@@ -694,6 +696,7 @@ func (c *configV0) Migrate() (*Config, error) {
 	cfg.Agents.Defaults.ModelFallbacks = c.Agents.Defaults.ModelFallbacks
 	cfg.Agents.Defaults.ImageModel = c.Agents.Defaults.ImageModel
 	cfg.Agents.Defaults.ImageModelFallbacks = c.Agents.Defaults.ImageModelFallbacks
+	cfg.Agents.Defaults.ImageGenerationModel = c.Agents.Defaults.ImageGenerationModel
 	cfg.Agents.Defaults.MaxTokens = c.Agents.Defaults.MaxTokens
 	cfg.Agents.Defaults.Temperature = c.Agents.Defaults.Temperature
 	cfg.Agents.Defaults.MaxToolIterations = c.Agents.Defaults.MaxToolIterations
@@ -721,6 +724,7 @@ func (c *configV0) Migrate() (*Config, error) {
 	cfg.Tools.ListDir = c.Tools.ListDir
 	cfg.Tools.Message = c.Tools.Message
 	cfg.Tools.ReadFile = c.Tools.ReadFile
+	cfg.Tools.GenerateImage = c.Tools.GenerateImage
 	cfg.Tools.SendFile = c.Tools.SendFile
 	cfg.Tools.Spawn = c.Tools.Spawn
 	cfg.Tools.SpawnStatus = c.Tools.SpawnStatus
