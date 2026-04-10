@@ -11,6 +11,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
 
 const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
@@ -19,11 +20,13 @@ func TestGenerateImageTool_UsesDefaultImageModelAndStoresMedia(t *testing.T) {
 	store := media.NewFileMediaStore()
 	var gotAuth string
 	var gotPath string
+	var gotUA string
 	var gotBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
+		gotUA = r.Header.Get("User-Agent")
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Fatalf("Decode(request) error = %v", err)
 		}
@@ -75,6 +78,9 @@ func TestGenerateImageTool_UsesDefaultImageModelAndStoresMedia(t *testing.T) {
 	}
 	if gotAuth != "Bearer sk-image" {
 		t.Fatalf("authorization = %q, want %q", gotAuth, "Bearer sk-image")
+	}
+	if gotUA != common.DefaultUserAgent {
+		t.Fatalf("user-agent = %q, want %q", gotUA, common.DefaultUserAgent)
 	}
 	if gotBody["model"] != "gpt-image-1" {
 		t.Fatalf("model = %#v, want %q", gotBody["model"], "gpt-image-1")

@@ -15,6 +15,7 @@ import (
 	anthropicmessages "github.com/sipeed/picoclaw/pkg/providers/anthropic_messages"
 	"github.com/sipeed/picoclaw/pkg/providers/azure"
 	"github.com/sipeed/picoclaw/pkg/providers/bedrock"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
 
 type protocolMeta struct {
@@ -131,7 +132,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 
 	userAgent := cfg.UserAgent
 	if userAgent == "" {
-		userAgent = fmt.Sprintf("PicoClaw/%s", config.Version)
+		userAgent = common.DefaultUserAgent
 	}
 
 	switch protocol {

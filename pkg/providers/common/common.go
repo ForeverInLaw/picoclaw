@@ -43,6 +43,11 @@ type (
 
 const DefaultRequestTimeout = 120 * time.Second
 
+// DefaultUserAgent is the browser-like UA used for outbound HTTP requests when
+// no explicit model/tool override is configured. Some providers and proxy/CDN
+// layers (for example Cloudflare-fronted gateways) reject bare bot-like agents.
+const DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 func NewHTTPClient(proxy string) *http.Client {
 	client := &http.Client{

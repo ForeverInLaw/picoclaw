@@ -281,7 +281,11 @@ func (t *GenerateImageTool) callImageGenerationAPI(
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", fmt.Sprintf("PicoClaw/%s", config.Version))
+	userAgent := strings.TrimSpace(modelCfg.UserAgent)
+	if userAgent == "" {
+		userAgent = common.DefaultUserAgent
+	}
+	req.Header.Set("User-Agent", userAgent)
 	if apiKey := strings.TrimSpace(modelCfg.APIKey()); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}

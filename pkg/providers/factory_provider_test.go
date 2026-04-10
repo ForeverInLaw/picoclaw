@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
 
 func TestExtractProtocol(t *testing.T) {
@@ -853,7 +854,7 @@ const openaiCompatResponse = `{"choices":[{"message":{"content":"ok"},"finish_re
 const anthropicResponse = `{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","model":"claude-sonnet-4-20250514","usage":{"input_tokens":10,"output_tokens":5}}`
 
 func TestCreateProviderFromConfig_UserAgent(t *testing.T) {
-	defaultUA := "PicoClaw/" + config.Version
+	defaultUA := common.DefaultUserAgent
 
 	tests := []struct {
 		name      string
