@@ -574,6 +574,26 @@ func TestDefaultConfig_FilterMinLength(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_SendMessagesEnabled(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Tools.SendMessages.Enabled {
+		t.Fatal("DefaultConfig().Tools.SendMessages.Enabled should be true")
+	}
+	if !cfg.Tools.IsToolEnabled("send_messages") {
+		t.Fatal(`Tools.IsToolEnabled("send_messages") should be true`)
+	}
+}
+
+func TestDefaultConfig_TranscribeMediaEnabled(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Tools.TranscribeMedia.Enabled {
+		t.Fatal("DefaultConfig().Tools.TranscribeMedia.Enabled should be true")
+	}
+	if !cfg.Tools.IsToolEnabled("transcribe_media") {
+		t.Fatal(`Tools.IsToolEnabled("transcribe_media") should be true`)
+	}
+}
+
 func TestToolsConfig_GetFilterMinLength(t *testing.T) {
 	tests := []struct {
 		name     string

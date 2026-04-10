@@ -164,6 +164,9 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 		parts = append(parts, "# Memory\n\n"+memoryContext)
 	}
 
+	parts = append(parts, "# Tooling note\n\nUse `message` only for a single outbound message. If you need to send multiple messages, language variants, or destinations in one step, use `send_messages`.")
+	parts = append(parts, "# Voice note\n\nIf `transcribe_media` is available, use it to transcribe audio or voice media to text. Audio transcription may already be configured through the current ASR backend, including NVIDIA Riva when enabled.")
+
 	// Join with "---" separator
 	return strings.Join(parts, "\n\n---\n\n")
 }

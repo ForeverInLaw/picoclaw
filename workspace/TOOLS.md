@@ -39,3 +39,10 @@ Durable tool notes, integration quirks, and environment gotchas live here.
 - Use `send_sticker` for Telegram sticker sending.
 - Do not use `exec`, `curl`, `read_file`, or config inspection to send Telegram stickers.
 - If sticker sending is unavailable, skip the sticker instead of probing secrets or shelling out.
+
+## Voice / Audio Transcription
+
+- If `transcribe_media` is visible, use it to transcribe audio files, voice notes, or `media://` audio refs into text.
+- Incoming audio may already be transcribed automatically before the main agent sees the message.
+- The active ASR backend may be NVIDIA Riva, Whisper-compatible transcription, ElevenLabs, or another configured transcriber.
+- Do not claim that audio transcription is unavailable until you have checked whether `transcribe_media` is present or whether the incoming audio was already transcribed upstream.

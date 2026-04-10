@@ -244,6 +244,13 @@ func registerSharedTools(
 			})
 			agent.Tools.Register(messageTool)
 		}
+		if cfg.Tools.IsToolEnabled("send_messages") {
+			sendMessagesTool := tools.NewSendMessagesTool()
+			sendMessagesTool.SetSendCallback(func(toolCtx context.Context, channel, chatID, content string) error {
+				return publishToolMessage(msgBus, toolCtx, channel, chatID, content)
+			})
+			agent.Tools.Register(sendMessagesTool)
+		}
 		if cfg.Tools.IsToolEnabled("send_sticker") {
 			agent.Tools.Register(tools.NewSendStickerTool(
 				cfg.Channels.Telegram.Token.String(),
@@ -349,6 +356,7 @@ func registerSharedTools(
 				// 3. System Prompt
 				systemPrompt := "You are a subagent. Complete the given task independently and report the result.\n" +
 					"You have access to tools - use them as needed to complete your task.\n" +
+					"Use message only for one outbound message. Use send_messages when you need multiple outbound messages in one step.\n" +
 					"After completing the task, provide a clear summary of what was done.\n\n" +
 					"Task: " + task
 
@@ -647,20 +655,13 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 		}
 	}
 
-	alreadySent := false
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	if defaultAgent != nil {
-		if tool, ok := defaultAgent.Tools.Get("message"); ok {
-			if mt, ok := tool.(*tools.MessageTool); ok {
-				alreadySent = mt.HasSentInRound()
-			}
-		}
-	}
+	alreadySent := defaultAgent != nil && defaultAgent.Tools.HasSentInRound()
 
 	if alreadySent {
 		logger.DebugCF(
 			"agent",
-			"Skipped outbound (message tool already sent)",
+			"Skipped outbound (tool already sent direct user-visible messages)",
 			map[string]any{"channel": channel},
 		)
 		return
@@ -1078,11 +1079,30 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 			sf.SetMediaStore(s)
 		}
 	})
+
+	al.syncVoiceTools()
 }
 
 // SetTranscriber injects an ASR transcriber for agent-level audio transcription.
 func (al *AgentLoop) SetTranscriber(t asr.Transcriber) {
 	al.transcriber = t
+	al.syncVoiceTools()
+}
+
+func (al *AgentLoop) syncVoiceTools() {
+	cfg := al.GetConfig()
+	if cfg == nil || !cfg.Tools.IsToolEnabled("transcribe_media") || al.transcriber == nil {
+		return
+	}
+
+	tool := tools.NewTranscribeMediaTool(
+		cfg.WorkspacePath(),
+		cfg.Agents.Defaults.RestrictToWorkspace,
+		al.mediaStore,
+		al.transcriber,
+		buildAllowReadPatterns(cfg),
+	)
+	al.RegisterTool(tool)
 }
 
 // SetReloadFunc sets the callback function for triggering config reload.

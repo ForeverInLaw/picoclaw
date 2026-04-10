@@ -11,6 +11,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 type stubTranscriber struct {
@@ -118,5 +119,35 @@ func TestTranscribeAudioInMessage_KeepsFailedAudioRefs(t *testing.T) {
 	}
 	if len(got.Media) != 1 || got.Media[0] != failRef {
 		t.Fatalf("media=%v want [%q]", got.Media, failRef)
+	}
+}
+
+func TestSetTranscriber_RegistersTranscribeMediaTool(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.TranscribeMedia.Enabled = true
+
+	registry := NewAgentRegistry(cfg, nil)
+	al := &AgentLoop{
+		cfg:      cfg,
+		registry: registry,
+	}
+
+	al.SetTranscriber(&stubTranscriber{
+		results: map[string]string{},
+		errors:  map[string]error{},
+	})
+	al.SetMediaStore(media.NewFileMediaStore())
+
+	defaultAgent := registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	tool, ok := defaultAgent.Tools.Get("transcribe_media")
+	if !ok {
+		t.Fatal("expected transcribe_media tool to be registered")
+	}
+	if _, ok := tool.(*tools.TranscribeMediaTool); !ok {
+		t.Fatalf("expected *tools.TranscribeMediaTool, got %T", tool)
 	}
 }

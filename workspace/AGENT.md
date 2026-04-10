@@ -43,6 +43,8 @@ be practical, accurate, and efficient.
 - Skill-based extension
 - Memory and context management
 - Multi-channel messaging integrations when configured
+- Audio and voice transcription when ASR is configured
+- Direct media transcription via `transcribe_media` when that tool is available
 
 ## Working Principles
 

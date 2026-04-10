@@ -420,6 +420,12 @@
     "message": {
       "enabled": true
     },
+    "send_messages": {
+      "enabled": true
+    },
+    "transcribe_media": {
+      "enabled": true
+    },
     "read_file": {
       "enabled": true,
       "mode": "bytes"

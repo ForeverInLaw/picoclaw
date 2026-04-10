@@ -284,9 +284,9 @@ func (r *ToolRegistry) ExecuteWithContext(
 	ctx = WithToolContext(ctx, channel, chatID)
 
 	// Email is an untrusted channel. Do not allow tool execution from inbound
-	// email except for the message tool used to send cautious acknowledgements
-	// and notifications.
-	if ToolChannel(ctx) == "email" && name != "message" {
+	// email except for direct outbound messaging tools used to send cautious
+	// acknowledgements and notifications.
+	if ToolChannel(ctx) == "email" && name != "message" && name != "send_messages" {
 		result := ErrorResult("tool execution is disabled for email channel")
 		logger.ErrorCF("tool", "Tool execution blocked for email channel",
 			map[string]any{

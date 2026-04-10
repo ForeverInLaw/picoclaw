@@ -9,11 +9,46 @@ import (
 
 type SendCallback func(ctx context.Context, channel, chatID, content string) error
 
+type directDeliveryTracker struct {
+	sentInRound atomic.Bool
+	mu          sync.Mutex
+	delivered   []DeliveredMessage
+}
+
+func (t *directDeliveryTracker) ResetSentInRound() {
+	t.sentInRound.Store(false)
+	t.mu.Lock()
+	t.delivered = nil
+	t.mu.Unlock()
+}
+
+func (t *directDeliveryTracker) HasSentInRound() bool {
+	return t.sentInRound.Load()
+}
+
+func (t *directDeliveryTracker) DeliveredInRound() []DeliveredMessage {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	out := make([]DeliveredMessage, len(t.delivered))
+	copy(out, t.delivered)
+	return out
+}
+
+func (t *directDeliveryTracker) recordDelivered(channel, chatID, content string) {
+	t.mu.Lock()
+	t.delivered = append(t.delivered, DeliveredMessage{
+		Channel: channel,
+		ChatID:  chatID,
+		Content: content,
+	})
+	t.mu.Unlock()
+	t.sentInRound.Store(true)
+}
+
 type MessageTool struct {
 	sendCallback SendCallback
-	sentInRound  atomic.Bool // Tracks whether a message was sent in the current processing round
-	mu           sync.Mutex
-	delivered    []DeliveredMessage
+	tracker      directDeliveryTracker
 }
 
 func NewMessageTool() *MessageTool {
@@ -25,7 +60,7 @@ func (t *MessageTool) Name() string {
 }
 
 func (t *MessageTool) Description() string {
-	return "Send a message to user on a chat channel. Use this when you want to communicate something."
+	return "Send exactly one outbound message to one chat/channel. Use this for a single reply or notification. If you need to send multiple messages, languages, or destinations in one tool call, use send_messages instead."
 }
 
 func (t *MessageTool) Parameters() map[string]any {
@@ -45,31 +80,24 @@ func (t *MessageTool) Parameters() map[string]any {
 				"description": "Optional: target chat/user ID",
 			},
 		},
-		"required": []string{"content"},
+		"required":             []string{"content"},
+		"additionalProperties": false,
 	}
 }
 
 // ResetSentInRound resets the per-round send tracker.
 // Called by the agent loop at the start of each inbound message processing round.
 func (t *MessageTool) ResetSentInRound() {
-	t.sentInRound.Store(false)
-	t.mu.Lock()
-	t.delivered = nil
-	t.mu.Unlock()
+	t.tracker.ResetSentInRound()
 }
 
 // HasSentInRound returns true if the message tool sent a message during the current round.
 func (t *MessageTool) HasSentInRound() bool {
-	return t.sentInRound.Load()
+	return t.tracker.HasSentInRound()
 }
 
 func (t *MessageTool) DeliveredInRound() []DeliveredMessage {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	out := make([]DeliveredMessage, len(t.delivered))
-	copy(out, t.delivered)
-	return out
+	return t.tracker.DeliveredInRound()
 }
 
 func (t *MessageTool) SetSendCallback(callback SendCallback) {
@@ -108,14 +136,7 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		}
 	}
 
-	t.mu.Lock()
-	t.delivered = append(t.delivered, DeliveredMessage{
-		Channel: channel,
-		ChatID:  chatID,
-		Content: content,
-	})
-	t.mu.Unlock()
-	t.sentInRound.Store(true)
+	t.tracker.recordDelivered(channel, chatID, content)
 	// Silent: user already received the message directly
 	result := &ToolResult{
 		ForLLM: fmt.Sprintf("Message sent to %s:%s", channel, chatID),

@@ -76,10 +76,12 @@ type toolsConfigV0 struct {
 	Message         ToolConfig          `json:"message"                                                  envPrefix:"PICOCLAW_TOOLS_MESSAGE_"`
 	ReadFile        ReadFileToolConfig  `json:"read_file"                                                envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
 	SendFile        ToolConfig          `json:"send_file"                                                envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
+	SendMessages    ToolConfig          `json:"send_messages"                                            envPrefix:"PICOCLAW_TOOLS_SEND_MESSAGES_"`
 	Spawn           ToolConfig          `json:"spawn"                                                    envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
 	SpawnStatus     ToolConfig          `json:"spawn_status"                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`
 	SPI             ToolConfig          `json:"spi"                                                      envPrefix:"PICOCLAW_TOOLS_SPI_"`
 	Subagent        ToolConfig          `json:"subagent"                                                 envPrefix:"PICOCLAW_TOOLS_SUBAGENT_"`
+	TranscribeMedia ToolConfig          `json:"transcribe_media"                                         envPrefix:"PICOCLAW_TOOLS_TRANSCRIBE_MEDIA_"`
 	WebFetch        ToolConfig          `json:"web_fetch"                                                envPrefix:"PICOCLAW_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig          `json:"write_file"                                               envPrefix:"PICOCLAW_TOOLS_WRITE_FILE_"`
 }

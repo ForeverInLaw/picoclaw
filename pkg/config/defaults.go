@@ -535,6 +535,9 @@ func DefaultConfig() *Config {
 				Mode:            ReadFileModeBytes,
 				MaxReadFileSize: 64 * 1024, // 64KB
 			},
+			SendMessages: ToolConfig{
+				Enabled: true,
+			},
 			Spawn: ToolConfig{
 				Enabled: true,
 			},
@@ -545,6 +548,9 @@ func DefaultConfig() *Config {
 				Enabled: false, // Hardware tool - Linux only
 			},
 			Subagent: ToolConfig{
+				Enabled: true,
+			},
+			TranscribeMedia: ToolConfig{
 				Enabled: true,
 			},
 			WebFetch: ToolConfig{

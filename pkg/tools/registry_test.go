@@ -215,6 +215,23 @@ func TestToolRegistry_ExecuteWithContext_AllowsMessageToolForEmail(t *testing.T)
 	}
 }
 
+func TestToolRegistry_ExecuteWithContext_AllowsSendMessagesToolForEmail(t *testing.T) {
+	r := NewToolRegistry()
+	ct := &mockContextAwareTool{
+		mockRegistryTool: *newMockTool("send_messages", "sends multiple messages"),
+	}
+	r.Register(ct)
+
+	result := r.ExecuteWithContext(context.Background(), "send_messages", nil, "email", "sender@example.com", nil)
+
+	if result.IsError {
+		t.Fatalf("expected send_messages tool to be allowed, got error: %s", result.ForLLM)
+	}
+	if ct.lastCtx == nil {
+		t.Fatal("send_messages tool should execute for email channel")
+	}
+}
+
 func TestToolRegistry_ExecuteWithContext_AsyncCallback(t *testing.T) {
 	r := NewToolRegistry()
 	at := &mockAsyncRegistryTool{
