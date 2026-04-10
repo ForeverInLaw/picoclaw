@@ -220,6 +220,7 @@ func compactHistoricalToolTurns(messages []Message) []Message {
 	}
 
 	compacted := make([]Message, 0, len(messages))
+	compacted = append(compacted, messages[:turnStarts[0]]...)
 	for turnIdx, start := range turnStarts {
 		end := len(messages)
 		if turnIdx+1 < len(turnStarts) {

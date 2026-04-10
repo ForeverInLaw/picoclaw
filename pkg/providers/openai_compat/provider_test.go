@@ -989,6 +989,49 @@ func TestProviderChat_DropsAssistantToolCallTurnWhenFlattenedForGeminiLikeModels
 	}
 }
 
+func TestProviderChat_PreservesSystemAndPrefixMessagesWhenCompactingGeminiHistory(t *testing.T) {
+	var requestBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	p := NewProvider("key", server.URL, "")
+	messages := []protocoltypes.Message{
+		{Role: "system", Content: "identity and summary"},
+		{Role: "assistant", Content: "startup greeting"},
+		{Role: "user", Content: "first turn"},
+		{Role: "user", Content: "second turn"},
+	}
+
+	if _, err := p.Chat(t.Context(), messages, nil, "gemma-4-31b-it", nil); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	wireMsgs := requestBody["messages"].([]any)
+	if len(wireMsgs) != 4 {
+		t.Fatalf("len(messages) = %d, want 4", len(wireMsgs))
+	}
+	if role := wireMsgs[0].(map[string]any)["role"]; role != "system" {
+		t.Fatalf("messages[0].role = %v, want system", role)
+	}
+	if content := wireMsgs[0].(map[string]any)["content"]; content != "identity and summary" {
+		t.Fatalf("messages[0].content = %v, want preserved system prompt", content)
+	}
+	if role := wireMsgs[1].(map[string]any)["role"]; role != "assistant" {
+		t.Fatalf("messages[1].role = %v, want assistant", role)
+	}
+	if content := wireMsgs[1].(map[string]any)["content"]; content != "startup greeting" {
+		t.Fatalf("messages[1].content = %v, want preserved prefix assistant", content)
+	}
+}
+
 // chatWithCacheKey sets up a test server, sends a Chat request with prompt_cache_key,
 // and returns the decoded request body for assertion.
 func chatWithCacheKey(t *testing.T, apiBase string) map[string]any {

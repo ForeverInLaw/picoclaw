@@ -2138,22 +2138,7 @@ turnLoop:
 				return al.abortTurn(ts)
 			}
 
-			errMsg := strings.ToLower(err.Error())
-			isTimeoutError := errors.Is(err, context.DeadlineExceeded) ||
-				strings.Contains(errMsg, "deadline exceeded") ||
-				strings.Contains(errMsg, "client.timeout") ||
-				strings.Contains(errMsg, "timed out") ||
-				strings.Contains(errMsg, "timeout exceeded")
-
-			isContextError := !isTimeoutError && (strings.Contains(errMsg, "context_length_exceeded") ||
-				strings.Contains(errMsg, "context window") ||
-				strings.Contains(errMsg, "maximum context length") ||
-				strings.Contains(errMsg, "token limit") ||
-				strings.Contains(errMsg, "too many tokens") ||
-				strings.Contains(errMsg, "max_tokens") ||
-				strings.Contains(errMsg, "invalidparameter") ||
-				strings.Contains(errMsg, "prompt is too long") ||
-				strings.Contains(errMsg, "request too large"))
+			isTimeoutError, isContextError, isTransientServerError := classifyLLMRetryableError(err)
 
 			if isTimeoutError && retry < maxRetries {
 				backoff := time.Duration(retry+1) * 5 * time.Second
@@ -2235,6 +2220,35 @@ turnLoop:
 				callMessages = messages
 				if gracefulTerminal {
 					callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
+				}
+				continue
+			}
+
+			if isTransientServerError && retry < maxRetries {
+				backoff := time.Duration(retry+1) * 3 * time.Second
+				al.emitEvent(
+					EventKindLLMRetry,
+					ts.eventMeta("runTurn", "turn.llm.retry"),
+					LLMRetryPayload{
+						Attempt:    retry + 1,
+						MaxRetries: maxRetries,
+						Reason:     "server_error",
+						Error:      err.Error(),
+						Backoff:    backoff,
+					},
+				)
+				logger.WarnCF("agent", "Transient upstream LLM error, retrying after backoff", map[string]any{
+					"error":   err.Error(),
+					"retry":   retry,
+					"backoff": backoff.String(),
+				})
+				if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
+					if ts.hardAbortRequested() {
+						turnStatus = TurnEndStatusAborted
+						return al.abortTurn(ts)
+					}
+					err = sleepErr
+					break
 				}
 				continue
 			}
