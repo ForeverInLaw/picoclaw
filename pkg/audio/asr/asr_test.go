@@ -153,6 +153,42 @@ func TestDetectTranscriber(t *testing.T) {
 			wantName: "whisper",
 		},
 		{
+			name: "explicit riva config selects riva transcriber",
+			cfg: &config.Config{
+				Voice: config.VoiceConfig{
+					ModelName: "nvidia-riva-whisper",
+					Riva: config.RivaVoiceConfig{
+						Enabled:    true,
+						Server:     "grpc.nvcf.nvidia.com:443",
+						UseSSL:     true,
+						FunctionID: "b702f636-f60c-4a3d-a6f4-f3568c13bd7d",
+					},
+				},
+				ModelList: []*config.ModelConfig{
+					{
+						ModelName: "nvidia-riva-whisper",
+						Model:     "nvidia/openai/whisper-large-v3",
+						APIKeys:   config.SimpleSecureStrings("nvapi-test-key"),
+					},
+				},
+			},
+			wantName: "riva",
+		},
+		{
+			name: "nvidia proxy model does not auto-select riva when riva is disabled",
+			cfg: &config.Config{
+				ModelList: []*config.ModelConfig{
+					{
+						ModelName: "nemotron-embed-text",
+						Model:     "nvidia/llama-nemotron-embed-1b-v2",
+						APIBase:   "https://aio.ooy.cz/api/ai/proxy",
+						APIKeys:   config.SimpleSecureStrings("tok_proxy_key"),
+					},
+				},
+			},
+			wantNil: true,
+		},
+		{
 			name: "missing voice model name config returns nil",
 			cfg: &config.Config{
 				Voice: config.VoiceConfig{ModelName: "missing"},

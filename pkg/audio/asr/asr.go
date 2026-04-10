@@ -96,9 +96,6 @@ func fallbackTranscriberFromModelConfig(modelCfg *config.ModelConfig) Transcribe
 	}
 
 	protocol, _ := providers.ExtractProtocol(modelCfg.Model)
-	if protocol == "nvidia" && modelCfg.APIKey() != "" {
-		return NewRivaTranscriber(modelCfg.APIKey(), config.RivaVoiceConfig{})
-	}
 	if protocol == "elevenlabs" && modelCfg.APIKey() != "" {
 		return NewElevenLabsTranscriber(modelCfg.APIKey(), modelCfg.APIBase)
 	}
