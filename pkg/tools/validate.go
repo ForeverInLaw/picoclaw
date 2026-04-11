@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -88,29 +89,26 @@ func prepareToolArgsForValidation(schema map[string]any, args map[string]any) (m
 	}
 
 	for _, cand := range candidates {
-		parsed, ok := parseJSONObjectString(cand.payload)
-		if !ok {
-			continue
-		}
+		for _, parsed := range parseJSONObjectCandidates(cand.payload) {
+			merged := make(map[string]any, len(parsed)+len(args))
+			for k, v := range parsed {
+				merged[k] = v
+			}
+			for k, v := range args {
+				if k == cand.sourceKey || k == "raw" {
+					continue
+				}
+				merged[k] = v
+			}
 
-		merged := make(map[string]any, len(parsed)+len(args))
-		for k, v := range parsed {
-			merged[k] = v
-		}
-		for k, v := range args {
-			if k == cand.sourceKey || k == "raw" {
+			if !additional && len(props) > 0 && hasUnknownProperties(merged, props) {
 				continue
 			}
-			merged[k] = v
+			if len(missingRequiredFields(schema, merged)) > 0 {
+				continue
+			}
+			return merged, true
 		}
-
-		if !additional && len(props) > 0 && hasUnknownProperties(merged, props) {
-			continue
-		}
-		if len(missingRequiredFields(schema, merged)) > 0 {
-			continue
-		}
-		return merged, true
 	}
 
 	return args, false
@@ -201,6 +199,40 @@ func parseJSONObjectString(s string) (map[string]any, bool) {
 		return nil, false
 	}
 	return parsed, true
+}
+
+func parseJSONObjectCandidates(s string) []map[string]any {
+	if parsed, ok := parseJSONObjectString(s); ok {
+		return []map[string]any{parsed}
+	}
+
+	trimmed := strings.TrimSpace(s)
+	if !looksLikeJSONObjectString(trimmed) {
+		return nil
+	}
+
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	var out []map[string]any
+	for {
+		var parsed map[string]any
+		if err := dec.Decode(&parsed); err != nil {
+			return nil
+		}
+		if parsed != nil {
+			out = append(out, parsed)
+		}
+
+		if onlyWhitespaceRemaining(trimmed, dec.InputOffset()) {
+			return out
+		}
+	}
+}
+
+func onlyWhitespaceRemaining(s string, offset int64) bool {
+	if offset < 0 || offset > int64(len(s)) {
+		return false
+	}
+	return len(bytes.TrimSpace([]byte(s[offset:]))) == 0
 }
 
 func hasUnknownProperties(args map[string]any, props map[string]any) bool {

@@ -432,6 +432,36 @@ func TestPrepareToolArgsForValidation_UnwrapsRawFallbackPayload(t *testing.T) {
 	}
 }
 
+func TestPrepareToolArgsForValidation_UnwrapsConcatenatedRawJSONObjectPayload(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path":      map[string]any{"type": "string"},
+			"content":   map[string]any{"type": "string"},
+			"overwrite": map[string]any{"type": "boolean"},
+		},
+		"required": []string{"path", "content"},
+	}
+
+	args := map[string]any{
+		"raw": "{\"command\":\"mkdir -p /tmp/skills/caveman\"}{\"path\":\"/tmp/skills/caveman/SKILL.md\",\"content\":\"skill body\",\"overwrite\":true}",
+	}
+
+	got, repaired := prepareToolArgsForValidation(schema, args)
+	if !repaired {
+		t.Fatal("expected concatenated raw payload to be repaired")
+	}
+	if got["path"] != "/tmp/skills/caveman/SKILL.md" {
+		t.Fatalf("path = %#v, want /tmp/skills/caveman/SKILL.md", got["path"])
+	}
+	if got["content"] != "skill body" {
+		t.Fatalf("content = %#v, want skill body", got["content"])
+	}
+	if got["overwrite"] != true {
+		t.Fatalf("overwrite = %#v, want true", got["overwrite"])
+	}
+}
+
 func TestValidateToolArgs_RealSchemas(t *testing.T) {
 	execSchema := map[string]any{
 		"type": "object",
