@@ -50,13 +50,16 @@ func TestIsInlineMessage_DetectsMetadataAndTransport(t *testing.T) {
 
 func TestInlineToolAllowlist_DefaultsToSafeReadOnlyTools(t *testing.T) {
 	got := newToolAllowlist(inlineToolAllowlist())
-	for _, toolName := range []string{"web_search", "web_fetch", "fact_check"} {
+	for _, toolName := range []string{"web_search", "web_fetch", "fact_check", "exec", "read_file", "write_file", "list_dir", "cron"} {
 		if !got.Allows(toolName) {
 			t.Fatalf("expected %q to be allowed", toolName)
 		}
 	}
 	if got.Allows("message") {
 		t.Fatal("did not expect message tool to be allowed")
+	}
+	if got.Allows("send_messages") {
+		t.Fatal("did not expect send_messages tool to be allowed")
 	}
 }
 

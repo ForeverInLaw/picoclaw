@@ -10,7 +10,16 @@ import (
 const telegramInlineMetadataKey = "telegram_inline"
 const telegramInlineQueryKey = "inline_query"
 
-var inlineSafeTools = []string{"web_search", "web_fetch", "fact_check"}
+var inlineSafeTools = []string{
+	"web_search",
+	"web_fetch",
+	"fact_check",
+	"exec",
+	"read_file",
+	"write_file",
+	"list_dir",
+	"cron",
+}
 
 func isInlineMessage(msg bus.InboundMessage) bool {
 	if strings.EqualFold(msg.Metadata[telegramInlineMetadataKey], "true") {
