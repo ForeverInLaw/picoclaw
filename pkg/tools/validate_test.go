@@ -351,6 +351,87 @@ func TestValidateToolArgs_RegistryIntegration(t *testing.T) {
 	}
 }
 
+func TestPrepareToolArgsForValidation_UnwrapsNestedJSONWriteFilePayload(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path":      map[string]any{"type": "string"},
+			"content":   map[string]any{"type": "string"},
+			"overwrite": map[string]any{"type": "boolean"},
+		},
+		"required": []string{"path", "content"},
+	}
+
+	args := map[string]any{
+		"content":   "{\"path\":\"/tmp/test.txt\",\"content\":\"hello\"}",
+		"overwrite": true,
+	}
+
+	got, repaired := prepareToolArgsForValidation(schema, args)
+	if !repaired {
+		t.Fatal("expected args to be repaired")
+	}
+	if got["path"] != "/tmp/test.txt" {
+		t.Fatalf("path = %#v, want /tmp/test.txt", got["path"])
+	}
+	if got["content"] != "hello" {
+		t.Fatalf("content = %#v, want hello", got["content"])
+	}
+	if got["overwrite"] != true {
+		t.Fatalf("overwrite = %#v, want true", got["overwrite"])
+	}
+	if err := validateToolArgs(schema, got); err != nil {
+		t.Fatalf("validateToolArgs(repaired) error = %v", err)
+	}
+}
+
+func TestPrepareToolArgsForValidation_DoesNotRewriteValidJSONStringFileContent(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path":    map[string]any{"type": "string"},
+			"content": map[string]any{"type": "string"},
+		},
+		"required": []string{"path", "content"},
+	}
+
+	args := map[string]any{
+		"path":    "/tmp/data.json",
+		"content": "{\"feature\":true}",
+	}
+
+	got, repaired := prepareToolArgsForValidation(schema, args)
+	if repaired {
+		t.Fatal("did not expect args to be repaired when required fields already exist")
+	}
+	if got["content"] != "{\"feature\":true}" {
+		t.Fatalf("content = %#v, want original JSON string", got["content"])
+	}
+}
+
+func TestPrepareToolArgsForValidation_UnwrapsRawFallbackPayload(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path":    map[string]any{"type": "string"},
+			"content": map[string]any{"type": "string"},
+		},
+		"required": []string{"path", "content"},
+	}
+
+	args := map[string]any{
+		"raw": "{\"path\":\"/tmp/from-raw.txt\",\"content\":\"from raw\"}",
+	}
+
+	got, repaired := prepareToolArgsForValidation(schema, args)
+	if !repaired {
+		t.Fatal("expected raw payload to be repaired")
+	}
+	if got["path"] != "/tmp/from-raw.txt" || got["content"] != "from raw" {
+		t.Fatalf("unexpected repaired args: %#v", got)
+	}
+}
+
 func TestValidateToolArgs_RealSchemas(t *testing.T) {
 	execSchema := map[string]any{
 		"type": "object",

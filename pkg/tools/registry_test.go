@@ -46,6 +46,16 @@ func (m *mockAsyncRegistryTool) ExecuteAsync(_ context.Context, args map[string]
 	return m.result
 }
 
+type mockCaptureRegistryTool struct {
+	mockRegistryTool
+	lastArgs map[string]any
+}
+
+func (m *mockCaptureRegistryTool) Execute(_ context.Context, args map[string]any) *ToolResult {
+	m.lastArgs = args
+	return m.result
+}
+
 // --- helpers ---
 
 func newMockTool(name, desc string) *mockRegistryTool {
@@ -195,6 +205,44 @@ func TestToolRegistry_ExecuteWithContext_BlocksNonMessageToolsForEmail(t *testin
 	}
 	if ct.lastCtx != nil {
 		t.Fatal("tool should not have executed for email channel")
+	}
+}
+
+func TestToolRegistry_Execute_RepairsNestedJSONObjectArguments(t *testing.T) {
+	r := NewToolRegistry()
+	tool := &mockCaptureRegistryTool{
+		mockRegistryTool: mockRegistryTool{
+			name: "write_file",
+			desc: "writes a file",
+			params: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":      map[string]any{"type": "string"},
+					"content":   map[string]any{"type": "string"},
+					"overwrite": map[string]any{"type": "boolean"},
+				},
+				"required": []string{"path", "content"},
+			},
+			result: SilentResult("ok"),
+		},
+	}
+	r.Register(tool)
+
+	result := r.Execute(context.Background(), "write_file", map[string]any{
+		"content":   "{\"path\":\"/tmp/fix.txt\",\"content\":\"hello\"}",
+		"overwrite": true,
+	})
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.ForLLM)
+	}
+	if tool.lastArgs["path"] != "/tmp/fix.txt" {
+		t.Fatalf("path = %#v, want /tmp/fix.txt", tool.lastArgs["path"])
+	}
+	if tool.lastArgs["content"] != "hello" {
+		t.Fatalf("content = %#v, want hello", tool.lastArgs["content"])
+	}
+	if tool.lastArgs["overwrite"] != true {
+		t.Fatalf("overwrite = %#v, want true", tool.lastArgs["overwrite"])
 	}
 }
 

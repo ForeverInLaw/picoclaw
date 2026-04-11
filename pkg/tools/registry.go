@@ -272,7 +272,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 	}
 
 	// Validate arguments against the tool's declared schema.
-	if err := validateToolArgs(tool.Parameters(), args); err != nil {
+	schema := tool.Parameters()
+	if repairedArgs, repaired := prepareToolArgsForValidation(schema, args); repaired {
+		logger.InfoCF("tool", "Repaired malformed tool arguments before validation",
+			map[string]any{"tool": name, "before": args, "after": repairedArgs})
+		args = repairedArgs
+	}
+	if err := validateToolArgs(schema, args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
 		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).

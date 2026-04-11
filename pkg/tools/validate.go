@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 )
 
 // validateToolArgs validates args against a JSON Schema-like map.
@@ -52,6 +54,68 @@ func validateToolArgs(schema map[string]any, args map[string]any) error {
 	return nil
 }
 
+// prepareToolArgsForValidation repairs common model formatting mistakes before
+// strict schema validation. It is intentionally conservative: it only unwraps a
+// nested JSON object when required top-level fields are missing.
+func prepareToolArgsForValidation(schema map[string]any, args map[string]any) (map[string]any, bool) {
+	if args == nil {
+		return map[string]any{}, false
+	}
+
+	missing := missingRequiredFields(schema, args)
+	if len(missing) == 0 {
+		return args, false
+	}
+
+	props, _ := schema["properties"].(map[string]any)
+	additional := allowsAdditional(schema)
+
+	type candidate struct {
+		sourceKey string
+		payload   string
+	}
+
+	candidates := make([]candidate, 0, len(args)+1)
+	if raw, ok := args["raw"].(string); ok {
+		candidates = append(candidates, candidate{sourceKey: "raw", payload: raw})
+	}
+	for key, val := range args {
+		strVal, ok := val.(string)
+		if !ok || !looksLikeJSONObjectString(strVal) {
+			continue
+		}
+		candidates = append(candidates, candidate{sourceKey: key, payload: strVal})
+	}
+
+	for _, cand := range candidates {
+		parsed, ok := parseJSONObjectString(cand.payload)
+		if !ok {
+			continue
+		}
+
+		merged := make(map[string]any, len(parsed)+len(args))
+		for k, v := range parsed {
+			merged[k] = v
+		}
+		for k, v := range args {
+			if k == cand.sourceKey || k == "raw" {
+				continue
+			}
+			merged[k] = v
+		}
+
+		if !additional && len(props) > 0 && hasUnknownProperties(merged, props) {
+			continue
+		}
+		if len(missingRequiredFields(schema, merged)) > 0 {
+			continue
+		}
+		return merged, true
+	}
+
+	return args, false
+}
+
 // checkRequired verifies that every field listed in schema["required"] is present in args.
 func checkRequired(schema map[string]any, args map[string]any) error {
 	reqRaw, ok := schema["required"]
@@ -83,6 +147,35 @@ func checkRequired(schema map[string]any, args map[string]any) error {
 	return nil
 }
 
+func missingRequiredFields(schema map[string]any, args map[string]any) []string {
+	reqRaw, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+
+	var required []string
+	switch r := reqRaw.(type) {
+	case []string:
+		required = r
+	case []any:
+		for _, v := range r {
+			if s, ok := v.(string); ok {
+				required = append(required, s)
+			}
+		}
+	default:
+		return nil
+	}
+
+	missing := make([]string, 0, len(required))
+	for _, field := range required {
+		if _, present := args[field]; !present {
+			missing = append(missing, field)
+		}
+	}
+	return missing
+}
+
 // allowsAdditional returns true when the schema explicitly sets
 // "additionalProperties" to true, or when the key is absent (default: reject extras).
 func allowsAdditional(schema map[string]any) bool {
@@ -92,6 +185,31 @@ func allowsAdditional(schema map[string]any) bool {
 	}
 	b, ok := v.(bool)
 	return ok && b
+}
+
+func looksLikeJSONObjectString(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	return strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")
+}
+
+func parseJSONObjectString(s string) (map[string]any, bool) {
+	if !looksLikeJSONObjectString(s) {
+		return nil, false
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(s), &parsed); err != nil || parsed == nil {
+		return nil, false
+	}
+	return parsed, true
+}
+
+func hasUnknownProperties(args map[string]any, props map[string]any) bool {
+	for key := range args {
+		if _, ok := props[key]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // checkType validates that val matches the JSON Schema type declared in propSchema.

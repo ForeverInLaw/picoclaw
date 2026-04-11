@@ -870,7 +870,7 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	return "Write content to a file. If the file already exists, you must set overwrite=true to replace it."
+	return "Write content to a file. Pass path and content as separate top-level arguments; do not wrap them inside the content string. If the file already exists, you must set overwrite=true to replace it."
 }
 
 func (t *WriteFileTool) Parameters() map[string]any {
@@ -883,7 +883,7 @@ func (t *WriteFileTool) Parameters() map[string]any {
 			},
 			"content": map[string]any{
 				"type":        "string",
-				"description": "Content to write to the file",
+				"description": "Raw file content to write. This must be the file body itself, not a nested JSON object containing path/content.",
 			},
 			"overwrite": map[string]any{
 				"type":        "boolean",
