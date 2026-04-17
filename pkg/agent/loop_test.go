@@ -1545,13 +1545,13 @@ func TestProcessDirectWithChannel_EmptyResponseForcesDirectAnswerWithoutTools(t 
 				Workspace:         tmpDir,
 				ModelName:         "test-model",
 				MaxTokens:         4096,
-				MaxToolIterations: 6,
+				MaxToolIterations: 8,
 			},
 		},
 	}
 
 	msgBus := bus.NewMessageBus()
-	provider := &sequenceMockProvider{responses: []string{"", "", "", "forced final answer"}}
+	provider := &sequenceMockProvider{responses: []string{"", "", "", "", "", "", "forced final answer"}}
 	al := NewAgentLoop(cfg, msgBus, provider)
 	al.RegisterTool(&toolLimitTestTool{})
 
@@ -1562,17 +1562,17 @@ func TestProcessDirectWithChannel_EmptyResponseForcesDirectAnswerWithoutTools(t 
 	if response != "forced final answer" {
 		t.Fatalf("response = %q, want %q", response, "forced final answer")
 	}
-	if provider.calls != 4 {
-		t.Fatalf("provider calls = %d, want %d", provider.calls, 4)
+	if provider.calls != 7 {
+		t.Fatalf("provider calls = %d, want %d", provider.calls, 7)
 	}
-	if len(provider.toolCalls) != 4 {
-		t.Fatalf("toolCalls len = %d, want %d", len(provider.toolCalls), 4)
+	if len(provider.toolCalls) != 7 {
+		t.Fatalf("toolCalls len = %d, want %d", len(provider.toolCalls), 7)
 	}
 	if provider.toolCalls[0] == 0 {
 		t.Fatalf("expected initial call to expose tools, got 0")
 	}
-	if provider.toolCalls[3] != 0 {
-		t.Fatalf("expected forced final answer pass without tools, got %d", provider.toolCalls[3])
+	if provider.toolCalls[6] != 0 {
+		t.Fatalf("expected forced final answer pass without tools, got %d", provider.toolCalls[6])
 	}
 }
 

@@ -113,7 +113,7 @@ const (
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
 	requeueYieldDelay         = 10 * time.Millisecond
-	emptyResponseRetryLimit   = 2
+	emptyResponseRetryLimit   = 5
 )
 
 const emptyResponseRetryInstruction = "Your previous response was empty. Retry the same request now and return a non-empty answer, or valid tool calls if tools are needed. Do not return an empty message."
