@@ -25,6 +25,8 @@ type ContextBuilder struct {
 	memory             *MemoryStore
 	toolDiscoveryBM25  bool
 	toolDiscoveryRegex bool
+	availableToolsMu   sync.RWMutex
+	availableTools     map[string]struct{}
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -48,6 +50,23 @@ type ContextBuilder struct {
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
 	cb.toolDiscoveryBM25 = useBM25
 	cb.toolDiscoveryRegex = useRegex
+	return cb
+}
+
+func (cb *ContextBuilder) WithToolAvailability(toolNames ...string) *ContextBuilder {
+	normalized := make(map[string]struct{}, len(toolNames))
+	for _, name := range toolNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		normalized[name] = struct{}{}
+	}
+
+	cb.availableToolsMu.Lock()
+	cb.availableTools = normalized
+	cb.availableToolsMu.Unlock()
+	cb.InvalidateCache()
 	return cb
 }
 
@@ -83,6 +102,35 @@ func (cb *ContextBuilder) getIdentity() string {
 	workspacePath, _ := filepath.Abs(filepath.Join(cb.workspace))
 	toolDiscovery := cb.getDiscoveryRule()
 	version := config.FormatVersion()
+	rules := []string{
+		"1. **ALWAYS use tools** - When you need to perform an action (schedule reminders, send messages, execute commands, etc.), you MUST call the appropriate tool. Do NOT just say you'll do it or pretend to do it.",
+		"2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.",
+		fmt.Sprintf("3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md", workspacePath),
+		"4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.",
+	}
+	if cb.hasTool("chat_memory") {
+		rules = append(rules,
+			"5. **Chat memory** - When a question depends on prior chat history, prior agreements, who said what, or time-window summaries, you MUST use the chat_memory tool before answering. Do not claim you do not remember or cannot know until chat_memory has been checked. After using it, explicitly say that you checked chat memory or chat history.",
+		)
+	} else {
+		rules = append(rules,
+			"5. **Prior chat history** - If earlier chat history is not present in the current context, do not invent it. Rely only on the visible history, provided summary, and explicit user quotes.",
+		)
+	}
+	if cb.hasTool("personal_todo") {
+		rules = append(rules,
+			"6. **Personal todo** - When the user asks about their personal tasks, todo list, or marking personal items done, you MUST use the personal_todo tool. Do not put personal todo items into chat_memory or MEMORY.md.",
+		)
+	}
+	if cb.hasTool("fact_check") {
+		nextIndex := len(rules) + 1
+		rules = append(rules,
+			fmt.Sprintf("%d. **Fact check** - When the user explicitly asks to verify, fact-check, or check whether a claim or URL is true, you MUST use the fact_check tool. Do not replace this with free-form web_search or guessing. If fact_check returns mixed or unverified, do not present the claim as established fact; state the verdict and cite the sources.", nextIndex),
+		)
+	}
+	if toolDiscovery != "" {
+		rules = append(rules, fmt.Sprintf("%d. %s", len(rules)+1, toolDiscovery))
+	}
 
 	return fmt.Sprintf(
 		`# Коробка 📦 (%s)
@@ -99,22 +147,8 @@ Your workspace is at: %s
 
 ## Important Rules
 
-1. **ALWAYS use tools** - When you need to perform an action (schedule reminders, send messages, execute commands, etc.), you MUST call the appropriate tool. Do NOT just say you'll do it or pretend to do it.
-
-2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
-
-3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
-
-4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
-
-5. **Chat memory** - When a question depends on prior chat history, prior agreements, who said what, or time-window summaries, you MUST use the chat_memory tool before answering. Do not claim you do not remember or cannot know until chat_memory has been checked. After using it, explicitly say that you checked chat memory or chat history.
-
-6. **Personal todo** - When the user asks about their personal tasks, todo list, or marking personal items done, you MUST use the personal_todo tool. Do not put personal todo items into chat_memory or MEMORY.md.
-
-7. **Fact check** - When the user explicitly asks to verify, fact-check, or check whether a claim or URL is true, you MUST use the fact_check tool. Do not replace this with free-form web_search or guessing. If fact_check returns mixed or unverified, do not present the claim as established fact; state the verdict and cite the sources.
-
 %s`,
-		version, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, toolDiscovery)
+		version, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, strings.Join(rules, "\n\n"))
 }
 
 func (cb *ContextBuilder) getDiscoveryRule() string {
@@ -131,9 +165,16 @@ func (cb *ContextBuilder) getDiscoveryRule() string {
 	}
 
 	return fmt.Sprintf(
-		`5. **Tool Discovery** - Your visible tools are limited to save memory, but a vast hidden library exists. If you lack the right tool for a task, BEFORE giving up, you MUST search using the %s tool. Do not refuse a request unless the search returns nothing. Found tools will temporarily unlock for your next turn.`,
+		`**Tool Discovery** - Your visible tools are limited to save memory, but a vast hidden library exists. If you lack the right tool for a task, BEFORE giving up, you MUST search using the %s tool. Do not refuse a request unless the search returns nothing. Found tools will temporarily unlock for your next turn.`,
 		strings.Join(toolNames, " or "),
 	)
+}
+
+func (cb *ContextBuilder) hasTool(name string) bool {
+	cb.availableToolsMu.RLock()
+	defer cb.availableToolsMu.RUnlock()
+	_, ok := cb.availableTools[strings.TrimSpace(name)]
+	return ok
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {

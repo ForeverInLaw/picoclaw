@@ -731,6 +731,7 @@ func (m *countingMockProvider) GetDefaultModel() string {
 type sequenceMockProvider struct {
 	responses []string
 	calls     int
+	toolCalls []int
 }
 
 func (m *sequenceMockProvider) Chat(
@@ -741,6 +742,7 @@ func (m *sequenceMockProvider) Chat(
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
 	m.calls++
+	m.toolCalls = append(m.toolCalls, len(tools))
 	idx := m.calls - 1
 	if idx >= len(m.responses) {
 		idx = len(m.responses) - 1
@@ -1527,6 +1529,50 @@ func TestProcessDirectWithChannel_EmptyResponseRetriesBeforeFallback(t *testing.
 	}
 	if provider.calls != 2 {
 		t.Fatalf("provider calls = %d, want %d", provider.calls, 2)
+	}
+}
+
+func TestProcessDirectWithChannel_EmptyResponseForcesDirectAnswerWithoutTools(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 6,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &sequenceMockProvider{responses: []string{"", "", "", "forced final answer"}}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	al.RegisterTool(&toolLimitTestTool{})
+
+	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "empty-response-forced-final", "test", "chat1")
+	if err != nil {
+		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+	}
+	if response != "forced final answer" {
+		t.Fatalf("response = %q, want %q", response, "forced final answer")
+	}
+	if provider.calls != 4 {
+		t.Fatalf("provider calls = %d, want %d", provider.calls, 4)
+	}
+	if len(provider.toolCalls) != 4 {
+		t.Fatalf("toolCalls len = %d, want %d", len(provider.toolCalls), 4)
+	}
+	if provider.toolCalls[0] == 0 {
+		t.Fatalf("expected initial call to expose tools, got 0")
+	}
+	if provider.toolCalls[3] != 0 {
+		t.Fatalf("expected forced final answer pass without tools, got %d", provider.toolCalls[3])
 	}
 }
 

@@ -133,6 +133,7 @@ func NewAgentInstance(
 			toolsRegistry.Register(tools.NewPersonalTodoTool(todoStore))
 		}
 	}
+	contextBuilder.WithToolAvailability(toolsRegistry.List()...)
 
 	agentID := routing.DefaultAgentID
 	agentName := ""

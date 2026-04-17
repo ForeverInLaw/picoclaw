@@ -218,7 +218,7 @@ func TestBuildMessages_SystemPromptIncludesChatMemoryGuidance(t *testing.T) {
 	})
 	defer os.RemoveAll(tmpDir)
 
-	cb := NewContextBuilder(tmpDir)
+	cb := NewContextBuilder(tmpDir).WithToolAvailability("chat_memory", "personal_todo", "fact_check")
 	msgs := cb.BuildMessages(nil, "", "", "hello", nil, "telegram", "42", "", "", "")
 	sys := msgs[0].Content
 
@@ -235,6 +235,31 @@ func TestBuildMessages_SystemPromptIncludesChatMemoryGuidance(t *testing.T) {
 		if !strings.Contains(sys, needle) {
 			t.Fatalf("system prompt missing chat memory guidance %q:\n%s", needle, sys)
 		}
+	}
+}
+
+func TestBuildMessages_SystemPromptOmitsUnavailableToolGuidance(t *testing.T) {
+	tmpDir := setupWorkspace(t, map[string]string{
+		"IDENTITY.md": "# Identity\nTest agent.",
+		"TOOLS.md":    "# Tools\nGeneric notes.",
+	})
+	defer os.RemoveAll(tmpDir)
+
+	cb := NewContextBuilder(tmpDir)
+	msgs := cb.BuildMessages(nil, "", "", "hello", nil, "telegram", "42", "", "", "")
+	sys := msgs[0].Content
+
+	for _, needle := range []string{
+		"you MUST use the chat_memory tool before answering",
+		"you MUST use the personal_todo tool",
+		"you MUST use the fact_check tool",
+	} {
+		if strings.Contains(sys, needle) {
+			t.Fatalf("system prompt unexpectedly contains unavailable tool guidance %q:\n%s", needle, sys)
+		}
+	}
+	if !strings.Contains(sys, "If earlier chat history is not present in the current context, do not invent it") {
+		t.Fatalf("system prompt missing no-chat-memory fallback guidance:\n%s", sys)
 	}
 }
 

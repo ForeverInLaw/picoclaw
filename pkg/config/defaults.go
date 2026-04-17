@@ -28,7 +28,7 @@ func DefaultConfig() *Config {
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
 				MemoryIndex: MemoryIndexConfig{
-					Enabled:         false,
+					Enabled:         true,
 					MaxResults:      5,
 					MaxSnippetChars: 280,
 					MinQueryChars:   12,

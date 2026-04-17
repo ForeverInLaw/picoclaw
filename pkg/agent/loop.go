@@ -117,6 +117,7 @@ const (
 )
 
 const emptyResponseRetryInstruction = "Your previous response was empty. Retry the same request now and return a non-empty answer, or valid tool calls if tools are needed. Do not return an empty message."
+const emptyResponseForceDirectAnswerInstruction = "Your last responses were empty. Answer the user now with a brief, non-empty assistant message. Do not call any tools. If you are blocked, state the missing requirement in one sentence."
 
 func NewAgentLoop(
 	cfg *config.Config,
@@ -410,6 +411,10 @@ func registerSharedTools(
 			}
 		} else if (spawnEnabled || spawnStatusEnabled) && !cfg.Tools.IsToolEnabled("subagent") {
 			logger.WarnCF("agent", "spawn/spawn_status tools require subagent to be enabled", nil)
+		}
+
+		if agent.ContextBuilder != nil {
+			agent.ContextBuilder.WithToolAvailability(agent.Tools.List()...)
 		}
 	}
 }
@@ -950,6 +955,9 @@ func (al *AgentLoop) RegisterTool(tool tools.Tool) {
 	for _, agentID := range registry.ListAgentIDs() {
 		if agent, ok := registry.GetAgent(agentID); ok {
 			agent.Tools.Register(tool)
+			if agent.ContextBuilder != nil {
+				agent.ContextBuilder.WithToolAvailability(agent.Tools.List()...)
+			}
 		}
 	}
 }
@@ -1829,6 +1837,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var hadToolCalls bool
 	var terminalToolCompleted bool
 	var emptyDirectResponseRetries int
+	var forceDirectAnswerWithoutTools bool
 	streamProvider, providerCanStream := activeProvider.(providers.StreamingProvider)
 
 turnLoop:
@@ -1926,6 +1935,9 @@ turnLoop:
 
 		gracefulTerminal, _ := ts.gracefulInterruptRequested()
 		providerToolDefs := ts.agent.Tools.ToProviderDefsFiltered(allowedTools)
+		if forceDirectAnswerWithoutTools {
+			providerToolDefs = nil
+		}
 
 		// Native web search support (from HEAD)
 		_, hasWebSearch := ts.agent.Tools.Get("web_search")
@@ -2350,21 +2362,35 @@ turnLoop:
 				continue
 			}
 			if strings.TrimSpace(responseContent) == "" &&
-				!gracefulTerminal &&
-				emptyDirectResponseRetries < emptyResponseRetryLimit {
-				emptyDirectResponseRetries++
-				logger.WarnCF("agent", "LLM returned empty response; retrying turn iteration",
-					map[string]any{
-						"agent_id":    ts.agent.ID,
-						"iteration":   iteration,
-						"retry_count": emptyDirectResponseRetries,
-						"max_retries": emptyResponseRetryLimit,
+				!gracefulTerminal {
+				if emptyDirectResponseRetries < emptyResponseRetryLimit {
+					emptyDirectResponseRetries++
+					logger.WarnCF("agent", "LLM returned empty response; retrying turn iteration",
+						map[string]any{
+							"agent_id":    ts.agent.ID,
+							"iteration":   iteration,
+							"retry_count": emptyDirectResponseRetries,
+							"max_retries": emptyResponseRetryLimit,
+						})
+					messages = append(messages, providers.Message{
+						Role:    "system",
+						Content: emptyResponseRetryInstruction,
 					})
-				messages = append(messages, providers.Message{
-					Role:    "system",
-					Content: emptyResponseRetryInstruction,
-				})
-				continue
+					continue
+				}
+				if !forceDirectAnswerWithoutTools {
+					forceDirectAnswerWithoutTools = true
+					logger.WarnCF("agent", "LLM returned empty response repeatedly; forcing direct answer without tools",
+						map[string]any{
+							"agent_id":  ts.agent.ID,
+							"iteration": iteration,
+						})
+					messages = append(messages, providers.Message{
+						Role:    "system",
+						Content: emptyResponseForceDirectAnswerInstruction,
+					})
+					continue
+				}
 			}
 			finalContent = formatInlineResponse(ts.opts.ResponseQuote, responseContent)
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",

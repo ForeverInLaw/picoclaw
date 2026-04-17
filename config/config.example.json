@@ -10,6 +10,12 @@
       "max_tool_iterations": 20,
       "summarize_message_threshold": 20,
       "summarize_token_percent": 75,
+      "memory_index": {
+        "enabled": true,
+        "max_results": 5,
+        "max_snippet_chars": 280,
+        "min_query_chars": 12
+      },
       "split_on_marker": false,
       "tool_feedback": {
         "enabled": false,
