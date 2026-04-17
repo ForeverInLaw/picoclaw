@@ -273,7 +273,12 @@ func (r *ToolRegistry) ExecuteWithContext(
 
 	// Validate arguments against the tool's declared schema.
 	schema := tool.Parameters()
-	if repairedArgs, repaired := prepareToolArgsForValidation(schema, args); repaired {
+	if repairedArgs, repaired, repairErr := prepareToolArgsForValidation(name, schema, args); repairErr != nil {
+		logger.WarnCF("tool", "Tool argument repair rejected malformed payload",
+			map[string]any{"tool": name, "error": repairErr.Error(), "args": args})
+		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, repairErr)).
+			WithError(fmt.Errorf("argument repair failed: %w", repairErr))
+	} else if repaired {
 		logger.InfoCF("tool", "Repaired malformed tool arguments before validation",
 			map[string]any{"tool": name, "before": args, "after": repairedArgs})
 		args = repairedArgs

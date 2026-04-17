@@ -58,14 +58,19 @@ func validateToolArgs(schema map[string]any, args map[string]any) error {
 // prepareToolArgsForValidation repairs common model formatting mistakes before
 // strict schema validation. It is intentionally conservative: it only unwraps a
 // nested JSON object when required top-level fields are missing.
-func prepareToolArgsForValidation(schema map[string]any, args map[string]any) (map[string]any, bool) {
+//
+// Some tools (notably exec) should never auto-repair concatenated JSON objects:
+// a malformed payload like {"path":"..."}{"command":"rm ..."} likely means
+// the model attempted to emit multiple tool calls in one function invocation.
+// For those tools we fail closed instead of guessing.
+func prepareToolArgsForValidation(toolName string, schema map[string]any, args map[string]any) (map[string]any, bool, error) {
 	if args == nil {
-		return map[string]any{}, false
+		return map[string]any{}, false, nil
 	}
 
 	missing := missingRequiredFields(schema, args)
 	if len(missing) == 0 {
-		return args, false
+		return args, false, nil
 	}
 
 	props, _ := schema["properties"].(map[string]any)
@@ -89,7 +94,15 @@ func prepareToolArgsForValidation(schema map[string]any, args map[string]any) (m
 	}
 
 	for _, cand := range candidates {
-		for _, parsed := range parseJSONObjectCandidates(cand.payload) {
+		parsedCandidates := parseJSONObjectCandidates(cand.payload)
+		if len(parsedCandidates) > 1 && disallowConcatenatedJSONAutoRepair(toolName) {
+			return args, false, fmt.Errorf(
+				"multiple concatenated JSON objects detected for tool %q; send exactly one tool payload per call",
+				toolName,
+			)
+		}
+
+		for _, parsed := range parsedCandidates {
 			merged := make(map[string]any, len(parsed)+len(args))
 			for k, v := range parsed {
 				merged[k] = v
@@ -107,11 +120,20 @@ func prepareToolArgsForValidation(schema map[string]any, args map[string]any) (m
 			if len(missingRequiredFields(schema, merged)) > 0 {
 				continue
 			}
-			return merged, true
+			return merged, true, nil
 		}
 	}
 
-	return args, false
+	return args, false, nil
+}
+
+func disallowConcatenatedJSONAutoRepair(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "exec":
+		return true
+	default:
+		return false
+	}
 }
 
 // checkRequired verifies that every field listed in schema["required"] is present in args.

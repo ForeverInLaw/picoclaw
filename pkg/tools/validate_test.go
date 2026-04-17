@@ -367,7 +367,10 @@ func TestPrepareToolArgsForValidation_UnwrapsNestedJSONWriteFilePayload(t *testi
 		"overwrite": true,
 	}
 
-	got, repaired := prepareToolArgsForValidation(schema, args)
+	got, repaired, err := prepareToolArgsForValidation("write_file", schema, args)
+	if err != nil {
+		t.Fatalf("prepareToolArgsForValidation() error = %v", err)
+	}
 	if !repaired {
 		t.Fatal("expected args to be repaired")
 	}
@@ -400,7 +403,10 @@ func TestPrepareToolArgsForValidation_DoesNotRewriteValidJSONStringFileContent(t
 		"content": "{\"feature\":true}",
 	}
 
-	got, repaired := prepareToolArgsForValidation(schema, args)
+	got, repaired, err := prepareToolArgsForValidation("write_file", schema, args)
+	if err != nil {
+		t.Fatalf("prepareToolArgsForValidation() error = %v", err)
+	}
 	if repaired {
 		t.Fatal("did not expect args to be repaired when required fields already exist")
 	}
@@ -423,7 +429,10 @@ func TestPrepareToolArgsForValidation_UnwrapsRawFallbackPayload(t *testing.T) {
 		"raw": "{\"path\":\"/tmp/from-raw.txt\",\"content\":\"from raw\"}",
 	}
 
-	got, repaired := prepareToolArgsForValidation(schema, args)
+	got, repaired, err := prepareToolArgsForValidation("write_file", schema, args)
+	if err != nil {
+		t.Fatalf("prepareToolArgsForValidation() error = %v", err)
+	}
 	if !repaired {
 		t.Fatal("expected raw payload to be repaired")
 	}
@@ -447,7 +456,10 @@ func TestPrepareToolArgsForValidation_UnwrapsConcatenatedRawJSONObjectPayload(t 
 		"raw": "{\"command\":\"mkdir -p /tmp/skills/caveman\"}{\"path\":\"/tmp/skills/caveman/SKILL.md\",\"content\":\"skill body\",\"overwrite\":true}",
 	}
 
-	got, repaired := prepareToolArgsForValidation(schema, args)
+	got, repaired, err := prepareToolArgsForValidation("write_file", schema, args)
+	if err != nil {
+		t.Fatalf("prepareToolArgsForValidation() error = %v", err)
+	}
 	if !repaired {
 		t.Fatal("expected concatenated raw payload to be repaired")
 	}
@@ -459,6 +471,35 @@ func TestPrepareToolArgsForValidation_UnwrapsConcatenatedRawJSONObjectPayload(t 
 	}
 	if got["overwrite"] != true {
 		t.Fatalf("overwrite = %#v, want true", got["overwrite"])
+	}
+}
+
+func TestPrepareToolArgsForValidation_RejectsConcatenatedRawJSONObjectPayloadForExec(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"command":     map[string]any{"type": "string"},
+			"working_dir": map[string]any{"type": "string"},
+		},
+		"required": []string{"command"},
+	}
+
+	args := map[string]any{
+		"raw": "{\"path\":\"/home/andy/.picoclaw/workspace/final_delivery.mp4\"}{\"command\":\"rm /home/andy/.picoclaw/workspace/final_delivery.mp4\"}",
+	}
+
+	got, repaired, err := prepareToolArgsForValidation("exec", schema, args)
+	if err == nil {
+		t.Fatal("expected concatenated exec payload to be rejected")
+	}
+	if repaired {
+		t.Fatal("did not expect exec args to be repaired")
+	}
+	if got["raw"] == nil {
+		t.Fatalf("expected original args to be returned, got %#v", got)
+	}
+	if !strings.Contains(err.Error(), "multiple concatenated JSON objects") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

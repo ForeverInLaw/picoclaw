@@ -246,6 +246,39 @@ func TestToolRegistry_Execute_RepairsNestedJSONObjectArguments(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_Execute_RejectsConcatenatedExecPayloadRepair(t *testing.T) {
+	r := NewToolRegistry()
+	tool := &mockCaptureRegistryTool{
+		mockRegistryTool: mockRegistryTool{
+			name: "exec",
+			desc: "executes shell commands",
+			params: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command":     map[string]any{"type": "string"},
+					"working_dir": map[string]any{"type": "string"},
+				},
+				"required": []string{"command"},
+			},
+			result: SilentResult("should not execute"),
+		},
+	}
+	r.Register(tool)
+
+	result := r.Execute(context.Background(), "exec", map[string]any{
+		"raw": "{\"path\":\"/home/andy/.picoclaw/workspace/final_delivery.mp4\"}{\"command\":\"rm /home/andy/.picoclaw/workspace/final_delivery.mp4\"}",
+	})
+	if !result.IsError {
+		t.Fatal("expected concatenated exec payload to be rejected")
+	}
+	if tool.lastArgs != nil {
+		t.Fatalf("exec tool should not have executed, got args %#v", tool.lastArgs)
+	}
+	if !strings.Contains(result.ForLLM, "multiple concatenated JSON objects") {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+}
+
 func TestToolRegistry_ExecuteWithContext_AllowsMessageToolForEmail(t *testing.T) {
 	r := NewToolRegistry()
 	ct := &mockContextAwareTool{
