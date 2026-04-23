@@ -42,10 +42,10 @@ func TestBuildTelegramInlineQueryResult_UsesConfiguredPlaceholderAndButton(t *te
 	if !ok {
 		t.Fatalf("content type = %T, want *telego.InputTextMessageContent", article.InputMessageContent)
 	}
-	if content.MessageText != "<blockquote>inline query text</blockquote>\n\nДумаю..." {
+	if content.MessageText != "> inline query text\n\nДумаю..." {
 		t.Fatalf("content.MessageText = %q", content.MessageText)
 	}
-	if content.ParseMode != telego.ModeHTML {
+	if content.ParseMode != telego.ModeMarkdownV2 {
 		t.Fatalf("content.ParseMode = %q", content.ParseMode)
 	}
 	if article.ReplyMarkup == nil || len(article.ReplyMarkup.InlineKeyboard) != 1 || len(article.ReplyMarkup.InlineKeyboard[0]) != 1 {
@@ -56,9 +56,9 @@ func TestBuildTelegramInlineQueryResult_UsesConfiguredPlaceholderAndButton(t *te
 	}
 }
 
-func TestRenderTelegramInlineInitialContent_UsesNativeBlockquoteInHTMLMode(t *testing.T) {
-	got := renderTelegramInlineInitialContent("hello\nworld", "Думаю...", false)
-	want := "<blockquote>hello<br>world</blockquote>\n\nДумаю..."
+func TestRenderTelegramInlineInitialContent_UsesMarkdownV2QuoteBlock(t *testing.T) {
+	got := renderTelegramInlineInitialContent("hello\nworld", "Думаю...")
+	want := "> hello\n> world\n\nДумаю..."
 	if got != want {
 		t.Fatalf("renderTelegramInlineInitialContent() = %q, want %q", got, want)
 	}

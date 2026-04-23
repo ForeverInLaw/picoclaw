@@ -53,7 +53,7 @@ func (c *TelegramChannel) telegramSenderInfo(user *telego.User) bus.SenderInfo {
 	}
 }
 
-func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query string, useMarkdownV2 bool) telego.InlineQueryResult {
+func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query string, _ bool) telego.InlineQueryResult {
 	title := strings.TrimSpace(cfg.ResultTitle)
 	if title == "" {
 		title = "Сгенерировать ответ"
@@ -79,8 +79,8 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 		ID:    "generate",
 		Title: title,
 		InputMessageContent: &telego.InputTextMessageContent{
-			MessageText: renderTelegramInlineInitialContent(query, placeholder, useMarkdownV2),
-			ParseMode:   telegramParseMode(useMarkdownV2),
+			MessageText: renderTelegramInlineInitialContent(query, placeholder),
+			ParseMode:   telego.ModeMarkdownV2,
 		},
 		ReplyMarkup: &telego.InlineKeyboardMarkup{
 			InlineKeyboard: [][]telego.InlineKeyboardButton{{
@@ -174,21 +174,8 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 	return c.PublishInbound(ctx, buildTelegramInlineInboundMessage(result, sender))
 }
 
-func renderTelegramInlineInitialContent(query, placeholder string, useMarkdownV2 bool) string {
-	if useMarkdownV2 {
-		return utils.FormatQuotedMessage(query, placeholder)
-	}
-
-	escapedQuery := escapeHTML(strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(query, "\r\n", "\n"), "\r", "\n")))
-	escapedQuery = strings.ReplaceAll(escapedQuery, "\n", "<br>")
-	escapedPlaceholder := escapeHTML(strings.TrimSpace(placeholder))
-	if escapedQuery == "" {
-		return escapedPlaceholder
-	}
-	if escapedPlaceholder == "" {
-		return "<blockquote>" + escapedQuery + "</blockquote>"
-	}
-	return "<blockquote>" + escapedQuery + "</blockquote>\n\n" + escapedPlaceholder
+func renderTelegramInlineInitialContent(query, placeholder string) string {
+	return utils.FormatQuotedMessage(query, placeholder)
 }
 
 func (c *TelegramChannel) handleInlineCallbackQuery(ctx *th.Context, query telego.CallbackQuery) error {
