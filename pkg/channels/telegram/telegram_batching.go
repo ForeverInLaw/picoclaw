@@ -127,8 +127,8 @@ func (c *TelegramChannel) buildInboundCandidate(
 			triggerReason = "observe_only"
 		}
 	}
-	replyQuotedBody, replyQuotedMedia := c.buildQuotedReplyPayload(ctx, message, storeMedia)
-	content = prependQuotedTelegramReply(message, replyQuotedBody, formatForwardedTelegramMessage(message, content))
+	_, replyQuotedMedia := c.buildQuotedReplyPayload(ctx, message, storeMedia)
+	content = c.prependTelegramQuotedReply(formatForwardedTelegramMessage(message, content), message.ReplyToMessage)
 	mediaPaths = mergeQuotedTelegramReplyMedia(replyQuotedMedia, mediaPaths)
 
 	compositeChatID := fmt.Sprintf("%d", chatID)
@@ -356,6 +356,10 @@ func (c *TelegramChannel) enqueueTelegramBatch(
 ) {
 	c.batchMu.Lock()
 	defer c.batchMu.Unlock()
+
+	if c.batches == nil {
+		c.batches = make(map[string]*telegramInboundBatch)
+	}
 
 	existing := c.batches[candidate.batchKey]
 	if existing != nil && !telegramBatchCompatible(existing, candidate) {

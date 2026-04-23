@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/commands"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/sherlock"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -55,6 +57,7 @@ type TelegramChannel struct {
 
 	registerFunc     func(context.Context, []commands.Definition) error
 	commandRegCancel context.CancelFunc
+	sherlock         *sherlock.Store
 }
 
 func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChannel, error) {
@@ -100,12 +103,18 @@ func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChann
 		channels.WithReasoningChannelID(telegramCfg.ReasoningChannelID),
 	)
 
+	sherlockStore, err := sherlock.Open(filepath.Join(cfg.WorkspacePath(), "state", "sherlock.sqlite"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize sherlock store: %w", err)
+	}
+
 	return &TelegramChannel{
 		BaseChannel: base,
 		bot:         bot,
 		config:      cfg,
 		chatIDs:     make(map[string]int64),
 		batches:     make(map[string]*telegramInboundBatch),
+		sherlock:    sherlockStore,
 	}, nil
 }
 
@@ -190,6 +199,9 @@ func (c *TelegramChannel) Stop(ctx context.Context) error {
 	if c.commandRegCancel != nil {
 		c.commandRegCancel()
 	}
+	if c.sherlock != nil {
+		_ = c.sherlock.Close()
+	}
 
 	return nil
 }
@@ -231,7 +243,18 @@ func prependQuotedTelegramReply(message *telego.Message, quotedBody, content str
 	}
 
 	author := telegramMessageAuthor(message.ReplyToMessage)
-	return fmt.Sprintf("[quoted message from %s]: %s\n\n%s", author, quotedBody, content)
+	role := "unknown"
+	if reply := message.ReplyToMessage; reply != nil && reply.From != nil {
+		if !reply.From.IsBot {
+			role = "user"
+		} else {
+			role = "bot"
+		}
+	}
+	if strings.TrimSpace(content) == "" {
+		return fmt.Sprintf("[quoted %s message from %s]: %s", role, author, quotedBody)
+	}
+	return fmt.Sprintf("[quoted %s message from %s]: %s\n\n%s", role, author, quotedBody, content)
 }
 
 func telegramMessageText(message *telego.Message) string {
@@ -676,6 +699,10 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 }
 
 func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Message) error {
+	if handled, err := c.tryHandleSherlockCommand(ctx, message); handled {
+		return err
+	}
+	c.observeSherlockMessage(ctx, message)
 	candidate, err := c.buildInboundCandidate(ctx, message)
 	if err != nil {
 		return err

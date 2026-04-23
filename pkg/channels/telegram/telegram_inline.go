@@ -192,6 +192,9 @@ func renderTelegramInlineInitialContent(query, placeholder string, useMarkdownV2
 }
 
 func (c *TelegramChannel) handleInlineCallbackQuery(ctx *th.Context, query telego.CallbackQuery) error {
+	if handled := strings.HasPrefix(query.Data, sherlockCallbackPrefix+":"); handled {
+		return c.handleSherlockCallbackQuery(ctx, query)
+	}
 	if query.Data != telegramInlineCallbackData {
 		return nil
 	}
