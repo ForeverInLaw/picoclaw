@@ -11,6 +11,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/toolerrors"
 )
 
 type ToolEntry struct {
@@ -24,6 +25,7 @@ type ToolRegistry struct {
 	mu         sync.RWMutex
 	version    atomic.Uint64 // incremented on Register/RegisterHidden for cache invalidation
 	mediaStore media.MediaStore
+	errorLog   *toolerrors.Log
 }
 
 type mediaStoreAware interface {
@@ -93,6 +95,13 @@ func (r *ToolRegistry) SetMediaStore(store media.MediaStore) {
 			aware.SetMediaStore(store)
 		}
 	}
+}
+
+// SetErrorLog attaches a capped on-disk log for tool execution failures.
+func (r *ToolRegistry) SetErrorLog(log *toolerrors.Log) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.errorLog = log
 }
 
 // Close releases resources held by registered tools that expose Close().
@@ -268,7 +277,9 @@ func (r *ToolRegistry) ExecuteWithContext(
 			map[string]any{
 				"tool": name,
 			})
-		return ErrorResult(fmt.Sprintf("tool %q not found", name)).WithError(fmt.Errorf("tool not found"))
+		result := ErrorResult(fmt.Sprintf("tool %q not found", name)).WithError(fmt.Errorf("tool not found"))
+		r.recordError(name, args, channel, chatID, "lookup", result.ForLLM, 0)
+		return result
 	}
 
 	// Validate arguments against the tool's declared schema.
@@ -276,8 +287,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 	if repairedArgs, repaired, repairErr := prepareToolArgsForValidation(name, schema, args); repairErr != nil {
 		logger.WarnCF("tool", "Tool argument repair rejected malformed payload",
 			map[string]any{"tool": name, "error": repairErr.Error(), "args": args})
-		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, repairErr)).
+		result := ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, repairErr)).
 			WithError(fmt.Errorf("argument repair failed: %w", repairErr))
+		r.recordError(name, args, channel, chatID, "repair", result.ForLLM, 0)
+		return result
 	} else if repaired {
 		logger.InfoCF("tool", "Repaired malformed tool arguments before validation",
 			map[string]any{"tool": name, "before": args, "after": repairedArgs})
@@ -286,8 +299,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 	if err := validateToolArgs(schema, args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
-		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
+		result := ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
 			WithError(fmt.Errorf("argument validation failed: %w", err))
+		r.recordError(name, args, channel, chatID, "validation", result.ForLLM, 0)
+		return result
 	}
 
 	// Inject channel/chatID into ctx so tools read them via ToolChannel(ctx)/ToolChatID(ctx).
@@ -305,6 +320,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 				"channel": channel,
 				"chat_id": chatID,
 			})
+		r.recordError(name, args, channel, chatID, "policy", result.ForLLM, 0)
 		return result
 	}
 
@@ -367,6 +383,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 				"duration": duration.Milliseconds(),
 				"error":    result.ForLLM,
 			})
+		r.recordError(name, args, channel, chatID, "execute", result.ForLLM, duration.Milliseconds())
 	} else if result.Async {
 		logger.InfoCF("tool", "Tool started (async)",
 			map[string]any{
@@ -383,6 +400,30 @@ func (r *ToolRegistry) ExecuteWithContext(
 	}
 
 	return result
+}
+
+func (r *ToolRegistry) recordError(name string, args map[string]any, channel, chatID, stage, message string, durationMS int64) {
+	r.mu.RLock()
+	log := r.errorLog
+	r.mu.RUnlock()
+	if log == nil {
+		return
+	}
+	if err := log.Record(toolerrors.Entry{
+		Tool:       name,
+		Stage:      stage,
+		Channel:    channel,
+		ChatID:     chatID,
+		DurationMS: durationMS,
+		Error:      message,
+		Args:       args,
+	}); err != nil {
+		logger.WarnCF("tool", "Failed to persist tool error log", map[string]any{
+			"tool":  name,
+			"stage": stage,
+			"error": err.Error(),
+		})
+	}
 }
 
 // sortedToolNames returns tool names in sorted order for deterministic iteration.
@@ -487,6 +528,7 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 	clone := &ToolRegistry{
 		tools:      make(map[string]*ToolEntry, len(r.tools)),
 		mediaStore: r.mediaStore,
+		errorLog:   r.errorLog,
 	}
 	for name, entry := range r.tools {
 		clone.tools[name] = &ToolEntry{

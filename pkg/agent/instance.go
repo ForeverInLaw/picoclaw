@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/toolerrors"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -83,6 +84,7 @@ func NewAgentInstance(
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 
 	toolsRegistry := tools.NewToolRegistry()
+	toolsRegistry.SetErrorLog(toolerrors.New(filepath.Join(workspace, "logs", "tool_call_errors.jsonl"), toolerrors.DefaultLimit))
 
 	if cfg.Tools.IsToolEnabled("read_file") {
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
