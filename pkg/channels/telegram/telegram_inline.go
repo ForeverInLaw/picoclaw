@@ -94,10 +94,10 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 func normalizeTelegramInlinePlaceholder(placeholder string) string {
 	placeholder = strings.TrimSpace(placeholder)
 	if placeholder == "" {
-		return "💭 Думаю..."
+		return "Думаю... 💭"
 	}
 	if placeholder == "Думаю..." || placeholder == "Думаю…" {
-		return "💭 " + placeholder
+		return placeholder + " 💭"
 	}
 	return placeholder
 }
