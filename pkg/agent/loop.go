@@ -114,6 +114,8 @@ const (
 	metadataKeyParentPeerID   = "parent_peer_id"
 	requeueYieldDelay         = 10 * time.Millisecond
 	emptyResponseRetryLimit   = 5
+	llmCallRetryLimit         = 20
+	llmCallRetryBackoff       = 3 * time.Second
 )
 
 const emptyResponseRetryInstruction = "Your previous response was empty. Retry the same request now and return a non-empty answer, or valid tool calls if tools are needed. Do not return an empty message."
@@ -2142,7 +2144,7 @@ turnLoop:
 
 		var response *providers.LLMResponse
 		var err error
-		maxRetries := 2
+		maxRetries := llmCallRetryLimit
 		for retry := 0; retry <= maxRetries; retry++ {
 			response, err = callLLM(callMessages, providerToolDefs)
 			if err == nil {
@@ -2156,7 +2158,7 @@ turnLoop:
 			isTimeoutError, isContextError, isTransientServerError := classifyLLMRetryableError(err)
 
 			if isTimeoutError && retry < maxRetries {
-				backoff := time.Duration(retry+1) * 5 * time.Second
+				backoff := llmCallRetryBackoff
 				al.emitEvent(
 					EventKindLLMRetry,
 					ts.eventMeta("runTurn", "turn.llm.retry"),
@@ -2240,7 +2242,7 @@ turnLoop:
 			}
 
 			if isTransientServerError && retry < maxRetries {
-				backoff := time.Duration(retry+1) * 3 * time.Second
+				backoff := llmCallRetryBackoff
 				al.emitEvent(
 					EventKindLLMRetry,
 					ts.eventMeta("runTurn", "turn.llm.retry"),
