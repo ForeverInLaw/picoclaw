@@ -71,6 +71,18 @@ func TestVisibleStreamFilter_WaitsForClosingThinkBeforeStreaming(t *testing.T) {
 	}
 }
 
+func TestVisibleStreamFilter_WaitsForClosingThinkWithDeltaChunks(t *testing.T) {
+	filter := &visibleStreamFilter{}
+	for _, chunk := range []string{"<think>", "hidden content longer than opening tag", "</think>"} {
+		if visible, ok := filter.Update(chunk); ok || visible != "" {
+			t.Fatalf("Update(%q) = %q, %v; want no visible stream", chunk, visible, ok)
+		}
+	}
+	visible, ok := filter.Update("Visible answer")
+	if !ok || visible != "Visible answer" {
+		t.Fatalf("visible = %q, ok = %v; want Visible answer, true", visible, ok)
+	}
+}
 func TestVisibleStreamFilter_StreamsPlainTextImmediately(t *testing.T) {
 	filter := &visibleStreamFilter{}
 	visible, ok := filter.Update("Visible")

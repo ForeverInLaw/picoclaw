@@ -74,6 +74,39 @@ func (s *inlineRecordingStreamer) Finalize(ctx context.Context, content string) 
 
 func (s *inlineRecordingStreamer) Cancel(ctx context.Context) {}
 
+type thinkingStreamProvider struct{}
+
+func (p *thinkingStreamProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{Content: "Visible answer"}, nil
+}
+
+func (p *thinkingStreamProvider) ChatStream(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+	onUpdate func(content string),
+) (*providers.LLMResponse, error) {
+	for _, snapshot := range []string{
+		"<think>",
+		"<think>hidden",
+		"<think>hidden</think>",
+		"<think>hidden</think>Visible answer",
+	} {
+		onUpdate(snapshot)
+	}
+	return &providers.LLMResponse{Content: "<think>hidden</think>Visible answer"}, nil
+}
+
+func (p *thinkingStreamProvider) GetDefaultModel() string { return "thinking-stream" }
+
 type recordingProvider struct {
 	lastMessages []providers.Message
 }
@@ -283,6 +316,52 @@ func TestProcessMessage_IncludesCurrentSenderAndChatInDynamicContext(t *testing.
 	}
 }
 
+func TestProcessMessage_TelegramStreamWaitsForThinkClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &thinkingStreamProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	defer al.Close()
+
+	chManager, err := channels.NewManager(&config.Config{}, msgBus, nil)
+	if err != nil {
+		t.Fatalf("Failed to create channel manager: %v", err)
+	}
+	telegramChannel := &inlineRecordingChannel{}
+	chManager.RegisterChannel("telegram", telegramChannel)
+	chManager.RecordPlaceholder("telegram", "12345", "placeholder-1")
+	al.SetChannelManager(chManager)
+
+	response, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel: "telegram",
+		ChatID:  "12345",
+		Content: "hello",
+	})
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "Visible answer" {
+		t.Fatalf("response = %q, want Visible answer", response)
+	}
+	wantEdits := []string{"12345|placeholder-1|Visible answer"}
+	if !slices.Equal(telegramChannel.edited, wantEdits) {
+		t.Fatalf("placeholder edits = %#v, want %#v", telegramChannel.edited, wantEdits)
+	}
+	if len(telegramChannel.streamUpdates) != 0 || len(telegramChannel.streamFinal) != 0 {
+		t.Fatalf("ordinary telegram should use placeholder updater, got stream updates=%#v final=%#v", telegramChannel.streamUpdates, telegramChannel.streamFinal)
+	}
+}
 func TestProcessMessage_InlineUsesStreamerEvenWithoutHistory(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -304,6 +383,7 @@ func TestProcessMessage_InlineUsesStreamerEvenWithoutHistory(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &streamingRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	defer al.Close()
 
 	chManager, err := channels.NewManager(&config.Config{}, msgBus, nil)
 	if err != nil {
