@@ -175,7 +175,31 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 }
 
 func renderTelegramInlineInitialContent(query, placeholder string) string {
-	return utils.FormatQuotedMessage(query, placeholder)
+	query = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(query, "\r\n", "\n"), "\r", "\n"))
+	placeholder = strings.TrimSpace(placeholder)
+
+	quotedLines := make([]string, 0)
+	if query != "" {
+		for _, line := range strings.Split(query, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				quotedLines = append(quotedLines, ">")
+				continue
+			}
+			quotedLines = append(quotedLines, "> "+escapeMarkdownV2(line))
+		}
+	}
+
+	quoted := strings.Join(quotedLines, "\n")
+	body := escapeMarkdownV2(placeholder)
+	switch {
+	case quoted == "":
+		return body
+	case body == "":
+		return quoted
+	default:
+		return quoted + "\n\n" + body
+	}
 }
 
 func (c *TelegramChannel) handleInlineCallbackQuery(ctx *th.Context, query telego.CallbackQuery) error {
