@@ -76,7 +76,7 @@ func DefaultConfig() *Config {
 				Inline: TelegramInlineConfig{
 					Enabled:          false,
 					ResultTitle:      "Сгенерировать ответ",
-					PlaceholderText:  "Думаю...",
+					PlaceholderText:  "💭 Думаю...",
 					ButtonLabel:      "📦",
 					CacheTimeSeconds: 0,
 					IsPersonal:       true,

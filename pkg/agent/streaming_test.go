@@ -53,6 +53,31 @@ func (f *fakeStreamingSink) Cancel(ctx context.Context) {
 	f.canceled++
 }
 
+func TestVisibleStreamFilter_WaitsForClosingThinkBeforeStreaming(t *testing.T) {
+	filter := &visibleStreamFilter{}
+	chunks := []string{
+		"<think>",
+		"<think>internal",
+		"<think>internal</think>",
+	}
+	for _, chunk := range chunks {
+		if visible, ok := filter.Update(chunk); ok || visible != "" {
+			t.Fatalf("Update(%q) = %q, %v; want no visible stream", chunk, visible, ok)
+		}
+	}
+	visible, ok := filter.Update("<think>internal</think>Visible answer")
+	if !ok || visible != "Visible answer" {
+		t.Fatalf("visible = %q, ok = %v; want Visible answer, true", visible, ok)
+	}
+}
+
+func TestVisibleStreamFilter_StreamsPlainTextImmediately(t *testing.T) {
+	filter := &visibleStreamFilter{}
+	visible, ok := filter.Update("Visible")
+	if !ok || visible != "Visible" {
+		t.Fatalf("visible = %q, ok = %v; want Visible, true", visible, ok)
+	}
+}
 func TestClampStreamingPreview_TruncatesLongContent(t *testing.T) {
 	got := clampStreamingPreview(strings.Repeat("a", streamPreviewRuneLimit+50))
 	if !strings.HasSuffix(got, "\n\n...") {

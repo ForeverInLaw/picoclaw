@@ -61,7 +61,7 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 
 	placeholder := strings.TrimSpace(cfg.PlaceholderText)
 	if placeholder == "" {
-		placeholder = "Думаю..."
+		placeholder = "💭 Думаю..."
 	}
 
 	buttonLabel := strings.TrimSpace(cfg.ButtonLabel)

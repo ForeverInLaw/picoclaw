@@ -6,10 +6,12 @@ import (
 )
 
 var (
-	hiddenThinkingBlockPattern = regexp.MustCompile(`(?is)<(?:think|thought|thinking)\b[^>]*>.*?</(?:think|thought|thinking)\s*>`)
-	hiddenThinkingOpenTail     = regexp.MustCompile(`(?is)<(?:think|thought|thinking)\b[^>]*>.*$`)
-	hiddenThinkingTagPattern   = regexp.MustCompile(`(?is)</?(?:think|thought|thinking)\b[^>]*>`)
-	excessBlankLinesPattern    = regexp.MustCompile(`\n{3,}`)
+	hiddenThinkingBlockPattern        = regexp.MustCompile(`(?is)<(?:think|thought|thinking)\b[^>]*>.*?</(?:think|thought|thinking)\s*>`)
+	hiddenThinkingOpenTail            = regexp.MustCompile(`(?is)<(?:think|thought|thinking)\b[^>]*>.*$`)
+	hiddenThinkingTagPattern          = regexp.MustCompile(`(?is)</?(?:think|thought|thinking)\b[^>]*>`)
+	hiddenThinkingOpenTagPattern      = regexp.MustCompile(`(?is)<(?:think|thought|thinking)\b[^>]*>`)
+	hiddenThinkingClosedPrefixPattern = regexp.MustCompile(`(?is)^\s*<(?:think|thought|thinking)\b[^>]*>.*?</(?:think|thought|thinking)\s*>`)
+	excessBlankLinesPattern           = regexp.MustCompile(`\n{3,}`)
 )
 
 // sanitizeVisibleAssistantContent removes XML-like hidden thinking blocks that

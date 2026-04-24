@@ -2077,6 +2077,7 @@ turnLoop:
 			callProvider := func(ctx context.Context, model string) (*providers.LLMResponse, error) {
 				if streamingEnabled && (streamer != nil || streamUpdater != nil) {
 					var lastSnapshot string
+					streamFilter := &visibleStreamFilter{}
 					response, err := streamProvider.ChatStream(
 						ctx,
 						messagesForCall,
@@ -2096,7 +2097,10 @@ turnLoop:
 									ContentDeltaLen: contentDeltaLen,
 								},
 							)
-							offerStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, accumulated))
+							if visibleSnapshot, ok := streamFilter.Update(accumulated); ok {
+								content := formatInlineResponse(ts.opts.ResponseQuote, visibleSnapshot)
+								offerStreamingContent(ctx, streamer, streamUpdater, content)
+							}
 						},
 					)
 					if err != nil {
@@ -2107,7 +2111,7 @@ turnLoop:
 						cancelStreamingContent(ctx, streamer)
 					}
 					if len(response.ToolCalls) == 0 && response.Content != "" {
-						if err := finalizeStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, response.Content)); err != nil {
+						if err := finalizeStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, streamFilter.Final(response.Content))); err != nil {
 							logger.WarnCF("agent", "Stream finalize failed", map[string]any{
 								"error": err.Error(),
 							})
