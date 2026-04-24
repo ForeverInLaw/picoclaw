@@ -59,10 +59,7 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 		title = "Сгенерировать ответ"
 	}
 
-	placeholder := strings.TrimSpace(cfg.PlaceholderText)
-	if placeholder == "" {
-		placeholder = "💭 Думаю..."
-	}
+	placeholder := normalizeTelegramInlinePlaceholder(cfg.PlaceholderText)
 
 	buttonLabel := strings.TrimSpace(cfg.ButtonLabel)
 	if buttonLabel == "" {
@@ -94,6 +91,16 @@ func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query strin
 	}
 }
 
+func normalizeTelegramInlinePlaceholder(placeholder string) string {
+	placeholder = strings.TrimSpace(placeholder)
+	if placeholder == "" {
+		return "💭 Думаю..."
+	}
+	if placeholder == "Думаю..." || placeholder == "Думаю…" {
+		return "💭 " + placeholder
+	}
+	return placeholder
+}
 func buildTelegramInlineInboundMessage(result telego.ChosenInlineResult, sender bus.SenderInfo) bus.InboundMessage {
 	return bus.InboundMessage{
 		Channel:  "telegram",

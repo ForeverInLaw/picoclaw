@@ -56,6 +56,13 @@ func TestBuildTelegramInlineQueryResult_UsesConfiguredPlaceholderAndButton(t *te
 	}
 }
 
+func TestNormalizeTelegramInlinePlaceholder_AddsCloudForLegacyDefault(t *testing.T) {
+	got := normalizeTelegramInlinePlaceholder("Думаю...")
+	want := "💭 Думаю..."
+	if got != want {
+		t.Fatalf("normalizeTelegramInlinePlaceholder() = %q, want %q", got, want)
+	}
+}
 func TestRenderTelegramInlineInitialContent_UsesMarkdownV2QuoteBlock(t *testing.T) {
 	got := renderTelegramInlineInitialContent("hello\nworld", "Thinking...")
 	want := "> hello\n> world\n\nThinking\\.\\.\\."
