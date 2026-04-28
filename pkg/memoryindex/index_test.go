@@ -297,3 +297,23 @@ func TestIndex_Open_RepairsLegacySchema(t *testing.T) {
 		t.Fatalf("legacy row count = %d, want 1", legacyCount)
 	}
 }
+
+func TestIndex_SessionClearMarkerRoundTrip(t *testing.T) {
+	idx, err := Open(filepath.Join(t.TempDir(), "memory", "index.sqlite"), Config{})
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer idx.Close()
+
+	clearedAt := time.Now().UTC().Truncate(time.Millisecond)
+	if err := idx.MarkSessionCleared(context.Background(), "agent:main:telegram:direct:1", clearedAt); err != nil {
+		t.Fatalf("MarkSessionCleared() error: %v", err)
+	}
+	got, err := idx.SessionClearedAt(context.Background(), "agent:main:telegram:direct:1")
+	if err != nil {
+		t.Fatalf("SessionClearedAt() error: %v", err)
+	}
+	if !got.Equal(clearedAt) {
+		t.Fatalf("SessionClearedAt() = %s, want %s", got, clearedAt)
+	}
+}

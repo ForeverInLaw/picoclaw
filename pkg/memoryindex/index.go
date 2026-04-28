@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -314,6 +315,47 @@ func (i *Index) IsBootstrapped(ctx context.Context) (bool, error) {
 
 func (i *Index) MarkBootstrapped(ctx context.Context) error {
 	return i.setMeta(ctx, "bootstrapped_sessions", "1")
+}
+
+func sessionClearedMetaKey(sessionKey string) string {
+	return "session_cleared_at_ms:" + strings.TrimSpace(sessionKey)
+}
+
+// MarkSessionCleared records a durable cutoff for automatic memory retrieval.
+// Search callers can use SessionClearedAt as a lower bound so /clear behaves
+// like a fresh dialog instead of rehydrating old excerpts through chat memory.
+func (i *Index) MarkSessionCleared(ctx context.Context, sessionKey string, at time.Time) error {
+	if i == nil || i.db == nil {
+		return nil
+	}
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return nil
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return i.setMeta(ctx, sessionClearedMetaKey(sessionKey), fmt.Sprintf("%d", at.UTC().UnixMilli()))
+}
+
+// SessionClearedAt returns the durable /clear cutoff for a session, if present.
+func (i *Index) SessionClearedAt(ctx context.Context, sessionKey string) (time.Time, error) {
+	if i == nil || i.db == nil {
+		return time.Time{}, nil
+	}
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return time.Time{}, nil
+	}
+	value, err := i.metaString(ctx, sessionClearedMetaKey(sessionKey))
+	if err != nil || strings.TrimSpace(value) == "" {
+		return time.Time{}, err
+	}
+	ms, parseErr := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if parseErr != nil {
+		return time.Time{}, fmt.Errorf("memoryindex: parse session clear marker: %w", parseErr)
+	}
+	return time.UnixMilli(ms).UTC(), nil
 }
 
 func (i *Index) metaBool(ctx context.Context, key string) (bool, error) {

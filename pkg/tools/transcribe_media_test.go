@@ -92,3 +92,31 @@ func TestTranscribeMediaTool_NoTranscriber(t *testing.T) {
 		t.Fatal("expected error when transcriber is missing")
 	}
 }
+
+func TestTranscribeMediaTool_RejectsInventedTelegramMediaRef(t *testing.T) {
+	tool := NewTranscribeMediaTool(t.TempDir(), true, media.NewFileMediaStore(), &fakeTranscriber{
+		resp: &asr.TranscriptionResponse{Text: "should not run"},
+	})
+
+	result := tool.Execute(context.Background(), map[string]any{"source": "media://telegram-666-file-id"})
+	if !result.IsError {
+		t.Fatal("expected invented telegram media ref to be rejected")
+	}
+	if !strings.Contains(result.ForLLM, "do not invent Telegram-derived") {
+		t.Fatalf("expected actionable error, got %q", result.ForLLM)
+	}
+}
+
+func TestTranscribeMediaTool_UnknownMediaRefExplainsTranscriptTags(t *testing.T) {
+	tool := NewTranscribeMediaTool(t.TempDir(), true, media.NewFileMediaStore(), &fakeTranscriber{
+		resp: &asr.TranscriptionResponse{Text: "should not run"},
+	})
+
+	result := tool.Execute(context.Background(), map[string]any{"source": "media://missing"})
+	if !result.IsError {
+		t.Fatal("expected unknown media ref to fail")
+	}
+	if !strings.Contains(result.ForLLM, "[voice: ...]") {
+		t.Fatalf("expected transcript tag guidance, got %q", result.ForLLM)
+	}
+}

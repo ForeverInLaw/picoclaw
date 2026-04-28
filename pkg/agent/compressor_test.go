@@ -2,12 +2,84 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
+
+type summaryRetryProvider struct {
+	failures int
+	calls    int
+	err      error
+	content  string
+}
+
+func (p *summaryRetryProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.calls++
+	if p.calls <= p.failures {
+		if p.err != nil {
+			return nil, p.err
+		}
+		return &providers.LLMResponse{Content: ""}, nil
+	}
+	return &providers.LLMResponse{Content: p.content}, nil
+}
+
+func (p *summaryRetryProvider) GetDefaultModel() string { return "summary-test-model" }
+
+func withFastSummaryRetries(t *testing.T) {
+	t.Helper()
+	old := summaryLLMRetryInterval
+	summaryLLMRetryInterval = 0
+	t.Cleanup(func() { summaryLLMRetryInterval = old })
+}
+
+func TestSummarizeWithRetryRecoversAfterProviderErrors(t *testing.T) {
+	withFastSummaryRetries(t)
+	cfg := testConfig(t)
+	provider := &summaryRetryProvider{
+		failures: 2,
+		err:      errors.New("temporary provider timeout"),
+		content:  "recovered summary",
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(al.Close)
+	agent := al.registry.GetDefaultAgent()
+
+	got := al.summarizeWithRetry(context.Background(), agent, "summarize this", 256)
+	if got != "recovered summary" {
+		t.Fatalf("summary = %q, want recovered summary", got)
+	}
+	if provider.calls != 3 {
+		t.Fatalf("provider calls = %d, want 3", provider.calls)
+	}
+}
+
+func TestSummarizeWithRetryUsesThirtyAttemptsBeforeGivingUp(t *testing.T) {
+	withFastSummaryRetries(t)
+	cfg := testConfig(t)
+	provider := &summaryRetryProvider{failures: summaryLLMRetryLimit + 1}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(al.Close)
+	agent := al.registry.GetDefaultAgent()
+
+	got := al.summarizeWithRetry(context.Background(), agent, "summarize this", 256)
+	if got != "" {
+		t.Fatalf("summary = %q, want empty after exhausted retries", got)
+	}
+	if provider.calls != summaryLLMRetryLimit {
+		t.Fatalf("provider calls = %d, want %d", provider.calls, summaryLLMRetryLimit)
+	}
+}
 
 func TestCompressContext_StoresSummaryOnlyInSession(t *testing.T) {
 	cfg := testConfig(t)

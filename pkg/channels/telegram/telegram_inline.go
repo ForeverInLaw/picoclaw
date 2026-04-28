@@ -16,10 +16,12 @@ import (
 )
 
 const (
-	telegramInlineChatIDPrefix = "inline:"
-	telegramInlineCallbackData = "__picoclaw_inline_ack__"
-	telegramInlineMetadataKey  = "telegram_inline"
-	telegramInlineQueryKey     = "inline_query"
+	telegramInlineChatIDPrefix        = "inline:"
+	telegramInlineCallbackData        = "__picoclaw_inline_ack__"
+	telegramInlineMetadataKey         = "telegram_inline"
+	telegramInlineQueryKey            = "inline_query"
+	telegramInlineQueryLimit          = 256
+	telegramInlineTruncationThreshold = telegramInlineQueryLimit - 16
 )
 
 func isTelegramInlineChatID(chatID string) bool {
@@ -102,12 +104,18 @@ func normalizeTelegramInlinePlaceholder(placeholder string) string {
 	return placeholder
 }
 func buildTelegramInlineInboundMessage(result telego.ChosenInlineResult, sender bus.SenderInfo) bus.InboundMessage {
+	query := strings.TrimSpace(result.Query)
+	content := query
+	if telegramInlineQueryMayBeTruncated(query) {
+		content += "\n\n[system note: Telegram inline queries are limited to 256 characters. This query is near that limit and may be truncated. Do not complete or infer missing text; if the task needs the full source, ask the user to resend it as a normal message, reply, or file.]"
+	}
+
 	return bus.InboundMessage{
 		Channel:  "telegram",
 		SenderID: sender.CanonicalID,
 		Sender:   sender,
 		ChatID:   telegramInlineChatID(result.InlineMessageID),
-		Content:  strings.TrimSpace(result.Query),
+		Content:  content,
 		Peer: bus.Peer{
 			Kind: "direct",
 			ID:   sender.CanonicalID,
@@ -115,9 +123,13 @@ func buildTelegramInlineInboundMessage(result telego.ChosenInlineResult, sender 
 		MessageID: result.ResultID,
 		Metadata: map[string]string{
 			telegramInlineMetadataKey: "true",
-			telegramInlineQueryKey:    strings.TrimSpace(result.Query),
+			telegramInlineQueryKey:    query,
 		},
 	}
+}
+
+func telegramInlineQueryMayBeTruncated(query string) bool {
+	return len([]rune(strings.TrimSpace(query))) >= telegramInlineTruncationThreshold
 }
 
 func (c *TelegramChannel) handleInlineQuery(ctx *th.Context, query telego.InlineQuery) error {

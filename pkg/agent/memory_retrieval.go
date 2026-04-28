@@ -14,6 +14,7 @@ func lookupRetrievedMemories(
 	ctx context.Context,
 	agent *AgentInstance,
 	sessionKey, channel, chatID, peerKind, senderID, userMessage string,
+	since time.Time,
 ) string {
 	if agent == nil || agent.MemoryIndex == nil {
 		return ""
@@ -28,7 +29,7 @@ func lookupRetrievedMemories(
 		hits []memoryindex.Hit
 		err  error
 	)
-	if agent.ChatMemory != nil {
+	if agent.ChatMemory != nil && since.IsZero() {
 		hits, err = agent.ChatMemory.Search(ctx, chatmemory.SearchRequest{
 			RequesterID:    senderID,
 			CurrentChannel: channel,
@@ -43,6 +44,7 @@ func lookupRetrievedMemories(
 			SessionKey: sessionKey,
 			Channel:    channel,
 			ChatID:     chatID,
+			Since:      since,
 		})
 	}
 	if err != nil || len(hits) == 0 {

@@ -44,7 +44,7 @@ func (t *TranscribeMediaTool) Name() string {
 }
 
 func (t *TranscribeMediaTool) Description() string {
-	return "Transcribe audio media or voice files to text. Supports media:// refs and local file paths."
+	return "Transcribe real audio media or voice files to text. Supports only valid media:// refs supplied by the current message/media list, or allowed local file paths. Do not use this for already-transcribed text like [voice: ...], and never invent media://telegram-* refs."
 }
 
 func (t *TranscribeMediaTool) Parameters() map[string]any {
@@ -53,7 +53,7 @@ func (t *TranscribeMediaTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"source": map[string]any{
 				"type":        "string",
-				"description": "A media:// ref or local file path pointing to an audio file.",
+				"description": "A valid media:// ref from the current message/media list, or an allowed local file path pointing to an audio file. Do not pass [voice: ...] transcript text or invented media://telegram-* refs.",
 			},
 		},
 		"required": []string{"source"},
@@ -102,12 +102,15 @@ func (t *TranscribeMediaTool) Execute(ctx context.Context, args map[string]any) 
 
 func (t *TranscribeMediaTool) resolveSource(source string) (string, error) {
 	if strings.HasPrefix(source, "media://") {
+		if strings.HasPrefix(source, "media://telegram-") {
+			return "", fmt.Errorf("invalid media ref %q: do not invent Telegram-derived media:// refs; use only media:// refs attached to the current message/media list", source)
+		}
 		if t.mediaStore == nil {
 			return "", fmt.Errorf("media store is not available")
 		}
 		localPath, _, err := t.mediaStore.ResolveWithMeta(source)
 		if err != nil {
-			return "", fmt.Errorf("failed to resolve media ref: %w", err)
+			return "", fmt.Errorf("failed to resolve media ref %q: %w. Use only media:// refs attached to the current message/media list; if the text is already formatted as [voice: ...], treat it as the transcript and do not call transcribe_media", source, err)
 		}
 		return localPath, nil
 	}

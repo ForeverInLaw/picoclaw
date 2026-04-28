@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -267,7 +266,7 @@ func (al *AgentLoop) summarizeWithRetry(
 	prompt string,
 	maxTokens int,
 ) string {
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < summaryLLMRetryLimit; attempt++ {
 		resp, err := agent.Provider.Chat(ctx,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil,
@@ -280,8 +279,8 @@ func (al *AgentLoop) summarizeWithRetry(
 		if err == nil && resp != nil && strings.TrimSpace(resp.Content) != "" {
 			return strings.TrimSpace(resp.Content)
 		}
-		if attempt < 2 {
-			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		if attempt < summaryLLMRetryLimit-1 && !waitBeforeSummaryRetry(ctx) {
+			break
 		}
 	}
 	return ""

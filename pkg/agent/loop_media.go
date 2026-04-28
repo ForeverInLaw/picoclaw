@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/h2non/filetype"
@@ -40,6 +41,7 @@ func resolveMediaRefs(messages []providers.Message, store media.MediaStore, maxS
 
 		resolved := make([]string, 0, len(m.Media))
 		var pathTags []string
+		expiredRefs := 0
 
 		for _, ref := range m.Media {
 			if !strings.HasPrefix(ref, "media://") {
@@ -49,10 +51,11 @@ func resolveMediaRefs(messages []providers.Message, store media.MediaStore, maxS
 
 			localPath, meta, err := store.ResolveWithMeta(ref)
 			if err != nil {
-				logger.WarnCF("agent", "Failed to resolve media ref", map[string]any{
+				logger.DebugCF("agent", "Dropping expired media ref", map[string]any{
 					"ref":   ref,
 					"error": err.Error(),
 				})
+				expiredRefs++
 				continue
 			}
 
@@ -79,6 +82,9 @@ func resolveMediaRefs(messages []providers.Message, store media.MediaStore, maxS
 		}
 
 		result[i].Media = resolved
+		if expiredRefs > 0 {
+			result[i].Content = markExpiredMediaTags(result[i].Content, expiredRefs)
+		}
 		if len(pathTags) > 0 {
 			result[i].Content = injectPathTags(result[i].Content, pathTags)
 		}
@@ -103,6 +109,50 @@ func buildArtifactTags(store media.MediaStore, refs []string) []string {
 	}
 
 	return tags
+}
+
+var genericMediaAnnotationRe = regexp.MustCompile(`\[(image(?::[^\]]*)?|voice|audio|video|file)(?::[^\]]*)?\]`)
+
+func markExpiredMediaTags(content string, count int) string {
+	if count <= 0 {
+		return content
+	}
+
+	replaced := 0
+	marked := genericMediaAnnotationRe.ReplaceAllStringFunc(content, func(match string) string {
+		if replaced >= count {
+			return match
+		}
+		replaced++
+		kind := expiredMediaKind(match)
+		return "[" + kind + " unavailable: expired media]"
+	})
+
+	for ; replaced < count; replaced++ {
+		if strings.TrimSpace(marked) == "" {
+			marked = "[media unavailable: expired media]"
+		} else {
+			marked += "\n[media unavailable: expired media]"
+		}
+	}
+	return marked
+}
+
+func expiredMediaKind(annotation string) string {
+	trimmed := strings.Trim(annotation, "[]")
+	if idx := strings.Index(trimmed, ":"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	trimmed = strings.TrimSpace(trimmed)
+	if strings.HasPrefix(trimmed, "image") {
+		return "image"
+	}
+	switch trimmed {
+	case "voice", "audio", "video", "file":
+		return trimmed
+	default:
+		return "media"
+	}
 }
 
 // detectMIME determines the MIME type from metadata or magic-bytes detection.

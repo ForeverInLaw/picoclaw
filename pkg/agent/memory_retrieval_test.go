@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -52,11 +53,43 @@ func TestLookupRetrievedMemories_FormatsHits(t *testing.T) {
 	}
 
 	agent := &AgentInstance{MemoryIndex: idx}
-	got := lookupRetrievedMemories(t.Context(), agent, "agent:main:telegram:direct:1", "telegram", "1", "direct", "telegram:1", "sqlite retrieval")
+	got := lookupRetrievedMemories(t.Context(), agent, "agent:main:telegram:direct:1", "telegram", "1", "direct", "telegram:1", "sqlite retrieval", time.Time{})
 	if !strings.Contains(got, "RETRIEVED_MEMORY:") {
 		t.Fatalf("lookupRetrievedMemories() missing header: %q", got)
 	}
 	if !strings.Contains(got, "sqlite retrieval memory") {
 		t.Fatalf("lookupRetrievedMemories() missing content: %q", got)
+	}
+}
+
+func TestLookupRetrievedMemories_RespectsClearCutoff(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := memoryindex.Open(filepath.Join(dir, "index.sqlite"), memoryindex.Config{
+		MaxResults:      3,
+		MaxSnippetChars: 120,
+		MinQueryChars:   3,
+	})
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	defer idx.Close()
+
+	clearedAt := time.Now().UTC()
+	if err := idx.AddObservation(t.Context(), memoryindex.Observation{
+		SessionKey: "agent:main:telegram:direct:1",
+		Channel:    "telegram",
+		ChatID:     "1",
+		Role:       "user",
+		SenderID:   "telegram:1",
+		Content:    "старый sqlite retrieval до clear",
+		CreatedAt:  clearedAt.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("AddObservation() error: %v", err)
+	}
+
+	agent := &AgentInstance{MemoryIndex: idx}
+	got := lookupRetrievedMemories(t.Context(), agent, "agent:main:telegram:direct:1", "telegram", "1", "direct", "telegram:1", "sqlite retrieval", clearedAt)
+	if got != "" {
+		t.Fatalf("lookupRetrievedMemories() after clear = %q, want empty", got)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -148,8 +147,8 @@ func (m *legacyContextManager) retryLLMCall(
 		if err == nil && resp != nil && resp.Content != "" {
 			return resp, nil
 		}
-		if attempt < maxRetries-1 {
-			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		if attempt < maxRetries-1 && !waitBeforeSummaryRetry(ctx) {
+			break
 		}
 	}
 
@@ -163,7 +162,6 @@ func (m *legacyContextManager) summarizeBatch(
 	existingSummary string,
 ) (string, error) {
 	const (
-		llmMaxRetries             = 3
 		fallbackMinContentLength  = 200
 		fallbackMaxContentPercent = 10
 	)
@@ -181,7 +179,7 @@ func (m *legacyContextManager) summarizeBatch(
 	}
 	prompt := sb.String()
 
-	response, err := m.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
+	response, err := m.retryLLMCall(ctx, agent, prompt, summaryLLMRetryLimit)
 	if err == nil && response.Content != "" {
 		return strings.TrimSpace(response.Content), nil
 	}

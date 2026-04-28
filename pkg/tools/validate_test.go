@@ -501,6 +501,18 @@ func TestPrepareToolArgsForValidation_RejectsConcatenatedRawJSONObjectPayloadFor
 	if !strings.Contains(err.Error(), "multiple concatenated JSON objects") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	for _, want := range []string{
+		"Do not retry this same call",
+		"Multiple tool calls in one response are allowed",
+		"separate tool_calls entry",
+		"Never put JSON objects into raw",
+		"send_file",
+		"exec",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing feedback %q", err.Error(), want)
+		}
+	}
 }
 
 func TestValidateToolArgs_RealSchemas(t *testing.T) {

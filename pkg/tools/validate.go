@@ -96,10 +96,7 @@ func prepareToolArgsForValidation(toolName string, schema map[string]any, args m
 	for _, cand := range candidates {
 		parsedCandidates := parseJSONObjectCandidates(cand.payload)
 		if len(parsedCandidates) > 1 && disallowConcatenatedJSONAutoRepair(toolName) {
-			return args, false, fmt.Errorf(
-				"multiple concatenated JSON objects detected for tool %q; send exactly one tool payload per call",
-				toolName,
-			)
+			return args, false, concatenatedJSONPayloadError(toolName)
 		}
 
 		for _, parsed := range parsedCandidates {
@@ -125,6 +122,18 @@ func prepareToolArgsForValidation(toolName string, schema map[string]any, args m
 	}
 
 	return args, false, nil
+}
+
+func concatenatedJSONPayloadError(toolName string) error {
+	message := fmt.Sprintf(
+		"multiple concatenated JSON objects detected for tool %q; send exactly one JSON argument object per tool call. "+
+			"Multiple tool calls in one response are allowed, but each action must be a separate tool_calls entry; do not pack several JSON objects into raw. "+
+			"Do not retry this same call. Never put JSON objects into raw. "+
+			"If you need to send a file and then clean it up, emit separate tool calls: "+
+			"send_file({\"path\":\"/path/to/file\"}) and exec({\"command\":\"rm /path/to/file\"}); only run cleanup after send_file succeeds.",
+		toolName,
+	)
+	return fmt.Errorf("%s", message)
 }
 
 func disallowConcatenatedJSONAutoRepair(toolName string) bool {

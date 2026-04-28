@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -113,13 +115,12 @@ const (
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
 	requeueYieldDelay         = 10 * time.Millisecond
-	emptyResponseRetryLimit   = 5
+	emptyResponseRetryLimit   = 30
 	llmCallRetryLimit         = 20
 	llmCallRetryBackoff       = 3 * time.Second
 )
 
 const emptyResponseRetryInstruction = "Your previous response was empty. Retry the same request now and return a non-empty answer, or valid tool calls if tools are needed. Do not return an empty message."
-const emptyResponseForceDirectAnswerInstruction = "Your last responses were empty. Answer the user now with a brief, non-empty assistant message. Do not call any tools. If you are blocked, state the missing requirement in one sentence."
 
 func NewAgentLoop(
 	cfg *config.Config,
@@ -1123,7 +1124,7 @@ func (al *AgentLoop) SetReloadFunc(fn func() error) {
 	al.reloadFunc = fn
 }
 
-var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio)(?::[^\]]*)?\]`)
+var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio|video)(?::[^\]]*)?\]`)
 
 // transcribeAudioInMessage resolves audio media refs, transcribes them, and
 // replaces audio annotations in msg.Content with the transcribed text.
@@ -1136,8 +1137,13 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 	// Transcribe each audio media ref in order. Successfully transcribed audio
 	// refs are removed from msg.Media so the model does not see both the
 	// transcript and the original file path and then try to inspect the file again.
+	type transcriptionReplacement struct {
+		text string
+		kind string
+	}
+
 	var (
-		audioReplacements []string
+		audioReplacements []transcriptionReplacement
 		successTexts      []string
 		keptMedia         = make([]string, 0, len(msg.Media))
 	)
@@ -1147,18 +1153,38 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
 			continue
 		}
-		if !utils.IsAudioFile(meta.Filename, meta.ContentType) {
+		audioPath := path
+		cleanupAudio := func() {}
+		kind := "voice"
+		switch {
+		case utils.IsAudioFile(meta.Filename, meta.ContentType):
+			// Use original audio file.
+		case utils.IsVideoFile(meta.Filename, meta.ContentType):
+			kind = "video"
+			converted, cleanup, err := extractAudioFromVideo(ctx, path)
+			if err != nil {
+				logger.WarnCF("voice", "Video audio extraction failed", map[string]any{"ref": ref, "error": err})
+				audioReplacements = append(audioReplacements, transcriptionReplacement{kind: kind})
+				keptMedia = append(keptMedia, ref)
+				continue
+			}
+			audioPath = converted
+			cleanupAudio = cleanup
+		default:
 			keptMedia = append(keptMedia, ref)
 			continue
 		}
-		result, err := al.transcriber.Transcribe(ctx, path)
+		result, err := func() (*asr.TranscriptionResponse, error) {
+			defer cleanupAudio()
+			return al.transcriber.Transcribe(ctx, audioPath)
+		}()
 		if err != nil {
 			logger.WarnCF("voice", "Transcription failed", map[string]any{"ref": ref, "error": err})
-			audioReplacements = append(audioReplacements, "")
+			audioReplacements = append(audioReplacements, transcriptionReplacement{kind: kind})
 			keptMedia = append(keptMedia, ref)
 			continue
 		}
-		audioReplacements = append(audioReplacements, result.Text)
+		audioReplacements = append(audioReplacements, transcriptionReplacement{text: result.Text, kind: kind})
 		successTexts = append(successTexts, result.Text)
 	}
 
@@ -1174,25 +1200,56 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		if idx >= len(audioReplacements) {
 			return match
 		}
-		text := audioReplacements[idx]
+		replacement := audioReplacements[idx]
 		idx++
-		if text == "" {
+		if replacement.text == "" {
 			return match
 		}
-		return "[voice: " + text + "]"
+		return "[" + mediaAnnotationKind(match) + ": " + replacement.text + "]"
 	})
 
 	// Append any remaining transcriptions not matched by an annotation.
 	for ; idx < len(audioReplacements); idx++ {
-		if audioReplacements[idx] == "" {
+		replacement := audioReplacements[idx]
+		if replacement.text == "" {
 			continue
 		}
-		newContent += "\n[voice: " + audioReplacements[idx] + "]"
+		kind := replacement.kind
+		if kind == "" {
+			kind = "voice"
+		}
+		newContent += "\n[" + kind + ": " + replacement.text + "]"
 	}
 
 	msg.Content = newContent
 	msg.Media = keptMedia
 	return msg, true
+}
+
+func mediaAnnotationKind(match string) string {
+	trimmed := strings.TrimPrefix(match, "[")
+	for i, r := range trimmed {
+		if r == ':' || r == ']' {
+			return trimmed[:i]
+		}
+	}
+	return "voice"
+}
+
+func extractAudioFromVideo(ctx context.Context, videoPath string) (string, func(), error) {
+	out, err := os.CreateTemp("", "picoclaw-video-audio-*.wav")
+	if err != nil {
+		return "", func() {}, err
+	}
+	outPath := out.Name()
+	_ = out.Close()
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", videoPath, "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", outPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		_ = os.Remove(outPath)
+		return "", func() {}, fmt.Errorf("ffmpeg extract audio: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return outPath, func() { _ = os.Remove(outPath) }, nil
 }
 
 // sendTranscriptionFeedback sends feedback to the user with the result of
@@ -1472,6 +1529,21 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	return al.runAgentLoop(ctx, agent, opts)
+}
+
+func (al *AgentLoop) sessionMemoryCutoff(ctx context.Context, agent *AgentInstance, sessionKey string) time.Time {
+	if agent == nil || agent.MemoryIndex == nil {
+		return time.Time{}
+	}
+	clearedAt, err := agent.MemoryIndex.SessionClearedAt(ctx, sessionKey)
+	if err != nil {
+		logger.WarnCF("agent", "Failed to read session clear marker", map[string]any{
+			"session_key": sessionKey,
+			"error":       err.Error(),
+		})
+		return time.Time{}
+	}
+	return clearedAt
 }
 
 func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.ResolvedRoute, *AgentInstance, error) {
@@ -1756,6 +1828,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	if !ts.opts.NoHistory {
 		history = ts.agent.Sessions.GetHistory(ts.sessionKey)
 		summary = ts.agent.Sessions.GetSummary(ts.sessionKey)
+		memorySince := al.sessionMemoryCutoff(ctx, ts.agent, ts.sessionKey)
 		retrievedMemory = lookupRetrievedMemories(
 			ctx,
 			ts.agent,
@@ -1765,6 +1838,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			ts.opts.PeerKind,
 			ts.opts.SenderID,
 			ts.opts.UserMessage,
+			memorySince,
 		)
 	}
 	ts.captureRestorePoint(history, summary)
@@ -1839,7 +1913,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var hadToolCalls bool
 	var terminalToolCompleted bool
 	var emptyDirectResponseRetries int
-	var forceDirectAnswerWithoutTools bool
 	streamProvider, providerCanStream := activeProvider.(providers.StreamingProvider)
 
 turnLoop:
@@ -1937,9 +2010,6 @@ turnLoop:
 
 		gracefulTerminal, _ := ts.gracefulInterruptRequested()
 		providerToolDefs := ts.agent.Tools.ToProviderDefsFiltered(allowedTools)
-		if forceDirectAnswerWithoutTools {
-			providerToolDefs = nil
-		}
 
 		// Native web search support (from HEAD)
 		_, hasWebSearch := ts.agent.Tools.Get("web_search")
@@ -2384,19 +2454,12 @@ turnLoop:
 					})
 					continue
 				}
-				if !forceDirectAnswerWithoutTools {
-					forceDirectAnswerWithoutTools = true
-					logger.WarnCF("agent", "LLM returned empty response repeatedly; forcing direct answer without tools",
-						map[string]any{
-							"agent_id":  ts.agent.ID,
-							"iteration": iteration,
-						})
-					messages = append(messages, providers.Message{
-						Role:    "system",
-						Content: emptyResponseForceDirectAnswerInstruction,
+				logger.WarnCF("agent", "LLM returned empty response repeatedly; giving up",
+					map[string]any{
+						"agent_id":    ts.agent.ID,
+						"iteration":   iteration,
+						"retry_count": emptyDirectResponseRetries,
 					})
-					continue
-				}
 			}
 			finalContent = formatInlineResponse(ts.opts.ResponseQuote, responseContent)
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
@@ -3351,8 +3414,8 @@ func (al *AgentLoop) retryLLMCall(
 		if err == nil && resp != nil && resp.Content != "" {
 			return resp, nil
 		}
-		if attempt < maxRetries-1 {
-			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		if attempt < maxRetries-1 && !waitBeforeSummaryRetry(ctx) {
+			break
 		}
 	}
 
@@ -3367,8 +3430,6 @@ func (al *AgentLoop) summarizeBatch(
 	existingSummary string,
 ) (string, error) {
 	const (
-		llmMaxRetries             = 3
-		llmTemperature            = 0.3
 		fallbackMinContentLength  = 200
 		fallbackMaxContentPercent = 10
 	)
@@ -3388,7 +3449,7 @@ func (al *AgentLoop) summarizeBatch(
 	}
 	prompt := sb.String()
 
-	response, err := al.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
+	response, err := al.retryLLMCall(ctx, agent, prompt, summaryLLMRetryLimit)
 	if err == nil && response.Content != "" {
 		return strings.TrimSpace(response.Content), nil
 	}
@@ -3560,7 +3621,14 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 
 			agent.Sessions.SetHistory(opts.SessionKey, make([]providers.Message, 0))
 			agent.Sessions.SetSummary(opts.SessionKey, "")
-			agent.Sessions.Save(opts.SessionKey)
+			if err := agent.Sessions.Save(opts.SessionKey); err != nil {
+				return err
+			}
+			if agent.MemoryIndex != nil {
+				if err := agent.MemoryIndex.MarkSessionCleared(context.Background(), opts.SessionKey, time.Now()); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 	}

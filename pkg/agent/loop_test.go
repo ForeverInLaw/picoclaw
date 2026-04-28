@@ -1101,6 +1101,81 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_ClearStartsDialogFromCleanSlate(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				MemoryIndex: config.MemoryIndexConfig{
+					Enabled:       true,
+					MinQueryChars: 3,
+				},
+			},
+		},
+		Session: config.SessionConfig{DMScope: "per-channel-peer"},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &recordingProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	defer al.Close()
+	helper := testHelper{al: al}
+
+	baseMsg := bus.InboundMessage{
+		Channel:  "telegram",
+		SenderID: "telegram:42",
+		Sender:   bus.SenderInfo{CanonicalID: "telegram:42", Platform: "telegram", PlatformID: "42"},
+		ChatID:   "42",
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+	}
+	route := al.registry.ResolveRoute(routing.RouteInput{Channel: baseMsg.Channel, Peer: extractPeer(baseMsg)})
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil || agent.MemoryIndex == nil {
+		t.Fatal("expected default agent with memory index")
+	}
+
+	first := baseMsg
+	first.Content = "remember secret retrieval marker"
+	_ = helper.executeAndGetResponse(t, context.Background(), first)
+	agent.Sessions.SetSummary(route.SessionKey, "old summary")
+	if len(agent.Sessions.GetHistory(route.SessionKey)) == 0 {
+		t.Fatal("expected history before /clear")
+	}
+
+	clearMsg := baseMsg
+	clearMsg.Content = "/clear"
+	if got := helper.executeAndGetResponse(t, context.Background(), clearMsg); got != "Chat history cleared!" {
+		t.Fatalf("/clear response = %q", got)
+	}
+	if history := agent.Sessions.GetHistory(route.SessionKey); len(history) != 0 {
+		t.Fatalf("history after /clear len=%d, want 0", len(history))
+	}
+	if summary := agent.Sessions.GetSummary(route.SessionKey); summary != "" {
+		t.Fatalf("summary after /clear = %q, want empty", summary)
+	}
+	clearedAt, err := agent.MemoryIndex.SessionClearedAt(context.Background(), route.SessionKey)
+	if err != nil {
+		t.Fatalf("SessionClearedAt() error: %v", err)
+	}
+	if clearedAt.IsZero() {
+		t.Fatal("expected session clear marker")
+	}
+
+	next := baseMsg
+	next.Content = "what about secret retrieval?"
+	_ = helper.executeAndGetResponse(t, context.Background(), next)
+	if len(provider.lastMessages) == 0 {
+		t.Fatal("expected provider messages")
+	}
+	if strings.Contains(provider.lastMessages[0].Content, "RETRIEVED_MEMORY") || strings.Contains(provider.lastMessages[0].Content, "remember secret retrieval marker") {
+		t.Fatalf("system prompt rehydrated pre-clear context: %q", provider.lastMessages[0].Content)
+	}
+}
+
 func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -1612,7 +1687,7 @@ func TestProcessDirectWithChannel_EmptyResponseRetriesBeforeFallback(t *testing.
 	}
 }
 
-func TestProcessDirectWithChannel_EmptyResponseForcesDirectAnswerWithoutTools(t *testing.T) {
+func TestProcessDirectWithChannel_EmptyResponseRetriesWithTools(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -1651,8 +1726,8 @@ func TestProcessDirectWithChannel_EmptyResponseForcesDirectAnswerWithoutTools(t 
 	if provider.toolCalls[0] == 0 {
 		t.Fatalf("expected initial call to expose tools, got 0")
 	}
-	if provider.toolCalls[6] != 0 {
-		t.Fatalf("expected forced final answer pass without tools, got %d", provider.toolCalls[6])
+	if provider.toolCalls[6] == 0 {
+		t.Fatalf("expected retry that produced final answer to keep tools available")
 	}
 }
 
@@ -2005,6 +2080,26 @@ func TestHandleReasoning(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestResolveMediaRefs_MarksExpiredVoiceRefs(t *testing.T) {
+	store := media.NewFileMediaStore()
+	messages := []providers.Message{
+		{Role: "user", Content: "послушай\n[voice]\n[voice]", Media: []string{"media://missing-1", "media://missing-2"}},
+	}
+
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+
+	if len(result[0].Media) != 0 {
+		t.Fatalf("expected expired media refs to be dropped, got %v", result[0].Media)
+	}
+	want := "послушай\n[voice unavailable: expired media]\n[voice unavailable: expired media]"
+	if result[0].Content != want {
+		t.Fatalf("content=%q want %q", result[0].Content, want)
+	}
+	if messages[0].Content == result[0].Content {
+		t.Fatal("expected returned message to be modified without mutating original")
+	}
 }
 
 func TestResolveMediaRefs_ResolvesToBase64(t *testing.T) {

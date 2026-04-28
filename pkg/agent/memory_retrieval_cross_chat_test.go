@@ -72,6 +72,7 @@ func TestLookupRetrievedMemories_DirectChatCanRecallAccessibleGroup(t *testing.T
 		"direct",
 		"telegram:42",
 		"что мы говорили про sqlite retrieval?",
+		time.Time{},
 	)
 	if !strings.Contains(got, "sqlite retrieval") || !strings.Contains(got, "-1001") {
 		t.Fatalf("lookupRetrievedMemories() = %q, want cross-chat group hit", got)

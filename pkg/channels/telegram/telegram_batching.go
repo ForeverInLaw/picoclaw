@@ -275,6 +275,30 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 			content += "[audio]"
 		}
 	}
+	if message.VideoNote != nil {
+		videoPath := c.downloadFile(ctx, message.VideoNote.FileID, ".mp4")
+		if videoPath != "" {
+			mediaPaths = append(mediaPaths, storeMedia(videoPath, "video_note.mp4"))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[video]"
+		}
+	}
+	if message.Video != nil {
+		videoPath := c.downloadFile(ctx, message.Video.FileID, ".mp4")
+		if videoPath != "" {
+			filename := strings.TrimSpace(message.Video.FileName)
+			if filename == "" {
+				filename = "video.mp4"
+			}
+			mediaPaths = append(mediaPaths, storeMedia(videoPath, filename))
+			if content != "" {
+				content += "\n"
+			}
+			content += "[video]"
+		}
+	}
 	if message.Document != nil {
 		docPath := c.downloadFile(ctx, message.Document.FileID, "")
 		if docPath != "" {
@@ -318,7 +342,7 @@ func telegramStandaloneBatchableMedia(message *telego.Message) bool {
 	if message == nil {
 		return false
 	}
-	return message.Voice != nil || message.Audio != nil
+	return message.Voice != nil || message.Audio != nil || message.VideoNote != nil
 }
 
 func (c *TelegramChannel) dispatchInboundCandidate(

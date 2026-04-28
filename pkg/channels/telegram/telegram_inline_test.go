@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mymmrac/telego"
@@ -107,5 +108,25 @@ func TestBuildTelegramInlineInboundMessage_MarksInlineMetadata(t *testing.T) {
 	}
 	if msg.Content != "сделай summary" {
 		t.Fatalf("msg.Content = %q", msg.Content)
+	}
+}
+
+func TestBuildTelegramInlineInboundMessage_WarnsWhenQueryMayBeTruncated(t *testing.T) {
+	query := strings.Repeat("a", telegramInlineTruncationThreshold)
+	msg := buildTelegramInlineInboundMessage(telego.ChosenInlineResult{
+		ResultID:        "res-1",
+		InlineMessageID: "inline-msg-1",
+		Query:           query,
+		From: telego.User{
+			ID:        42,
+			FirstName: "Alice",
+		},
+	}, bus.SenderInfo{CanonicalID: "telegram:42"})
+
+	if msg.Metadata[telegramInlineQueryKey] != query {
+		t.Fatalf("inline query metadata should keep raw query, got %q", msg.Metadata[telegramInlineQueryKey])
+	}
+	if !strings.Contains(msg.Content, "Telegram inline queries are limited") {
+		t.Fatalf("expected truncation warning in content, got %q", msg.Content)
 	}
 }

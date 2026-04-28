@@ -18,6 +18,7 @@ import (
 
 var (
 	audioExtensions = []string{".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma"}
+	videoExtensions = []string{".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 )
 
 func AudioFormat(path string) (string, error) {
@@ -48,6 +49,16 @@ func IsAudioFile(filename, contentType string) bool {
 	}
 
 	return false
+}
+
+// IsVideoFile checks if a file is a video file based on its filename extension and content type.
+func IsVideoFile(filename, contentType string) bool {
+	for _, ext := range videoExtensions {
+		if strings.HasSuffix(strings.ToLower(filename), ext) {
+			return true
+		}
+	}
+	return strings.HasPrefix(strings.ToLower(contentType), "video/")
 }
 
 // SanitizeFilename removes potentially dangerous characters from a filename
