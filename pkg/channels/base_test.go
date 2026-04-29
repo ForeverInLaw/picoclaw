@@ -263,3 +263,11 @@ func TestIsAllowedSender(t *testing.T) {
 		})
 	}
 }
+
+func TestAudioAnnotationRe_DefersVideoPlaceholder(t *testing.T) {
+	for _, content := range []string{"[voice]", "[audio]", "[video]", "text\n[video: clip.mp4]"} {
+		if !audioAnnotationRe.MatchString(content) {
+			t.Fatalf("audioAnnotationRe should match %q", content)
+		}
+	}
+}

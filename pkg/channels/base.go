@@ -33,8 +33,8 @@ func init() {
 	uniqueIDPrefix = hex.EncodeToString(b[:])
 }
 
-// audioAnnotationRe matches audio/voice annotations injected by channels (e.g. [voice], [audio: file.ogg]).
-var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio)(?::[^\]]*)?\]`)
+// audioAnnotationRe matches media annotations whose transcription delays the placeholder.
+var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio|video)(?::[^\]]*)?\]`)
 
 // uniqueID generates a process-unique ID using a random prefix and an atomic counter.
 // This ID is intended for internal correlation (e.g. media scope keys) and is NOT
