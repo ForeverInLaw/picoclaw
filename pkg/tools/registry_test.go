@@ -246,9 +246,9 @@ func TestToolRegistry_Execute_RepairsNestedJSONObjectArguments(t *testing.T) {
 	}
 }
 
-func TestToolRegistry_Execute_RejectsConcatenatedExecPayloadRepair(t *testing.T) {
+func TestToolRegistry_Execute_RepairsConcatenatedExecSendFileCleanupPayload(t *testing.T) {
 	r := NewToolRegistry()
-	tool := &mockCaptureRegistryTool{
+	execTool := &mockCaptureRegistryTool{
 		mockRegistryTool: mockRegistryTool{
 			name: "exec",
 			desc: "executes shell commands",
@@ -260,22 +260,45 @@ func TestToolRegistry_Execute_RejectsConcatenatedExecPayloadRepair(t *testing.T)
 				},
 				"required": []string{"command"},
 			},
-			result: SilentResult("should not execute"),
+			result: SilentResult("exec should not run"),
 		},
 	}
-	r.Register(tool)
+	sendFileTool := &mockCaptureRegistryTool{
+		mockRegistryTool: mockRegistryTool{
+			name: "send_file",
+			desc: "sends a file",
+			params: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":              map[string]any{"type": "string"},
+					"filename":          map[string]any{"type": "string"},
+					"delete_after_send": map[string]any{"type": "boolean"},
+				},
+				"required": []string{"path"},
+			},
+			result: SilentResult("sent"),
+		},
+	}
+	r.Register(execTool)
+	r.Register(sendFileTool)
 
 	result := r.Execute(context.Background(), "exec", map[string]any{
 		"raw": "{\"path\":\"/home/andy/.picoclaw/workspace/final_delivery.mp4\"}{\"command\":\"rm /home/andy/.picoclaw/workspace/final_delivery.mp4\"}",
 	})
-	if !result.IsError {
-		t.Fatal("expected concatenated exec payload to be rejected")
+	if result.IsError {
+		t.Fatalf("expected malformed exec payload to be repaired into send_file, got: %s", result.ForLLM)
 	}
-	if tool.lastArgs != nil {
-		t.Fatalf("exec tool should not have executed, got args %#v", tool.lastArgs)
+	if execTool.lastArgs != nil {
+		t.Fatalf("exec tool should not have executed, got args %#v", execTool.lastArgs)
 	}
-	if !strings.Contains(result.ForLLM, "multiple concatenated JSON objects") {
-		t.Fatalf("unexpected error: %s", result.ForLLM)
+	if sendFileTool.lastArgs == nil {
+		t.Fatal("send_file should have executed")
+	}
+	if sendFileTool.lastArgs["path"] != "/home/andy/.picoclaw/workspace/final_delivery.mp4" {
+		t.Fatalf("path = %#v", sendFileTool.lastArgs["path"])
+	}
+	if sendFileTool.lastArgs["delete_after_send"] != true {
+		t.Fatalf("delete_after_send = %#v, want true", sendFileTool.lastArgs["delete_after_send"])
 	}
 }
 

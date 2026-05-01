@@ -117,6 +117,52 @@ func TestSendFileTool_Success(t *testing.T) {
 	}
 }
 
+func TestSendFileTool_DeleteAfterSendCopiesAndDeletesOriginal(t *testing.T) {
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "clip.mp4")
+	if err := os.WriteFile(testFile, []byte("fake video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := media.NewFileMediaStore()
+	tool := NewSendFileTool(dir, false, 0, store)
+	tool.SetContext("telegram", "chat123")
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"path":              testFile,
+		"delete_after_send": true,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("expected 1 media ref, got %d", len(result.Media))
+	}
+	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+		t.Fatalf("original file should be removed after safe staging, stat err=%v", err)
+	}
+
+	managedPath, meta, err := store.ResolveWithMeta(result.Media[0])
+	if err != nil {
+		t.Fatalf("ResolveWithMeta failed: %v", err)
+	}
+	if managedPath == testFile {
+		t.Fatal("managed media path should be a copy, not the original")
+	}
+	if meta.CleanupPolicy != media.CleanupPolicyDeleteOnCleanup {
+		t.Fatalf("CleanupPolicy = %q, want %q", meta.CleanupPolicy, media.CleanupPolicyDeleteOnCleanup)
+	}
+	if _, err := os.Stat(managedPath); err != nil {
+		t.Fatalf("managed copy should exist for async media sender: %v", err)
+	}
+	if err := store.ReleaseAll("tool:send_file:telegram:chat123"); err != nil {
+		t.Fatalf("ReleaseAll failed: %v", err)
+	}
+	if _, err := os.Stat(managedPath); !os.IsNotExist(err) {
+		t.Fatalf("managed copy should be deleted on media cleanup, stat err=%v", err)
+	}
+}
+
 func TestSendFileTool_SuccessDoesNotDeleteOriginalFileOnRelease(t *testing.T) {
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "photo.png")

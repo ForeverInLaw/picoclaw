@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+	pathpkg "path"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -271,6 +273,15 @@ func (r *ToolRegistry) ExecuteWithContext(
 			"args": args,
 		})
 
+	if repairedName, repairedArgs, repaired := repairExecSendFileCleanupCall(name, args); repaired {
+		if _, ok := r.Get(repairedName); ok {
+			logger.WarnCF("tool", "Repaired malformed exec cleanup payload into send_file",
+				map[string]any{"original_tool": name, "tool": repairedName, "before": args, "after": repairedArgs})
+			name = repairedName
+			args = repairedArgs
+		}
+	}
+
 	tool, ok := r.Get(name)
 	if !ok {
 		logger.ErrorCF("tool", "Tool not found",
@@ -400,6 +411,57 @@ func (r *ToolRegistry) ExecuteWithContext(
 	}
 
 	return result
+}
+
+func repairExecSendFileCleanupCall(name string, args map[string]any) (string, map[string]any, bool) {
+	if strings.TrimSpace(name) != "exec" || args == nil {
+		return name, args, false
+	}
+	raw, ok := args["raw"].(string)
+	if !ok {
+		return name, args, false
+	}
+	objects := parseJSONObjectCandidates(raw)
+	if len(objects) != 2 {
+		return name, args, false
+	}
+	pathValue, ok := objects[0]["path"].(string)
+	pathValue = strings.TrimSpace(pathValue)
+	if !ok || pathValue == "" {
+		return name, args, false
+	}
+	command, ok := objects[1]["command"].(string)
+	if !ok || !rmCommandMentionsPath(command, pathValue) {
+		return name, args, false
+	}
+
+	repaired := make(map[string]any, len(objects[0])+1)
+	for k, v := range objects[0] {
+		repaired[k] = v
+	}
+	repaired["delete_after_send"] = true
+	return "send_file", repaired, true
+}
+
+func rmCommandMentionsPath(command, targetPath string) bool {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) < 2 || fields[0] != "rm" {
+		return false
+	}
+	targetBase := pathpkg.Base(strings.ReplaceAll(targetPath, "\\", "/"))
+	for _, field := range fields[1:] {
+		if strings.HasPrefix(field, "-") {
+			continue
+		}
+		trimmed := strings.Trim(field, "'\"")
+		if trimmed == targetPath {
+			return true
+		}
+		if pathpkg.Base(strings.ReplaceAll(trimmed, "\\", "/")) == targetBase {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *ToolRegistry) recordError(name string, args map[string]any, channel, chatID, stage, message string, durationMS int64) {

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ func NewSendFileTool(
 
 func (t *SendFileTool) Name() string { return "send_file" }
 func (t *SendFileTool) Description() string {
-	return "Send a local file (image, document, etc.) to the user on the current chat channel."
+	return "Send a local file (image, document, etc.) to the user on the current chat channel. Set delete_after_send=true for temporary files that should be removed from the workspace after being queued safely."
 }
 
 func (t *SendFileTool) Parameters() map[string]any {
@@ -67,6 +68,10 @@ func (t *SendFileTool) Parameters() map[string]any {
 			"filename": map[string]any{
 				"type":        "string",
 				"description": "Optional display filename. Defaults to the basename of path.",
+			},
+			"delete_after_send": map[string]any{
+				"type":        "boolean",
+				"description": "When true, copy the file into PicoClaw-managed media storage, queue that copy for delivery, then delete the original workspace file. Use this for temporary/generated files instead of calling exec rm after send_file.",
 			},
 		},
 		"required": []string{"path"},
@@ -129,20 +134,75 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		filename = filepath.Base(resolved)
 	}
 
+	deleteAfterSend, _ := args["delete_after_send"].(bool)
 	mediaType := detectMediaType(resolved)
 	scope := fmt.Sprintf("tool:send_file:%s:%s", channel, chatID)
+	storePath := resolved
+	cleanupPolicy := media.CleanupPolicyForgetOnly
+	cleanupWarning := ""
 
-	ref, err := t.mediaStore.Store(resolved, media.MediaMeta{
+	if deleteAfterSend {
+		managedPath, err := copyFileToManagedMediaTemp(resolved, filename)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("failed to stage file for safe cleanup: %v", err))
+		}
+		storePath = managedPath
+		cleanupPolicy = media.CleanupPolicyDeleteOnCleanup
+	}
+
+	ref, err := t.mediaStore.Store(storePath, media.MediaMeta{
 		Filename:      filename,
 		ContentType:   mediaType,
 		Source:        "tool:send_file",
-		CleanupPolicy: media.CleanupPolicyForgetOnly,
+		CleanupPolicy: cleanupPolicy,
 	}, scope)
 	if err != nil {
+		if deleteAfterSend {
+			_ = os.Remove(storePath)
+		}
 		return ErrorResult(fmt.Sprintf("failed to register media: %v", err))
 	}
 
-	return MediaResult(fmt.Sprintf("File %q sent to user", filename), []string{ref}).WithResponseHandled()
+	if deleteAfterSend {
+		if err := os.Remove(resolved); err != nil && !os.IsNotExist(err) {
+			cleanupWarning = fmt.Sprintf(" Original cleanup failed: %v", err)
+		}
+	}
+
+	return MediaResult(fmt.Sprintf("File %q sent to user.%s", filename, cleanupWarning), []string{ref}).WithResponseHandled()
+}
+
+func copyFileToManagedMediaTemp(src, filename string) (string, error) {
+	if err := os.MkdirAll(media.TempDir(), 0o700); err != nil {
+		return "", err
+	}
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		ext = filepath.Ext(src)
+	}
+	out, err := os.CreateTemp(media.TempDir(), "send-file-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	outPath := out.Name()
+	defer func() { _ = out.Close() }()
+
+	in, err := os.Open(src)
+	if err != nil {
+		_ = os.Remove(outPath)
+		return "", err
+	}
+	defer in.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		_ = os.Remove(outPath)
+		return "", err
+	}
+	if err := out.Sync(); err != nil {
+		_ = os.Remove(outPath)
+		return "", err
+	}
+	return outPath, nil
 }
 
 // detectMediaType determines the MIME type of a file.
