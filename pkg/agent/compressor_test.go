@@ -101,6 +101,35 @@ func TestSummarizeWithRetryUsesThirtyAttemptsBeforeGivingUp(t *testing.T) {
 	}
 }
 
+func TestCompressContext_SkipsTinySingleMessageSegment(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Agents.Defaults.ContextWindow = 32000
+	provider := &summaryRetryProvider{content: "should not be used"}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(al.Close)
+	agent := al.registry.GetDefaultAgent()
+
+	sessionKey := "session-tiny-middle"
+	history := []providers.Message{
+		{Role: "user", Content: "head-1"},
+		{Role: "assistant", Content: "head-2"},
+		{Role: "assistant", Content: "head-3"},
+		{Role: "user", Content: "Тест"},
+		{Role: "user", Content: "fresh tail"},
+	}
+	agent.Sessions.SetHistory(sessionKey, history)
+
+	_, ok := al.CompressContext(context.Background(), agent, sessionKey)
+	if ok {
+		t.Fatal("expected tiny middle segment to skip compression")
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", provider.calls)
+	}
+	if got := agent.Sessions.GetSummary(sessionKey); got != "" {
+		t.Fatalf("summary = %q, want empty", got)
+	}
+}
 func TestCompressContext_StoresSummaryOnlyInSession(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Agents.Defaults.ContextWindow = 32000

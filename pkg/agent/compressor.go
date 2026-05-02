@@ -16,6 +16,7 @@ const (
 	summaryRatio          = 0.20
 	summaryTokensCeiling  = 12000
 	charsPerToken         = 4
+	minSummaryInputTokens = 512
 )
 
 // CompressionResult describes what the compressor did.
@@ -88,7 +89,7 @@ func (al *AgentLoop) compressContext(
 		return CompressionResult{}, false
 	}
 	middle := history[middleStart:tailStart]
-	if len(middle) == 0 {
+	if len(middle) == 0 || !shouldSummarizeMiddle(middle) {
 		return CompressionResult{
 			PrunedToolOutputs: pruned,
 			KeptMessages:      len(history),
@@ -207,6 +208,16 @@ func (al *AgentLoop) computeTailBudget(contextWindow int) int {
 		budget = minSummaryTokens
 	}
 	return budget
+}
+
+func shouldSummarizeMiddle(middle []providers.Message) bool {
+	if len(middle) == 0 {
+		return false
+	}
+	if len(middle) > 1 {
+		return true
+	}
+	return estimateMessageTokensForBudget(middle[0]) >= minSummaryInputTokens
 }
 
 // compressMiddle generates a summary for the middle section.
