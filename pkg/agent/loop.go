@@ -3147,27 +3147,37 @@ func publishToolMessage(msgBus *bus.MessageBus, toolCtx context.Context, channel
 // if the session history exceeds configured thresholds.
 func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, turnScope turnEventScope) {
 	newHistory := agent.Sessions.GetHistory(sessionKey)
-	tokenEstimate := al.estimateTokens(newHistory)
-	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
-
-	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
-		summarizeKey := agent.ID + ":" + sessionKey
-		if _, loading := al.summarizing.LoadOrStore(summarizeKey, true); !loading {
-			go func() {
-				defer al.summarizing.Delete(summarizeKey)
-				defer func() {
-					if r := recover(); r != nil {
-						logger.WarnCF("agent", "Proactive compression panic recovered", map[string]any{
-							"session_key": sessionKey,
-							"panic":       r,
-						})
-					}
-				}()
-				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				al.summarizeSession(agent, sessionKey, turnScope)
-			}()
-		}
+	if !al.shouldStartProactiveSummary(agent, newHistory) {
+		return
 	}
+
+	summarizeKey := agent.ID + ":" + sessionKey
+	if _, loading := al.summarizing.LoadOrStore(summarizeKey, true); !loading {
+		go func() {
+			defer al.summarizing.Delete(summarizeKey)
+			defer func() {
+				if r := recover(); r != nil {
+					logger.WarnCF("agent", "Proactive compression panic recovered", map[string]any{
+						"session_key": sessionKey,
+						"panic":       r,
+					})
+				}
+			}()
+			logger.Debug("Memory threshold reached. Optimizing conversation history...")
+			al.summarizeSession(agent, sessionKey, turnScope)
+		}()
+	}
+}
+
+func (al *AgentLoop) shouldStartProactiveSummary(agent *AgentInstance, history []providers.Message) bool {
+	if agent == nil || len(history) <= 4 {
+		return false
+	}
+	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
+	if threshold <= 0 {
+		return false
+	}
+	return al.estimateTokens(history) > threshold
 }
 
 type legacyCompressionResult struct {

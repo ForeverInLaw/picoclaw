@@ -450,7 +450,7 @@ func TestLegacyCompact_PostTurn_BelowThreshold(t *testing.T) {
 	}
 }
 
-func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
+func TestLegacyCompact_PostTurn_ExceedsTokenThreshold(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -473,14 +473,14 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	// 6 messages > threshold of 2
+	// 6 messages and enough content to exceed 75% of the 8000-token context window.
 	history := []providers.Message{
 		{Role: "user", Content: "q1"},
 		{Role: "assistant", Content: "a1"},
 		{Role: "user", Content: "q2"},
 		{Role: "assistant", Content: "a2"},
-		{Role: "user", Content: "q3"},
-		{Role: "assistant", Content: "a3"},
+		{Role: "user", Content: strings.Repeat("q3 ", 3000)},
+		{Role: "assistant", Content: strings.Repeat("a3 ", 3000)},
 	}
 	defaultAgent.Sessions.SetHistory("session-threshold", history)
 
@@ -506,6 +506,57 @@ func TestLegacyCompact_PostTurn_ExceedsMessageThreshold(t *testing.T) {
 	}
 }
 
+func TestLegacyCompact_PostTurn_MessageThresholdAloneDoesNotSummarize(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:                 t.TempDir(),
+				ModelName:                 "test-model",
+				MaxTokens:                 4096,
+				MaxToolIterations:         10,
+				ContextWindow:             8000,
+				SummarizeMessageThreshold: 2,
+				SummarizeTokenPercent:     75,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	provider := &summaryRetryProvider{content: "summary"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+	t.Cleanup(al.Close)
+
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	history := []providers.Message{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "q3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	defaultAgent.Sessions.SetHistory("session-short-message-threshold", history)
+
+	err := al.contextManager.Compact(context.Background(), &CompactRequest{
+		SessionKey: "session-short-message-threshold",
+		Reason:     ContextCompressReasonSummarize,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if provider.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", provider.calls)
+	}
+	newHistory := defaultAgent.Sessions.GetHistory("session-short-message-threshold")
+	if len(newHistory) != len(history) {
+		t.Fatalf("expected unchanged history, got %d messages (was %d)", len(newHistory), len(history))
+	}
+}
 func TestLegacyCompact_PostTurn_LLMFailurePreservesHistory(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
