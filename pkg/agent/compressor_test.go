@@ -11,20 +11,22 @@ import (
 )
 
 type summaryRetryProvider struct {
-	failures int
-	calls    int
-	err      error
-	content  string
+	failures  int
+	calls     int
+	err       error
+	content   string
+	lastModel string
 }
 
 func (p *summaryRetryProvider) Chat(
 	_ context.Context,
 	_ []providers.Message,
 	_ []providers.ToolDefinition,
-	_ string,
+	model string,
 	_ map[string]any,
 ) (*providers.LLMResponse, error) {
 	p.calls++
+	p.lastModel = model
 	if p.calls <= p.failures {
 		if p.err != nil {
 			return nil, p.err
@@ -64,6 +66,24 @@ func TestSummarizeWithRetryRecoversAfterProviderErrors(t *testing.T) {
 	}
 }
 
+func TestSummarizeWithRetryUsesResolvedCandidateModel(t *testing.T) {
+	withFastSummaryRetries(t)
+	cfg := testConfig(t)
+	cfg.Agents.Defaults.ModelName = "gemma-4-31b-it gouter"
+	provider := &summaryRetryProvider{content: "resolved summary"}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(al.Close)
+	agent := al.registry.GetDefaultAgent()
+	agent.Candidates = []providers.FallbackCandidate{{Provider: "openai", Model: "gemma-4-31b-it"}}
+
+	got := al.summarizeWithRetry(context.Background(), agent, "summarize this", 256)
+	if got != "resolved summary" {
+		t.Fatalf("summary = %q, want resolved summary", got)
+	}
+	if provider.lastModel != "gemma-4-31b-it" {
+		t.Fatalf("model = %q, want resolved candidate model", provider.lastModel)
+	}
+}
 func TestSummarizeWithRetryUsesThirtyAttemptsBeforeGivingUp(t *testing.T) {
 	withFastSummaryRetries(t)
 	cfg := testConfig(t)

@@ -128,21 +128,10 @@ func (m *legacyContextManager) retryLLMCall(
 	var err error
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		m.al.activeRequests.Add(1)
-		resp, err = func() (*providers.LLMResponse, error) {
-			defer m.al.activeRequests.Done()
-			return agent.Provider.Chat(
-				ctx,
-				[]providers.Message{{Role: "user", Content: prompt}},
-				nil,
-				agent.Model,
-				map[string]any{
-					"max_tokens":       agent.MaxTokens,
-					"temperature":      llmTemperature,
-					"prompt_cache_key": agent.ID,
-				},
-			)
-		}()
+		resp, err = m.al.callSummaryLLM(ctx, agent, prompt, agent.MaxTokens, map[string]any{
+			"temperature":      llmTemperature,
+			"prompt_cache_key": agent.ID,
+		})
 
 		if err == nil && resp != nil && resp.Content != "" {
 			return resp, nil

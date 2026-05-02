@@ -267,15 +267,7 @@ func (al *AgentLoop) summarizeWithRetry(
 	maxTokens int,
 ) string {
 	for attempt := 0; attempt < summaryLLMRetryLimit; attempt++ {
-		resp, err := agent.Provider.Chat(ctx,
-			[]providers.Message{{Role: "user", Content: prompt}},
-			nil,
-			agent.Model,
-			map[string]any{
-				"max_tokens":  maxTokens,
-				"temperature": 0.3,
-			},
-		)
+		resp, err := al.callSummaryLLM(ctx, agent, prompt, maxTokens, nil)
 		if err == nil && resp != nil && strings.TrimSpace(resp.Content) != "" {
 			return strings.TrimSpace(resp.Content)
 		}
@@ -284,6 +276,45 @@ func (al *AgentLoop) summarizeWithRetry(
 		}
 	}
 	return ""
+}
+
+func (al *AgentLoop) callSummaryLLM(
+	ctx context.Context,
+	agent *AgentInstance,
+	prompt string,
+	maxTokens int,
+	extraOptions map[string]any,
+) (*providers.LLMResponse, error) {
+	if agent == nil || agent.Provider == nil {
+		return nil, fmt.Errorf("summary LLM unavailable")
+	}
+
+	options := map[string]any{
+		"max_tokens":  maxTokens,
+		"temperature": 0.3,
+	}
+	for k, v := range extraOptions {
+		options[k] = v
+	}
+
+	messages := []providers.Message{{Role: "user", Content: prompt}}
+	run := func(ctx context.Context, model string) (*providers.LLMResponse, error) {
+		al.activeRequests.Add(1)
+		defer al.activeRequests.Done()
+		return agent.Provider.Chat(ctx, messages, nil, model, options)
+	}
+
+	if len(agent.Candidates) > 1 && al.fallback != nil {
+		result, err := al.fallback.Execute(ctx, agent.Candidates, func(ctx context.Context, _, model string) (*providers.LLMResponse, error) {
+			return run(ctx, model)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return result.Response, nil
+	}
+
+	return run(ctx, resolvedCandidateModel(agent.Candidates, agent.Model))
 }
 
 // estimateMessageTokensForBudget estimates tokens for a single message.
