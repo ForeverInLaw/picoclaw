@@ -73,13 +73,10 @@ func DefaultConfig() *Config {
 					Enabled: true,
 					Text:    FlexibleStringSlice{"Thinking... 💭"},
 				},
-				Inline: TelegramInlineConfig{
-					Enabled:          false,
-					ResultTitle:      "Сгенерировать ответ",
-					PlaceholderText:  "Думаю... 💭",
-					ButtonLabel:      "📦",
-					CacheTimeSeconds: 0,
-					IsPersonal:       true,
+				Guest: TelegramGuestConfig{
+					Enabled:         false,
+					ResultTitle:     "Сгенерировать ответ",
+					PlaceholderText: "Думаю... 💭",
 				},
 				Batching: TelegramBatchingConfig{
 					Enabled:  true,

@@ -452,7 +452,7 @@ func TestHandleMessage_GroupMentionReply_IncludesQuotedContext(t *testing.T) {
 		if !ok {
 			t.Fatal("expected inbound message to be forwarded")
 		}
-		wantContent := "[quoted message from alice]: исходное сообщение\n\nсогласен"
+		wantContent := "[quoted user message from alice]: исходное сообщение\n\nсогласен"
 		if inbound.Content != wantContent {
 			t.Fatalf("content=%q want=%q", inbound.Content, wantContent)
 		}

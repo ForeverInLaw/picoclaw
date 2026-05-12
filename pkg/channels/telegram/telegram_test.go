@@ -519,7 +519,7 @@ func TestEditMessage_InlineChatIDUsesInlineMessageAPI(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	err := ch.EditMessage(context.Background(), telegramInlineChatID("inline-msg-42"), "not-a-number", "hello **inline**")
+	err := ch.EditMessage(context.Background(), telegramGuestChatID("inline-msg-42"), "not-a-number", "hello **inline**")
 	require.NoError(t, err)
 	require.Len(t, caller.calls, 1)
 	assert.Contains(t, caller.calls[0].URL, "editMessageText")
@@ -535,7 +535,7 @@ func TestEditMessage_InlineChatIDUsesInlineMessageAPI(t *testing.T) {
 	assert.Equal(t, "hello <b>inline</b>", params["text"])
 }
 
-func TestBeginStream_InlineChatIDReturnsInlineStreamer(t *testing.T) {
+func TestBeginStream_GuestChatIDReturnsGuestStreamer(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			return &ta.Response{Ok: true, Result: []byte("true")}, nil
@@ -546,15 +546,15 @@ func TestBeginStream_InlineChatIDReturnsInlineStreamer(t *testing.T) {
 	ch.config.Channels.Telegram.Streaming.ThrottleSeconds = 7
 	ch.config.Channels.Telegram.Streaming.MinGrowthChars = 321
 
-	streamer, err := ch.BeginStream(context.Background(), telegramInlineChatID("inline-msg-99"))
+	streamer, err := ch.BeginStream(context.Background(), telegramGuestChatID("inline-msg-99"))
 	require.NoError(t, err)
 
-	inlineStreamer, ok := streamer.(*telegramInlineStreamer)
-	require.True(t, ok, "expected inline streamer, got %T", streamer)
-	assert.Equal(t, "inline-msg-99", inlineStreamer.inlineMessageID)
-	assert.Equal(t, 7*time.Second, inlineStreamer.throttleInterval)
-	assert.Equal(t, 321, inlineStreamer.minGrowth)
-	assert.Same(t, ch, inlineStreamer.channel)
+	guestStreamer, ok := streamer.(*telegramGuestStreamer)
+	require.True(t, ok, "expected guest streamer, got %T", streamer)
+	assert.Equal(t, "inline-msg-99", guestStreamer.inlineMessageID)
+	assert.Equal(t, 7*time.Second, guestStreamer.throttleInterval)
+	assert.Equal(t, 321, guestStreamer.minGrowth)
+	assert.Same(t, ch, guestStreamer.channel)
 }
 
 func TestSend_WithForumThreadID(t *testing.T) {

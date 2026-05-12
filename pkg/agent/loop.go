@@ -650,7 +650,7 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 		return
 	}
 
-	if isInlineChatTarget(channel, chatID) && al.channelManager != nil {
+	if isGuestChatTarget(channel, chatID) && al.channelManager != nil {
 		if ch, ok := al.channelManager.GetChannel(channel); ok {
 			if editor, ok := ch.(channels.MessageEditor); ok {
 				if err := editor.EditMessage(ctx, chatID, "", response); err == nil {
@@ -695,7 +695,7 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 	if msg.Channel == "system" {
 		return nil, nil
 	}
-	if isInlineMessage(msg) {
+	if isGuestMessage(msg) {
 		return nil, nil
 	}
 
@@ -1463,7 +1463,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return "", routeErr
 	}
 
-	inlineMode := isInlineMessage(msg)
+	inlineMode := isGuestMessage(msg)
 	if !inlineMode {
 		observeChatMemoryInbound(ctx, agent, msg)
 	}
@@ -1490,7 +1490,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		PeerKind:            strings.TrimSpace(msg.Peer.Kind),
 		ChatLabel:           strings.TrimSpace(msg.Metadata["chat_label"]),
 		Language:            detectMessageLanguageHint(msg.Content),
-		ResponseQuote:       inlineResponseQuote(msg),
+		ResponseQuote:       guestResponseQuote(msg),
 		Sender:              msg.Sender,
 		SenderID:            msg.SenderID,
 		SenderDisplayName:   msg.Sender.DisplayName,
@@ -1505,7 +1505,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		DisableToolFeedback: inlineMode,
 	}
 	if inlineMode {
-		opts.AllowedTools = inlineToolAllowlist()
+		opts.AllowedTools = guestToolAllowlist()
 	}
 
 	// context-dependent commands check their own Runtime fields and report
@@ -1682,7 +1682,7 @@ func (al *AgentLoop) runAgentLoop(
 	// Record last channel for heartbeat notifications (skip internal channels and cli)
 	if opts.Channel != "" && opts.ChatID != "" &&
 		!constants.IsInternalChannel(opts.Channel) &&
-		!isInlineChatTarget(opts.Channel, opts.ChatID) {
+		!isGuestChatTarget(opts.Channel, opts.ChatID) {
 		channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
 		if err := al.RecordLastChannel(channelKey); err != nil {
 			logger.WarnCF(
@@ -2134,7 +2134,7 @@ turnLoop:
 
 			var streamer bus.Streamer
 			var streamUpdater *partialReplyUpdater
-			inlineTarget := isInlineChatTarget(ts.channel, ts.chatID)
+			inlineTarget := isGuestChatTarget(ts.channel, ts.chatID)
 			streamingEnabled := providerCanStream &&
 				streamProvider != nil &&
 				len(activeCandidates) <= 1 &&
@@ -2168,7 +2168,7 @@ turnLoop:
 								},
 							)
 							if visibleSnapshot, ok := streamFilter.Update(accumulated); ok {
-								content := formatInlineResponse(ts.opts.ResponseQuote, visibleSnapshot)
+								content := formatGuestResponse(ts.opts.ResponseQuote, visibleSnapshot)
 								offerStreamingContent(ctx, streamer, streamUpdater, content)
 							}
 						},
@@ -2181,7 +2181,7 @@ turnLoop:
 						cancelStreamingContent(ctx, streamer)
 					}
 					if len(response.ToolCalls) == 0 && response.Content != "" {
-						if err := finalizeStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, streamFilter.Final(response.Content))); err != nil {
+						if err := finalizeStreamingContent(ctx, streamer, streamUpdater, formatGuestResponse(ts.opts.ResponseQuote, streamFilter.Final(response.Content))); err != nil {
 							logger.WarnCF("agent", "Stream finalize failed", map[string]any{
 								"error": err.Error(),
 							})
@@ -2461,7 +2461,7 @@ turnLoop:
 						"retry_count": emptyDirectResponseRetries,
 					})
 			}
-			finalContent = formatInlineResponse(ts.opts.ResponseQuote, responseContent)
+			finalContent = formatGuestResponse(ts.opts.ResponseQuote, responseContent)
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 				map[string]any{
 					"agent_id":      ts.agent.ID,

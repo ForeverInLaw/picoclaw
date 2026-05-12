@@ -366,7 +366,7 @@ func TestProcessMessage_TelegramStreamWaitsForThinkClose(t *testing.T) {
 		}
 	}
 }
-func TestProcessMessage_InlineUsesStreamerEvenWithoutHistory(t *testing.T) {
+func TestProcessMessage_GuestUsesStreamerEvenWithoutHistory(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -393,37 +393,37 @@ func TestProcessMessage_InlineUsesStreamerEvenWithoutHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create channel manager: %v", err)
 	}
-	inlineChannel := &inlineRecordingChannel{}
-	chManager.RegisterChannel("telegram", inlineChannel)
+	guestChannel := &inlineRecordingChannel{}
+	chManager.RegisterChannel("telegram", guestChannel)
 	al.SetChannelManager(chManager)
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
-		ChatID:  "inline:inline-msg-1",
+		ChatID:  "guest:inline-msg-1",
 		Content: "summarize this",
 		Metadata: map[string]string{
-			telegramInlineMetadataKey: "true",
-			telegramInlineQueryKey:    "summarize this",
+			telegramGuestMetadataKey: "true",
+			telegramGuestQueryKey:    "summarize this",
 		},
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
 	}
-	if response != formatInlineResponse("summarize this", "Mock response") {
+	if response != formatGuestResponse("summarize this", "Mock response") {
 		t.Fatalf("processMessage() response = %q", response)
 	}
-	if len(inlineChannel.streamUpdates) == 0 {
-		t.Fatal("expected inline stream updates to be sent")
+	if len(guestChannel.streamUpdates) == 0 {
+		t.Fatal("expected guest stream updates to be sent")
 	}
-	if !slices.Equal(inlineChannel.streamFinal, []string{formatInlineResponse("summarize this", "Mock response")}) {
-		t.Fatalf("stream final = %#v", inlineChannel.streamFinal)
+	if !slices.Equal(guestChannel.streamFinal, []string{formatGuestResponse("summarize this", "Mock response")}) {
+		t.Fatalf("stream final = %#v", guestChannel.streamFinal)
 	}
-	if len(inlineChannel.sent) != 0 {
-		t.Fatalf("expected no fallback send for inline stream, got %#v", inlineChannel.sent)
+	if len(guestChannel.sent) != 0 {
+		t.Fatalf("expected no fallback send for guest stream, got %#v", guestChannel.sent)
 	}
 }
 
-func TestPublishResponseIfNeeded_InlineTelegramUsesEditMessage(t *testing.T) {
+func TestPublishResponseIfNeeded_GuestTelegramUsesEditMessage(t *testing.T) {
 	al := &AgentLoop{}
 	msgBus := bus.NewMessageBus()
 	chManager, err := channels.NewManager(&config.Config{}, msgBus, nil)
@@ -434,9 +434,9 @@ func TestPublishResponseIfNeeded_InlineTelegramUsesEditMessage(t *testing.T) {
 	chManager.RegisterChannel("telegram", inlineChannel)
 	al.SetChannelManager(chManager)
 
-	al.publishResponseIfNeeded(context.Background(), "telegram", "inline:inline-msg-2", "final answer")
+	al.publishResponseIfNeeded(context.Background(), "telegram", "guest:inline-msg-2", "final answer")
 
-	if !slices.Equal(inlineChannel.edited, []string{"inline:inline-msg-2||final answer"}) {
+	if !slices.Equal(inlineChannel.edited, []string{"guest:inline-msg-2||final answer"}) {
 		t.Fatalf("edited = %#v", inlineChannel.edited)
 	}
 	if len(inlineChannel.sent) != 0 {

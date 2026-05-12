@@ -170,14 +170,14 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
-	bh.HandleInlineQuery(func(ctx *th.Context, query telego.InlineQuery) error {
-		return c.handleInlineQuery(ctx, query)
-	})
-	bh.HandleChosenInlineResult(func(ctx *th.Context, result telego.ChosenInlineResult) error {
-		return c.handleChosenInlineResult(ctx, result)
+	bh.HandleGuestMessage(func(ctx *th.Context, message telego.Message) error {
+		return c.handleGuestMessage(ctx, message)
 	})
 	bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
-		return c.handleInlineCallbackQuery(ctx, query)
+		if strings.HasPrefix(query.Data, sherlockCallbackPrefix+":") {
+			return c.handleSherlockCallbackQuery(ctx, query)
+		}
+		return nil
 	})
 
 	c.SetRunning(true)
@@ -500,8 +500,8 @@ func (c *TelegramChannel) StartTyping(ctx context.Context, chatID string) (func(
 
 // EditMessage implements channels.MessageEditor.
 func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messageID string, content string) error {
-	if inlineMessageID, ok := telegramInlineMessageID(chatID); ok {
-		return c.editInlineMessageText(ctx, inlineMessageID, content)
+	if inlineMessageID, ok := telegramGuestInlineMessageID(chatID); ok {
+		return c.editGuestInlineMessageText(ctx, inlineMessageID, content)
 	}
 
 	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
@@ -1123,8 +1123,8 @@ func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (chann
 		return nil, fmt.Errorf("streaming disabled in config")
 	}
 
-	if isTelegramInlineChatID(chatID) {
-		return c.beginInlineStream(chatID)
+	if isTelegramGuestChatID(chatID) {
+		return c.beginGuestStream(chatID)
 	}
 
 	cid, threadID, err := parseTelegramChatID(chatID)

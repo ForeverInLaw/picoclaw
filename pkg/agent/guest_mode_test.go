@@ -6,7 +6,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
-func TestIsInlineMessage_DetectsMetadataAndTransport(t *testing.T) {
+func TestIsGuestMessage_DetectsMetadataAndTransport(t *testing.T) {
 	tests := []struct {
 		name string
 		msg  bus.InboundMessage
@@ -17,15 +17,15 @@ func TestIsInlineMessage_DetectsMetadataAndTransport(t *testing.T) {
 			msg: bus.InboundMessage{
 				Channel:  "telegram",
 				ChatID:   "123",
-				Metadata: map[string]string{telegramInlineMetadataKey: "true"},
+				Metadata: map[string]string{telegramGuestMetadataKey: "true"},
 			},
 			want: true,
 		},
 		{
-			name: "inline transport target",
+			name: "guest transport target",
 			msg: bus.InboundMessage{
 				Channel: "telegram",
-				ChatID:  "inline:abc",
+				ChatID:  "guest:abc",
 			},
 			want: true,
 		},
@@ -41,15 +41,15 @@ func TestIsInlineMessage_DetectsMetadataAndTransport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isInlineMessage(tt.msg); got != tt.want {
-				t.Fatalf("isInlineMessage() = %v, want %v", got, tt.want)
+			if got := isGuestMessage(tt.msg); got != tt.want {
+				t.Fatalf("isGuestMessage() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestInlineToolAllowlist_DefaultsToSafeReadOnlyTools(t *testing.T) {
-	got := newToolAllowlist(inlineToolAllowlist())
+func TestGuestToolAllowlist_DefaultsToSafeReadOnlyTools(t *testing.T) {
+	got := newToolAllowlist(guestToolAllowlist())
 	for _, toolName := range []string{"web_search", "web_fetch", "fact_check", "exec", "read_file", "write_file", "list_dir", "cron"} {
 		if !got.Allows(toolName) {
 			t.Fatalf("expected %q to be allowed", toolName)
@@ -63,21 +63,21 @@ func TestInlineToolAllowlist_DefaultsToSafeReadOnlyTools(t *testing.T) {
 	}
 }
 
-func TestInlineResponseQuote_UsesMetadataFallbackAndFormatting(t *testing.T) {
+func TestGuestResponseQuote_UsesMetadataFallbackAndFormatting(t *testing.T) {
 	msg := bus.InboundMessage{
 		Channel:  "telegram",
-		ChatID:   "inline:abc",
+		ChatID:   "guest:abc",
 		Content:  "fallback query",
-		Metadata: map[string]string{telegramInlineMetadataKey: "true", telegramInlineQueryKey: "quoted query"},
+		Metadata: map[string]string{telegramGuestMetadataKey: "true", telegramGuestQueryKey: "quoted query"},
 	}
 
-	if got := inlineResponseQuote(msg); got != "quoted query" {
-		t.Fatalf("inlineResponseQuote() = %q", got)
+	if got := guestResponseQuote(msg); got != "quoted query" {
+		t.Fatalf("guestResponseQuote() = %q", got)
 	}
 
-	formatted := formatInlineResponse(inlineResponseQuote(msg), "Думаю...")
+	formatted := formatGuestResponse(guestResponseQuote(msg), "Думаю...")
 	want := "> quoted query\n\nДумаю..."
 	if formatted != want {
-		t.Fatalf("formatInlineResponse() = %q, want %q", formatted, want)
+		t.Fatalf("formatGuestResponse() = %q, want %q", formatted, want)
 	}
 }
