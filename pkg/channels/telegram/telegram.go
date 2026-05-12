@@ -596,7 +596,12 @@ func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (s
 	}
 
 	// Native streaming placeholder: empty-text sendMessageDraft.
-	if c.config.Channels.Telegram.Streaming.Enabled {
+	// Per Bot API spec sendMessageDraft is private-chat only — group/supergroup/
+	// channel IDs are negative and return TEXTDRAFT_PEER_INVALID, so we skip
+	// the draft path for them and fall back to the legacy text placeholder
+	// (which is later updated via editMessageText by the agent's
+	// partialReplyUpdater path).
+	if c.config.Channels.Telegram.Streaming.Enabled && cid > 0 {
 		draftID := cryptoRandInt()
 		if err := c.bot.SendMessageDraft(ctx, &telego.SendMessageDraftParams{
 			ChatID:          cid,
@@ -1113,6 +1118,13 @@ func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (chann
 	cid, threadID, err := parseTelegramChatID(chatID)
 	if err != nil {
 		return nil, err
+	}
+
+	// sendMessageDraft is private-chat only. Group/supergroup/channel IDs are
+	// negative — refuse the native streamer so the agent falls back to the
+	// partialReplyUpdater path (which edits the text placeholder).
+	if cid < 0 {
+		return nil, fmt.Errorf("sendMessageDraft not supported in non-private chat %d", cid)
 	}
 
 	var draftID int
