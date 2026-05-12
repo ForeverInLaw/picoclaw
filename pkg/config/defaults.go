@@ -85,7 +85,7 @@ func DefaultConfig() *Config {
 					Enabled:  true,
 					WindowMS: 2000,
 				},
-				Streaming:     StreamingConfig{Enabled: true, ThrottleSeconds: 3, MinGrowthChars: 200},
+				Streaming:     StreamingConfig{Enabled: true, ThrottleSeconds: 1, MinGrowthChars: 50},
 				UseMarkdownV2: false,
 			},
 			Feishu: FeishuConfig{

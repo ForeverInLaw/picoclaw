@@ -55,9 +55,24 @@ type TelegramChannel struct {
 	batchMu   sync.Mutex
 	batches   map[string]*telegramInboundBatch
 
+	// streamDrafts tracks active native sendMessageDraft sessions keyed by chatID.
+	// Shared between SendPlaceholder (initiates the native "Thinking…" draft) and
+	// BeginStream (reuses the same draft_id so updates animate the placeholder).
+	streamDrafts sync.Map // chatID string -> *streamDraftState
+
 	registerFunc     func(context.Context, []commands.Definition) error
 	commandRegCancel context.CancelFunc
 	sherlock         *sherlock.Store
+}
+
+// streamDraftState is per-chat state for a Bot API 9.3+ ephemeral message draft.
+// The draft auto-expires server-side after 30s, so a keepalive goroutine re-pings
+// it every 25s while no streamer is actively driving updates.
+type streamDraftState struct {
+	draftID         int
+	threadID        int
+	mu              sync.Mutex
+	keepaliveCancel context.CancelFunc
 }
 
 func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChannel, error) {
@@ -294,6 +309,9 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
+
+	// Stop any keepalive on a leftover draft so the real sendMessage supersedes it cleanly.
+	c.clearDraftState(msg.ChatID)
 
 	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
 
@@ -557,29 +575,108 @@ func (c *TelegramChannel) DeleteMessage(ctx context.Context, chatID string, mess
 }
 
 // SendPlaceholder implements channels.PlaceholderCapable.
-// It sends a placeholder message (e.g. "Thinking... 💭") that will later be
-// edited to the actual response via EditMessage (channels.MessageEditor).
+//
+// When streaming is enabled (Bot API 9.3+ sendMessageDraft), a native ephemeral
+// draft with empty text is sent — the Telegram client renders this as a native
+// animated "Thinking…" placeholder. BeginStream later reuses the same draft_id
+// so token updates animate the existing placeholder seamlessly.
+//
+// When streaming is disabled or the draft API call fails, the legacy behavior
+// is used: a real text message is sent and its message_id is returned for
+// later editing via EditMessage.
 func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (string, error) {
 	phCfg := c.config.Channels.Telegram.Placeholder
 	if !phCfg.Enabled {
 		return "", nil
 	}
 
-	text := phCfg.GetRandomText()
-
 	cid, threadID, err := parseTelegramChatID(chatID)
 	if err != nil {
 		return "", err
 	}
 
+	// Native streaming placeholder: empty-text sendMessageDraft.
+	if c.config.Channels.Telegram.Streaming.Enabled {
+		draftID := cryptoRandInt()
+		if err := c.bot.SendMessageDraft(ctx, &telego.SendMessageDraftParams{
+			ChatID:          cid,
+			MessageThreadID: threadID,
+			DraftID:         draftID,
+			Text:            "", // → native "Thinking…" animation on Telegram clients
+		}); err != nil {
+			logger.WarnCF("telegram", "native draft placeholder failed, falling back to text", map[string]any{
+				"chat_id": chatID,
+				"error":   err.Error(),
+			})
+			return c.sendTextPlaceholder(ctx, cid, threadID, phCfg.GetRandomText())
+		}
+
+		state := &streamDraftState{draftID: draftID, threadID: threadID}
+		keepaliveCtx, cancel := context.WithCancel(c.ctx)
+		state.keepaliveCancel = cancel
+		c.streamDrafts.Store(chatID, state)
+		go c.draftKeepalive(keepaliveCtx, cid, threadID, draftID)
+
+		// Empty placeholderID — manager.preSend will not attempt to edit a real
+		// message; the streamer's Finalize delivers the persistent sendMessage,
+		// or Send (outbound non-stream path) clears the draft before sending.
+		return "", nil
+	}
+
+	return c.sendTextPlaceholder(ctx, cid, threadID, phCfg.GetRandomText())
+}
+
+// sendTextPlaceholder is the legacy non-streaming placeholder: sends a real text
+// message and returns its message_id so it can later be edited via EditMessage.
+func (c *TelegramChannel) sendTextPlaceholder(ctx context.Context, cid int64, threadID int, text string) (string, error) {
 	phMsg := tu.Message(tu.ID(cid), text)
 	phMsg.MessageThreadID = threadID
 	pMsg, err := c.bot.SendMessage(ctx, phMsg)
 	if err != nil {
 		return "", err
 	}
-
 	return fmt.Sprintf("%d", pMsg.MessageID), nil
+}
+
+// clearDraftState stops any keepalive on a tracked draft and removes the state.
+// Safe to call when no draft is active for the given chatID (no-op).
+func (c *TelegramChannel) clearDraftState(chatID string) {
+	if v, loaded := c.streamDrafts.LoadAndDelete(chatID); loaded {
+		if state, ok := v.(*streamDraftState); ok {
+			state.mu.Lock()
+			if state.keepaliveCancel != nil {
+				state.keepaliveCancel()
+				state.keepaliveCancel = nil
+			}
+			state.mu.Unlock()
+		}
+	}
+}
+
+// draftKeepalive re-pings an empty-text sendMessageDraft every 25s so the native
+// "Thinking…" placeholder does not auto-expire at the 30s server-side TTL while
+// the agent is still working but has not yet produced streaming tokens.
+func (c *TelegramChannel) draftKeepalive(ctx context.Context, cid int64, threadID, draftID int) {
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.bot.SendMessageDraft(ctx, &telego.SendMessageDraftParams{
+				ChatID:          cid,
+				MessageThreadID: threadID,
+				DraftID:         draftID,
+				Text:            "",
+			}); err != nil {
+				logger.DebugCF("telegram", "draft keepalive failed", map[string]any{
+					"error": err.Error(),
+				})
+				return
+			}
+		}
+	}
 }
 
 // SendMedia implements the channels.MediaSender interface.
@@ -999,6 +1096,11 @@ func (c *TelegramChannel) stripBotMention(content string) string {
 }
 
 // BeginStream implements channels.StreamingCapable.
+//
+// If SendPlaceholder previously initialized a native draft for this chat, the
+// same draft_id is reused so token updates animate the existing "Thinking…"
+// placeholder seamlessly. Otherwise a fresh draft_id is allocated and the first
+// Update creates the draft on the server side.
 func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (channels.Streamer, error) {
 	if !c.config.Channels.Telegram.Streaming.Enabled {
 		return nil, fmt.Errorf("streaming disabled in config")
@@ -1008,27 +1110,50 @@ func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (chann
 		return c.beginInlineStream(chatID)
 	}
 
-	cid, _, err := parseTelegramChatID(chatID)
+	cid, threadID, err := parseTelegramChatID(chatID)
 	if err != nil {
 		return nil, err
 	}
 
+	var draftID int
+	if v, loaded := c.streamDrafts.Load(chatID); loaded {
+		state := v.(*streamDraftState)
+		state.mu.Lock()
+		// Stop keepalive — the streamer will drive updates from here on.
+		if state.keepaliveCancel != nil {
+			state.keepaliveCancel()
+			state.keepaliveCancel = nil
+		}
+		draftID = state.draftID
+		state.mu.Unlock()
+	} else {
+		draftID = cryptoRandInt()
+		c.streamDrafts.Store(chatID, &streamDraftState{draftID: draftID, threadID: threadID})
+	}
+
 	streamCfg := c.config.Channels.Telegram.Streaming
 	return &telegramStreamer{
+		channel:          c,
 		bot:              c.bot,
 		chatID:           cid,
-		draftID:          cryptoRandInt(),
+		chatIDKey:        chatID,
+		threadID:         threadID,
+		draftID:          draftID,
 		throttleInterval: time.Duration(streamCfg.ThrottleSeconds) * time.Second,
 		minGrowth:        streamCfg.MinGrowthChars,
 	}, nil
 }
 
-// telegramStreamer streams partial LLM output via Telegram's sendMessageDraft API.
-// On first API error (e.g. bot lacks forum mode), it silently degrades: Update
-// becomes a no-op, while Finalize still delivers the final message.
+// telegramStreamer streams partial LLM output via Bot API 9.3+ sendMessageDraft.
+// Per Bot API 9.5 (2026-03-01) the method is allowed for all bots and works in
+// private, group and supergroup chats. On error, Update degrades silently
+// (no-op thereafter) so Finalize still delivers the final persistent sendMessage.
 type telegramStreamer struct {
+	channel          *TelegramChannel
 	bot              *telego.Bot
 	chatID           int64
+	chatIDKey        string
+	threadID         int
 	draftID          int
 	throttleInterval time.Duration
 	minGrowth        int
@@ -1056,13 +1181,13 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 	htmlContent := markdownToTelegramHTML(content)
 
 	err := s.bot.SendMessageDraft(ctx, &telego.SendMessageDraftParams{
-		ChatID:    s.chatID,
-		DraftID:   s.draftID,
-		Text:      htmlContent,
-		ParseMode: telego.ModeHTML,
+		ChatID:          s.chatID,
+		MessageThreadID: s.threadID,
+		DraftID:         s.draftID,
+		Text:            htmlContent,
+		ParseMode:       telego.ModeHTML,
 	})
 	if err != nil {
-		// First error → degrade silently (e.g. no forum mode)
 		logger.WarnCF("telegram", "sendMessageDraft failed, disabling streaming", map[string]any{
 			"error": err.Error(),
 		})
@@ -1076,8 +1201,11 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 }
 
 func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
+	// Persist message via sendMessage; the draft is ephemeral (30s TTL) and
+	// must be replaced by a real message to remain in the user's chat history.
 	htmlContent := markdownToTelegramHTML(content)
 	tgMsg := tu.Message(tu.ID(s.chatID), htmlContent)
+	tgMsg.MessageThreadID = s.threadID
 	tgMsg.ParseMode = telego.ModeHTML
 
 	if _, err := s.bot.SendMessage(ctx, tgMsg); err != nil {
@@ -1089,14 +1217,17 @@ func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
 				"error":   err.Error(),
 				"len":     len(content),
 			})
+			s.channel.clearDraftState(s.chatIDKey)
 			return fmt.Errorf("telegram finalize: %w", err)
 		}
 	}
+	s.channel.clearDraftState(s.chatIDKey)
 	return nil
 }
 
 func (s *telegramStreamer) Cancel(ctx context.Context) {
-	// Draft auto-expires on Telegram's side; nothing to clean up.
+	// Stop keepalive; draft auto-expires server-side.
+	s.channel.clearDraftState(s.chatIDKey)
 }
 
 // cryptoRandInt returns a non-zero random int using crypto/rand.
