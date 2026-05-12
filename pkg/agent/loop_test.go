@@ -354,12 +354,16 @@ func TestProcessMessage_TelegramStreamWaitsForThinkClose(t *testing.T) {
 	if response != "Visible answer" {
 		t.Fatalf("response = %q, want Visible answer", response)
 	}
-	wantEdits := []string{"12345|placeholder-1|Visible answer"}
-	if !slices.Equal(telegramChannel.edited, wantEdits) {
-		t.Fatalf("placeholder edits = %#v, want %#v", telegramChannel.edited, wantEdits)
+	// Telegram now uses the native channel streamer (Bot API sendMessageDraft)
+	// instead of editing a placeholder message. Visible content reaches the
+	// streamer; <think>...</think> internals are filtered by visibleStreamFilter.
+	if len(telegramChannel.streamFinal) != 1 || telegramChannel.streamFinal[0] != "Visible answer" {
+		t.Fatalf("stream final = %#v, want [\"Visible answer\"]", telegramChannel.streamFinal)
 	}
-	if len(telegramChannel.streamUpdates) != 0 || len(telegramChannel.streamFinal) != 0 {
-		t.Fatalf("ordinary telegram should use placeholder updater, got stream updates=%#v final=%#v", telegramChannel.streamUpdates, telegramChannel.streamFinal)
+	for _, u := range telegramChannel.streamUpdates {
+		if strings.Contains(u, "<think>") || strings.Contains(u, "</think>") {
+			t.Fatalf("stream update leaked think tag: %q", u)
+		}
 	}
 }
 func TestProcessMessage_InlineUsesStreamerEvenWithoutHistory(t *testing.T) {

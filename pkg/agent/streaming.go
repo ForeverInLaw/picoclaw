@@ -140,18 +140,20 @@ func selectStreamingTargets(
 	manager placeholderUpdater,
 	channel, chatID string,
 ) (streamingSink, *partialReplyUpdater) {
+	// Prefer native channel streaming (e.g. Telegram Bot API sendMessageDraft)
+	// when the channel exposes a streamer — animated drafts beat repeated
+	// editMessageText calls in both UX and rate-limit safety.
+	if streamBus != nil {
+		if streamer, ok := streamBus.GetStreamer(ctx, channel, chatID); ok {
+			return streamer, nil
+		}
+	}
+
 	updater := newPartialReplyUpdater(manager, channel, chatID)
 	if channel == "telegram" && strings.HasPrefix(strings.TrimSpace(chatID), "inline:") {
 		updater = nil
 	}
-	if updater != nil {
-		return nil, updater
-	}
-	if streamBus == nil {
-		return nil, nil
-	}
-	streamer, _ := streamBus.GetStreamer(ctx, channel, chatID)
-	return streamer, nil
+	return nil, updater
 }
 
 func offerStreamingContent(ctx context.Context, streamer streamingSink, updater *partialReplyUpdater, content string) {

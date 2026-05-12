@@ -173,7 +173,11 @@ func TestOfferStreamingContent_PrefersStreamerOverPlaceholder(t *testing.T) {
 	}
 }
 
-func TestSelectStreamingTargets_PrefersPlaceholderUpdaterForTelegram(t *testing.T) {
+func TestSelectStreamingTargets_PrefersNativeStreamerForTelegram(t *testing.T) {
+	// Telegram now exposes a native streamer (Bot API sendMessageDraft), which
+	// gives animated drafts and avoids edit-rate limits. The legacy placeholder
+	// updater path is retained only as a fallback when the channel returns no
+	// streamer (e.g. streaming disabled in channel config).
 	streamer := &fakeStreamingSink{}
 	selectedStreamer, updater := selectStreamingTargets(
 		context.Background(),
@@ -183,11 +187,28 @@ func TestSelectStreamingTargets_PrefersPlaceholderUpdaterForTelegram(t *testing.
 		"123",
 	)
 
+	if selectedStreamer == nil {
+		t.Fatal("expected telegram to use native channel streamer")
+	}
+	if updater != nil {
+		t.Fatal("expected no placeholder updater when native streamer is available")
+	}
+}
+
+func TestSelectStreamingTargets_FallsBackToUpdaterWhenNoStreamer(t *testing.T) {
+	selectedStreamer, updater := selectStreamingTargets(
+		context.Background(),
+		&fakeStreamDelegate{streamer: nil}, // channel does not expose a streamer
+		&fakePlaceholderUpdater{},
+		"telegram",
+		"123",
+	)
+
 	if selectedStreamer != nil {
-		t.Fatal("expected telegram to prefer placeholder updater over channel streamer")
+		t.Fatal("expected no streamer when channel did not provide one")
 	}
 	if updater == nil {
-		t.Fatal("expected placeholder updater for telegram")
+		t.Fatal("expected placeholder updater fallback for telegram")
 	}
 }
 
