@@ -71,6 +71,7 @@ type TelegramChannel struct {
 type streamDraftState struct {
 	draftID         int
 	threadID        int
+	placeholderText string
 	mu              sync.Mutex
 	keepaliveCancel context.CancelFunc
 }
@@ -603,11 +604,16 @@ func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (s
 	// partialReplyUpdater path).
 	if c.config.Channels.Telegram.Streaming.Enabled && cid > 0 {
 		draftID := cryptoRandInt()
+		// Use the configured placeholder text (e.g. "💭 Думаю...") so the user
+		// sees something meaningful until the first streaming chunk replaces it.
+		// Pass through markdownToTelegramHTML in case the text contains entities.
+		placeholderText := markdownToTelegramHTML(phCfg.GetRandomText())
 		if err := c.bot.SendMessageDraft(ctx, &telego.SendMessageDraftParams{
 			ChatID:          cid,
 			MessageThreadID: threadID,
 			DraftID:         draftID,
-			Text:            "", // → native "Thinking…" animation on Telegram clients
+			Text:            placeholderText,
+			ParseMode:       telego.ModeHTML,
 		}); err != nil {
 			logger.WarnCF("telegram", "native draft placeholder failed, falling back to text", map[string]any{
 				"chat_id": chatID,
@@ -616,11 +622,15 @@ func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (s
 			return c.sendTextPlaceholder(ctx, cid, threadID, phCfg.GetRandomText())
 		}
 
-		state := &streamDraftState{draftID: draftID, threadID: threadID}
+		state := &streamDraftState{
+			draftID:         draftID,
+			threadID:        threadID,
+			placeholderText: placeholderText,
+		}
 		keepaliveCtx, cancel := context.WithCancel(c.ctx)
 		state.keepaliveCancel = cancel
 		c.streamDrafts.Store(chatID, state)
-		go c.draftKeepalive(keepaliveCtx, cid, threadID, draftID)
+		go c.draftKeepalive(keepaliveCtx, cid, threadID, draftID, placeholderText)
 
 		// Empty placeholderID — manager.preSend will not attempt to edit a real
 		// message; the streamer's Finalize delivers the persistent sendMessage,
@@ -658,10 +668,11 @@ func (c *TelegramChannel) clearDraftState(chatID string) {
 	}
 }
 
-// draftKeepalive re-pings an empty-text sendMessageDraft every 25s so the native
-// "Thinking…" placeholder does not auto-expire at the 30s server-side TTL while
-// the agent is still working but has not yet produced streaming tokens.
-func (c *TelegramChannel) draftKeepalive(ctx context.Context, cid int64, threadID, draftID int) {
+// draftKeepalive re-pings the placeholder-text sendMessageDraft every 25s so the
+// native draft does not auto-expire at the 30s server-side TTL while the agent
+// is still working but has not yet produced streaming tokens. The same draft_id
+// + same text is sent so the Telegram client does not re-animate every tick.
+func (c *TelegramChannel) draftKeepalive(ctx context.Context, cid int64, threadID, draftID int, text string) {
 	ticker := time.NewTicker(25 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -673,7 +684,8 @@ func (c *TelegramChannel) draftKeepalive(ctx context.Context, cid int64, threadI
 				ChatID:          cid,
 				MessageThreadID: threadID,
 				DraftID:         draftID,
-				Text:            "",
+				Text:            text,
+				ParseMode:       telego.ModeHTML,
 			}); err != nil {
 				logger.DebugCF("telegram", "draft keepalive failed", map[string]any{
 					"error": err.Error(),
