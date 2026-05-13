@@ -63,7 +63,7 @@ func TestGuestToolAllowlist_DefaultsToSafeReadOnlyTools(t *testing.T) {
 	}
 }
 
-func TestGuestResponseQuote_UsesMetadataFallbackAndFormatting(t *testing.T) {
+func TestGuestResponseQuote_AlwaysEmpty(t *testing.T) {
 	msg := bus.InboundMessage{
 		Channel:  "telegram",
 		ChatID:   "guest:abc",
@@ -71,13 +71,13 @@ func TestGuestResponseQuote_UsesMetadataFallbackAndFormatting(t *testing.T) {
 		Metadata: map[string]string{telegramGuestMetadataKey: "true", telegramGuestQueryKey: "quoted query"},
 	}
 
-	if got := guestResponseQuote(msg); got != "quoted query" {
-		t.Fatalf("guestResponseQuote() = %q", got)
+	if got := guestResponseQuote(msg); got != "" {
+		t.Fatalf("guestResponseQuote() should be empty in guest mode, got %q", got)
 	}
+}
 
-	formatted := formatGuestResponse(guestResponseQuote(msg), "Думаю...")
-	want := "> quoted query\n\nДумаю..."
-	if formatted != want {
-		t.Fatalf("formatGuestResponse() = %q, want %q", formatted, want)
+func TestFormatGuestResponse_ReturnsBodyUnchanged(t *testing.T) {
+	if got := formatGuestResponse("quoted query", "Думаю..."); got != "Думаю..." {
+		t.Fatalf("formatGuestResponse() = %q, want body unchanged", got)
 	}
 }

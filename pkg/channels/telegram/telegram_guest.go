@@ -63,11 +63,12 @@ func buildTelegramGuestPlaceholderResult(cfg config.TelegramGuestConfig, query s
 	placeholder := normalizeTelegramGuestPlaceholder(cfg.PlaceholderText)
 
 	parseMode := telego.ModeMarkdownV2
-	content := renderTelegramGuestInitialContent(query, placeholder)
+	content := renderTelegramGuestInitialContent(placeholder)
 	if !useMarkdownV2 {
 		parseMode = telego.ModeHTML
-		content = parseContent(renderTelegramGuestInitialContentPlain(query, placeholder), false)
+		content = parseContent(strings.TrimSpace(placeholder), false)
 	}
+	_ = query // user message is already visible in the chat above the bot's reply
 
 	return &telego.InlineQueryResultArticle{
 		Type:  telego.ResultTypeArticle,
@@ -91,45 +92,8 @@ func normalizeTelegramGuestPlaceholder(placeholder string) string {
 	return placeholder
 }
 
-func renderTelegramGuestInitialContent(query, placeholder string) string {
-	query = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(query, "\r\n", "\n"), "\r", "\n"))
-	placeholder = strings.TrimSpace(placeholder)
-
-	quotedLines := make([]string, 0)
-	if query != "" {
-		for _, line := range strings.Split(query, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				quotedLines = append(quotedLines, ">")
-				continue
-			}
-			quotedLines = append(quotedLines, "> "+escapeMarkdownV2(line))
-		}
-	}
-
-	quoted := strings.Join(quotedLines, "\n")
-	body := escapeMarkdownV2(placeholder)
-	switch {
-	case quoted == "":
-		return body
-	case body == "":
-		return quoted
-	default:
-		return quoted + "\n\n" + body
-	}
-}
-
-func renderTelegramGuestInitialContentPlain(query, placeholder string) string {
-	query = strings.TrimSpace(query)
-	placeholder = strings.TrimSpace(placeholder)
-	switch {
-	case query == "":
-		return placeholder
-	case placeholder == "":
-		return query
-	default:
-		return query + "\n\n" + placeholder
-	}
+func renderTelegramGuestInitialContent(placeholder string) string {
+	return escapeMarkdownV2(strings.TrimSpace(placeholder))
 }
 
 func buildTelegramGuestInboundMessage(msg *telego.Message, inlineMessageID string, sender bus.SenderInfo) bus.InboundMessage {

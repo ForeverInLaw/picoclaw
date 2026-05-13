@@ -154,6 +154,27 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 
 	updates, err := c.bot.UpdatesViaLongPolling(c.ctx, &telego.GetUpdatesParams{
 		Timeout: 30,
+		// guest_message is opt-in in Bot API 10.0: omitting allowed_updates falls
+		// back to the historical default (no guest_message). Enumerate everything
+		// we care about explicitly so Guest Mode keeps working alongside the
+		// regular message types.
+		AllowedUpdates: []string{
+			"message",
+			"edited_message",
+			"channel_post",
+			"edited_channel_post",
+			"business_connection",
+			"business_message",
+			"edited_business_message",
+			"deleted_business_messages",
+			"guest_message",
+			"callback_query",
+			"inline_query",
+			"chosen_inline_result",
+			"shipping_query",
+			"pre_checkout_query",
+			"my_chat_member",
+		},
 	})
 	if err != nil {
 		c.cancel()

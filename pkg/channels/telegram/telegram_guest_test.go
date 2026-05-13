@@ -41,7 +41,7 @@ func TestBuildTelegramGuestPlaceholderResult_UsesConfiguredPlaceholder(t *testin
 	if !ok {
 		t.Fatalf("content type = %T, want *telego.InputTextMessageContent", article.InputMessageContent)
 	}
-	if content.MessageText != "> guest query text\n\nThinking\\.\\.\\." {
+	if content.MessageText != "Thinking\\.\\.\\." {
 		t.Fatalf("content.MessageText = %q", content.MessageText)
 	}
 	if content.ParseMode != telego.ModeMarkdownV2 {
@@ -60,9 +60,9 @@ func TestNormalizeTelegramGuestPlaceholder_AddsCloudForLegacyDefault(t *testing.
 	}
 }
 
-func TestRenderTelegramGuestInitialContent_UsesMarkdownV2QuoteBlock(t *testing.T) {
-	got := renderTelegramGuestInitialContent("hello\nworld", "Thinking...")
-	want := "> hello\n> world\n\nThinking\\.\\.\\."
+func TestRenderTelegramGuestInitialContent_EscapesPlaceholderForMarkdownV2(t *testing.T) {
+	got := renderTelegramGuestInitialContent("Thinking...")
+	want := "Thinking\\.\\.\\."
 	if got != want {
 		t.Fatalf("renderTelegramGuestInitialContent() = %q, want %q", got, want)
 	}

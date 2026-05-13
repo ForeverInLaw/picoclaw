@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
-	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 const telegramGuestMetadataKey = "telegram_guest"
@@ -36,18 +35,17 @@ func guestToolAllowlist() []string {
 	return append([]string(nil), guestSafeTools...)
 }
 
-func guestResponseQuote(msg bus.InboundMessage) string {
-	if !isGuestMessage(msg) {
-		return ""
-	}
-
-	query := strings.TrimSpace(msg.Metadata[telegramGuestQueryKey])
-	if query == "" {
-		query = strings.TrimSpace(msg.Content)
-	}
-	return query
+// guestResponseQuote previously returned the user query so the bot could echo it
+// above its answer. In Guest Mode the user's original message is already visible
+// in the chat above the bot's reply, so echoing is redundant and the helper now
+// always returns the empty string. Kept as a stable seam in case future API
+// changes (e.g. cross-chat answers) re-introduce the need.
+func guestResponseQuote(_ bus.InboundMessage) string {
+	return ""
 }
 
-func formatGuestResponse(quote, body string) string {
-	return utils.FormatQuotedMessage(quote, body)
+// formatGuestResponse returns the agent's body unchanged. Quote echoing is no
+// longer needed in Guest Mode (see guestResponseQuote).
+func formatGuestResponse(_ string, body string) string {
+	return body
 }
