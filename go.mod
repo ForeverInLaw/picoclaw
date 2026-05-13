@@ -26,7 +26,7 @@ require (
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/minio/selfupdate v0.6.0
 	github.com/modelcontextprotocol/go-sdk v1.4.1
-	github.com/mymmrac/telego v1.8.0
+	github.com/mymmrac/telego v1.9.0
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/pion/rtp v1.8.7
@@ -135,7 +135,3 @@ require (
 )
 
 replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260319072544-e8e546f5d532
-
-// Local Bot API v10.0 fork — pending PR upstream
-// https://github.com/ForeverInLaw/telego/tree/feature/bot-api-10.0
-replace github.com/mymmrac/telego => C:/Users/nevermore/telego
