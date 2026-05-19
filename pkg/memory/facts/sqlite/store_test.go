@@ -132,6 +132,24 @@ func TestStore_FindByKey_SkipsDeleted(t *testing.T) {
 	}
 }
 
+func TestStore_KeywordSearch(t *testing.T) {
+	s := newStoreT(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	f := sampleFact()
+	f.Value = "грейпфрутовый сок"
+	_, _ = s.Insert(ctx, f)
+
+	hits, err := s.KeywordSearch(ctx, []string{"tg:user:1"}, "грейпфрут", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("want 1 hit, got %d", len(hits))
+	}
+}
+
 func TestStore_KNN(t *testing.T) {
 	s := newStoreT(t)
 	defer s.Close()
