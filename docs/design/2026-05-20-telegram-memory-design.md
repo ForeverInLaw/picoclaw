@@ -40,7 +40,7 @@ This spec adds a Go-native facts memory subsystem inspired by mem0, integrated i
 | Component | Package | Responsibility |
 |-----------|---------|----------------|
 | `FactStore` interface | `pkg/memory/facts` | CRUD, kNN, namespace queries |
-| `SQLiteFactStore` | `pkg/memory/facts/sqlite` | SQLite + `sqlite-vec` backend |
+| `SQLiteFactStore` | `pkg/memory/facts/sqlite` | Pure-Go SQLite (`modernc.org/sqlite`) backend; embeddings as BLOB; brute-force kNN in Go scoped by namespace |
 | `Extractor` | `pkg/memory/facts/extract` | Async LLM pipeline turning message windows into facts |
 | `Embedder` | `pkg/memory/facts/embed` | Wraps provider routing, calls `/embeddings` |
 | `Recaller` | `pkg/memory/facts/recall` | Pre-turn: embed input, kNN, return top-K facts |
@@ -85,14 +85,16 @@ CREATE INDEX idx_facts_ns_decay
   WHERE deleted_at IS NULL;
 ```
 
-### 4.2 `facts_vec` (sqlite-vec virtual table)
+### 4.2 Embeddings (BLOB column on `facts`)
+
+PicoClaw builds with `CGO_ENABLED=0`, which rules out `sqlite-vec` (a CGo loadable extension). Instead the embedding lives directly on `facts`:
 
 ```sql
-CREATE VIRTUAL TABLE facts_vec USING vec0(
-  id              INTEGER PRIMARY KEY,
-  embedding       FLOAT[<dim>]                     -- dim taken from embedding model
-);
+ALTER TABLE facts ADD COLUMN embedding BLOB;   -- float32 little-endian, length = embedding_dim * 4
+ALTER TABLE facts ADD COLUMN embedding_norm REAL;  -- pre-computed L2 norm for cosine
 ```
+
+kNN at recall time is a brute-force scan in Go, scoped by `namespace` (and `deleted_at IS NULL`). For the bot's scale (per-namespace fact counts in the hundreds, rarely thousands), brute force is sub-millisecond on the rpi3. The driver is `modernc.org/sqlite` — pure Go, no CGo, fits the existing build flags.
 
 The embedding key is the canonical text form: `"{entity} {attribute} {value}"` lowercased and trimmed. The embedding is recomputed when `value` changes.
 
@@ -141,7 +143,8 @@ Dead-letter for extraction jobs that exhausted their retries.
 1. Telegram handler receives a message in a chat. It builds the namespace set `["tg:chat:<id>", "tg:user:<id>", "tg:bot:<botname>"]`.
 2. The handler calls `Recaller.Recall(ctx, namespaces, input)`:
    - Embed `input` via `Embedder`.
-   - Run kNN over `facts_vec` filtered to `namespace IN (...)` AND `deleted_at IS NULL`.
+   - SELECT facts where `namespace IN (...)` AND `deleted_at IS NULL` AND `embedding IS NOT NULL`.
+   - In Go, compute cosine similarity against each row's BLOB embedding (using the pre-computed `embedding_norm`).
    - Drop results with cosine score below `recall_min_score`.
    - Take top `top_k`.
    - Bump `access_count` and `last_seen_at` for each returned fact.
