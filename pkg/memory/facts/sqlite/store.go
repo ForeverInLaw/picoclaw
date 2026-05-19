@@ -64,6 +64,88 @@ func (s *Store) SoftDelete(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *Store) Update(ctx context.Context, f facts.Fact) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE facts SET
+			value = ?, confidence = ?,
+			updated_at = ?, last_seen_at = ?,
+			access_count = ?, ttl_seconds = ?,
+			deleted_at = ?, embedding = ?, embedding_norm = ?
+		WHERE id = ?`,
+		f.Value, f.Confidence,
+		f.UpdatedAt.UTC(), f.LastSeenAt.UTC(),
+		f.AccessCount, nullableInt(f.TTLSeconds),
+		nullableTime(f.DeletedAt),
+		blobOrNil(f.Embedding), nullableFloat(f.EmbeddingNorm),
+		f.ID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return facts.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) FindByKey(ctx context.Context, namespace, entity, attribute string) (facts.Fact, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, namespace, entity, attribute, value, confidence,
+		       source_msg_ref, COALESCE(source_actor, ''),
+		       created_at, updated_at, last_seen_at,
+		       access_count, COALESCE(ttl_seconds, 0),
+		       deleted_at, embedding, COALESCE(embedding_norm, 0)
+		FROM facts
+		WHERE namespace = ? AND entity = ? AND attribute = ? AND deleted_at IS NULL`,
+		namespace, entity, attribute)
+	return scanFact(row)
+}
+
+func (s *Store) ListByNamespace(ctx context.Context, namespaces []string) ([]facts.Fact, error) {
+	if len(namespaces) == 0 {
+		return nil, nil
+	}
+	q, args := inClause(`
+		SELECT id, namespace, entity, attribute, value, confidence,
+		       source_msg_ref, COALESCE(source_actor, ''),
+		       created_at, updated_at, last_seen_at,
+		       access_count, COALESCE(ttl_seconds, 0),
+		       deleted_at, embedding, COALESCE(embedding_norm, 0)
+		FROM facts
+		WHERE deleted_at IS NULL AND namespace IN (`,
+		namespaces)
+	rows, err := s.db.QueryContext(ctx, q+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []facts.Fact
+	for rows.Next() {
+		f, err := scanFact(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func inClause(prefix string, vals []string) (string, []any) {
+	if len(vals) == 0 {
+		return prefix, nil
+	}
+	q := prefix
+	args := make([]any, len(vals))
+	for i, v := range vals {
+		if i > 0 {
+			q += ","
+		}
+		q += "?"
+		args[i] = v
+	}
+	return q, args
+}
+
 // --- helpers ---
 
 type rowScanner interface {

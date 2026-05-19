@@ -81,3 +81,70 @@ func TestStore_SoftDelete(t *testing.T) {
 		t.Fatal("DeletedAt still zero after SoftDelete")
 	}
 }
+
+func TestStore_Update(t *testing.T) {
+	s := newStoreT(t)
+	defer s.Close()
+	id, _ := s.Insert(context.Background(), sampleFact())
+	got, _ := s.GetByID(context.Background(), id)
+	got.Value = "арбуз"
+	got.Confidence = 0.95
+	got.UpdatedAt = time.Now().UTC()
+	if err := s.Update(context.Background(), got); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	back, _ := s.GetByID(context.Background(), id)
+	if back.Value != "арбуз" || back.Confidence != 0.95 {
+		t.Fatalf("Update did not persist: %+v", back)
+	}
+}
+
+func TestStore_FindByKey(t *testing.T) {
+	s := newStoreT(t)
+	defer s.Close()
+	id, _ := s.Insert(context.Background(), sampleFact())
+	f, err := s.FindByKey(context.Background(), "tg:user:1", "Андрей", "likes")
+	if err != nil {
+		t.Fatalf("FindByKey: %v", err)
+	}
+	if f.ID != id {
+		t.Fatalf("got id %d want %d", f.ID, id)
+	}
+}
+
+func TestStore_FindByKey_NotFound(t *testing.T) {
+	s := newStoreT(t)
+	defer s.Close()
+	_, err := s.FindByKey(context.Background(), "tg:user:1", "Андрей", "likes")
+	if !errors.Is(err, facts.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestStore_FindByKey_SkipsDeleted(t *testing.T) {
+	s := newStoreT(t)
+	defer s.Close()
+	id, _ := s.Insert(context.Background(), sampleFact())
+	_ = s.SoftDelete(context.Background(), id)
+	_, err := s.FindByKey(context.Background(), "tg:user:1", "Андрей", "likes")
+	if !errors.Is(err, facts.ErrNotFound) {
+		t.Fatalf("want ErrNotFound for deleted, got %v", err)
+	}
+}
+
+func TestStore_ListByNamespace(t *testing.T) {
+	s := newStoreT(t)
+	defer s.Close()
+	for _, attr := range []string{"likes", "lives_in", "calls_self"} {
+		f := sampleFact()
+		f.Attribute = attr
+		_, _ = s.Insert(context.Background(), f)
+	}
+	out, err := s.ListByNamespace(context.Background(), []string{"tg:user:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("want 3, got %d", len(out))
+	}
+}
