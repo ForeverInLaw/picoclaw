@@ -132,6 +132,40 @@ func TestStore_FindByKey_SkipsDeleted(t *testing.T) {
 	}
 }
 
+func TestStore_KNN(t *testing.T) {
+	s := newStoreT(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	a := sampleFact()
+	a.Attribute = "likes"
+	a.Value = "грейпфрут"
+	a.Embedding = []float32{1, 0, 0}
+	a.EmbeddingNorm = 1.0
+	idA, _ := s.Insert(ctx, a)
+
+	b := sampleFact()
+	b.Attribute = "lives_in"
+	b.Value = "Минск"
+	b.Embedding = []float32{0, 1, 0}
+	b.EmbeddingNorm = 1.0
+	_, _ = s.Insert(ctx, b)
+
+	hits, err := s.KNN(ctx, []string{"tg:user:1"}, []float32{1, 0, 0}, 1.0, 1, 0.5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("want 1 hit, got %d", len(hits))
+	}
+	if hits[0].Fact.ID != idA {
+		t.Fatalf("wrong hit: %+v", hits[0].Fact)
+	}
+	if hits[0].Score < 0.99 {
+		t.Fatalf("expected near-1 score, got %.4f", hits[0].Score)
+	}
+}
+
 func TestStore_ListByNamespace(t *testing.T) {
 	s := newStoreT(t)
 	defer s.Close()
