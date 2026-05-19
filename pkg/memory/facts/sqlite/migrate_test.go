@@ -38,9 +38,26 @@ func TestMigrate_Idempotent(t *testing.T) {
 	db, _ := sql.Open("sqlite", dsn)
 	defer db.Close()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := Migrate(context.Background(), db); err != nil {
 			t.Fatalf("Migrate iter %d: %v", i, err)
 		}
+	}
+}
+
+func TestMigrate_FTSTable(t *testing.T) {
+	dir := t.TempDir()
+	dsn := filepath.Join(dir, "facts.db")
+	db, _ := sql.Open("sqlite", dsn)
+	defer db.Close()
+
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+
+	row := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='facts_fts'`)
+	var name string
+	if err := row.Scan(&name); err != nil {
+		t.Fatalf("facts_fts missing: %v", err)
 	}
 }
