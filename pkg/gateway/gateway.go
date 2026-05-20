@@ -43,6 +43,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 	factsagenthook "github.com/sipeed/picoclaw/pkg/memory/facts/agenthook"
 	factsbootstrap "github.com/sipeed/picoclaw/pkg/memory/facts/bootstrap"
+	factsembed "github.com/sipeed/picoclaw/pkg/memory/facts/embed"
 	factsextract "github.com/sipeed/picoclaw/pkg/memory/facts/extract"
 	"github.com/sipeed/picoclaw/pkg/pid"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -213,7 +214,9 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) error 
 	// Wire the facts memory subsystem (mem0-style atomic-fact recall and
 	// extraction). No-op when agents.memory.facts.enabled is false.
 	var factsLLM *factsextract.ProviderLLM
+	var factsEmbedder *factsembed.HTTPProvider
 	if cfg.Agents.Memory.Facts.Enabled {
+		// Extraction model resolves through model_list (same as summaries).
 		extractModelCfg, mErr := cfg.GetModelConfig(cfg.Agents.Memory.Facts.ExtractionModel)
 		if mErr != nil {
 			logger.WarnCF("memory.facts", "extraction model not in model_list", map[string]any{
@@ -229,11 +232,42 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) error 
 				factsLLM = &factsextract.ProviderLLM{Provider: extractProv, Model: extractModelID}
 			}
 		}
+		// Embedding model: resolve the same way and build a thin HTTP client
+		// against the OpenAI-compatible /embeddings endpoint. Falls through
+		// (nil embedder → NullProvider) when the slug is missing or marked
+		// as the sentinel "disabled".
+		if slug := strings.TrimSpace(cfg.Agents.Memory.Facts.EmbeddingModel); slug != "" && slug != "disabled" {
+			embedModelCfg, eErr := cfg.GetModelConfig(slug)
+			if eErr != nil {
+				logger.WarnCF("memory.facts", "embedding model not in model_list", map[string]any{
+					"slug": slug, "error": eErr.Error(),
+				})
+			} else {
+				apiBase := strings.TrimRight(strings.TrimSpace(embedModelCfg.APIBase), "/")
+				apiKey := strings.TrimSpace(embedModelCfg.APIKey())
+				if apiBase == "" || apiKey == "" {
+					logger.WarnCF("memory.facts", "embedding model missing api_base or api_key", map[string]any{
+						"slug": slug,
+					})
+				} else {
+					factsEmbedder = &factsembed.HTTPProvider{
+						APIBase:   apiBase,
+						APIKey:    apiKey,
+						Model:     embedModelCfg.Model,
+						InputType: "query",
+					}
+				}
+			}
+		}
+	}
+	var embedProviderArg factsembed.EmbeddingProvider
+	if factsEmbedder != nil {
+		embedProviderArg = factsEmbedder
 	}
 	factsSubsys, factsErr := factsbootstrap.Bootstrap(
 		ctx,
 		cfg.Agents.Memory.Facts,
-		nil, // embedding provider — wired in a follow-up milestone
+		embedProviderArg,
 		factsLLM,
 		"",
 	)

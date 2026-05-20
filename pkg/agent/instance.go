@@ -121,7 +121,7 @@ func NewAgentInstance(
 	contextBuilder := NewContextBuilder(workspace).WithToolDiscovery(
 		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
 		mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
-	)
+	).WithLegacyMemoryDisabled(cfg.Agents.Memory.Facts.Enabled)
 	chatMemoryService := initChatMemoryService(cfg, defaults, memIndex)
 	if chatMemoryService != nil {
 		toolsRegistry.Register(tools.NewChatMemoryTool(chatMemoryService))

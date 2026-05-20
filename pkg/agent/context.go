@@ -45,6 +45,20 @@ type ContextBuilder struct {
 	// build time. This catches nested file creations/deletions/mtime changes
 	// that may not update the top-level skill root directory mtime.
 	skillFilesAtCache map[string]time.Time
+
+	// legacyMemoryDisabled suppresses the "# Memory" block built from the
+	// MEMORY.md file. Set when pkg/memory/facts is the authoritative store
+	// to avoid stacking two memory layers in the system prompt.
+	legacyMemoryDisabled bool
+}
+
+// WithLegacyMemoryDisabled suppresses the MEMORY.md-backed "# Memory" block
+// in the system prompt. Call with true once the facts memory subsystem owns
+// long-term recall so the bot sees a single source of truth.
+func (cb *ContextBuilder) WithLegacyMemoryDisabled(disabled bool) *ContextBuilder {
+	cb.legacyMemoryDisabled = disabled
+	cb.InvalidateCache()
+	return cb
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
@@ -199,10 +213,14 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 %s`, skillsSummary))
 	}
 
-	// Memory context
-	memoryContext := cb.memory.GetMemoryContext()
-	if memoryContext != "" {
-		parts = append(parts, "# Memory\n\n"+memoryContext)
+	// Memory context. Skip when the facts memory subsystem is the
+	// authoritative store — stacking two memory layers caused the bot to
+	// attribute one user's facts to another (see Женя/MEMORY.md incident).
+	if !cb.legacyMemoryDisabled {
+		memoryContext := cb.memory.GetMemoryContext()
+		if memoryContext != "" {
+			parts = append(parts, "# Memory\n\n"+memoryContext)
+		}
 	}
 
 	parts = append(parts, "# Tooling note\n\nUse `message` only for a single outbound message. If you need to send multiple messages, language variants, or destinations in one step, use `send_messages`.")
