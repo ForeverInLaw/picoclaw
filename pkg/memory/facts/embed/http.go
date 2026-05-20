@@ -65,9 +65,13 @@ func (p *HTTPProvider) Embed(ctx context.Context, _, text string) ([]float32, er
 		p.client = &http.Client{Timeout: timeout}
 	}
 
+	// PicoClaw's model_list entries prefix the model id with a protocol
+	// marker ("openai/..." for any OpenAI-compatible endpoint). The remote
+	// service expects the bare model id, so strip the marker.
+	model := strings.TrimPrefix(p.Model, "openai/")
 	body := map[string]any{
 		"input":           []string{text},
-		"model":           p.Model,
+		"model":           model,
 		"encoding_format": "float",
 	}
 	if p.InputType != "" {
