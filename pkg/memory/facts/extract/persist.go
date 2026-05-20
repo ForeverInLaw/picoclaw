@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/memory/facts"
 )
 
@@ -34,6 +35,10 @@ func (w *Worker) persist(ctx context.Context, ef ExtractedFact, j Job) error {
 	// persist the fact and fall back to string-equality for dedup.
 	vec, norm, embErr := w.embed.Embed(ctx, canonical)
 	if embErr != nil {
+		logger.WarnCF("memory.facts", "persist: embedding failed", map[string]any{
+			"namespace": j.Namespace, "entity": ef.Entity, "attribute": ef.Attribute,
+			"error": embErr.Error(),
+		})
 		vec = nil
 		norm = 0
 	}

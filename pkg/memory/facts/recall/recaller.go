@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/memory/facts"
 )
 
@@ -40,6 +41,9 @@ func (r *Recaller) Recall(ctx context.Context, namespaces []string, input string
 func (r *Recaller) lookup(ctx context.Context, namespaces []string, input string) ([]facts.RecallHit, error) {
 	vec, norm, err := r.embed.Embed(ctx, input)
 	if err != nil {
+		logger.WarnCF("memory.facts", "recall: embedding failed, falling back to keyword search", map[string]any{
+			"namespaces": namespaces, "error": err.Error(),
+		})
 		return r.store.KeywordSearch(ctx, namespaces, input, r.topK)
 	}
 	return r.store.KNN(ctx, namespaces, vec, norm, r.topK, r.minScore)
