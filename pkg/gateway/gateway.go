@@ -212,11 +212,29 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) error 
 
 	// Wire the facts memory subsystem (mem0-style atomic-fact recall and
 	// extraction). No-op when agents.memory.facts.enabled is false.
+	var factsLLM *factsextract.ProviderLLM
+	if cfg.Agents.Memory.Facts.Enabled {
+		extractModelCfg, mErr := cfg.GetModelConfig(cfg.Agents.Memory.Facts.ExtractionModel)
+		if mErr != nil {
+			logger.WarnCF("memory.facts", "extraction model not in model_list", map[string]any{
+				"slug": cfg.Agents.Memory.Facts.ExtractionModel, "error": mErr.Error(),
+			})
+		} else {
+			extractProv, extractModelID, pErr := providers.CreateProviderFromConfig(extractModelCfg)
+			if pErr != nil {
+				logger.WarnCF("memory.facts", "extraction provider build failed", map[string]any{
+					"slug": cfg.Agents.Memory.Facts.ExtractionModel, "error": pErr.Error(),
+				})
+			} else {
+				factsLLM = &factsextract.ProviderLLM{Provider: extractProv, Model: extractModelID}
+			}
+		}
+	}
 	factsSubsys, factsErr := factsbootstrap.Bootstrap(
 		ctx,
 		cfg.Agents.Memory.Facts,
 		nil, // embedding provider — wired in a follow-up milestone
-		&factsextract.ProviderLLM{Provider: provider, Model: cfg.Agents.Memory.Facts.ExtractionModel},
+		factsLLM,
 		"",
 	)
 	if factsErr != nil {
