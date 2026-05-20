@@ -273,3 +273,55 @@ A missing or `enabled: false` block disables the subsystem entirely; agent behav
 9. End-to-end smoke on rpi3
 
 Each step lands as its own commit. Each commit must build and pass tests in isolation.
+
+## 15. Deploy notes — 2026-05-20
+
+First deploy of the subsystem to rpi3 (`172.30.0.3`). Binary built locally on Windows
+(`GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags "goolm,stdjson" -ldflags "-s -w"`),
+installed via `sudo install -m 755` to `/usr/local/bin/picoclaw`. Restart via the
+launcher API at `:18800/api/gateway/restart`.
+
+The launcher config (`/home/andy/.picoclaw/config.json`) gained:
+
+```json
+"agents": {
+  "memory": {
+    "facts": {
+      "enabled": true,
+      "channel_scope": ["telegram"],
+      "extraction_model": "gemma-4-31b-it gouter",
+      "embedding_model": "disabled",
+      "embedding_dim": 8,
+      "top_k": 8,
+      "recall_min_score": 0.0,
+      "extraction_window_msgs": 20,
+      "extraction_idle_seconds": 30,
+      "ttl_default_days": 90,
+      "decay_window_days": 30,
+      "min_confidence": 0.2,
+      "sqlite_path": "/home/andy/.picoclaw/facts.db"
+    }
+  }
+}
+```
+
+`embedding_model: "disabled"` is a sentinel — v1 wires a `NullProvider`, so embeddings
+always fail and the subsystem degrades to FTS5 keyword recall plus string-equality
+dedup. When a real embeddings backend is wired in, this entry becomes a real model slug.
+
+### v1 verification on rpi3
+
+- Restart returned `{"pid":2833892,"status":"ok"}`, health uptime 5.9s.
+- `/home/andy/.picoclaw/facts.db` materialised at 4096 bytes — bootstrap ran the
+  migrations successfully.
+
+### Smoke checklist (manual, in Telegram)
+
+- [ ] Send "Запомни: я люблю грейпфрутовый сок" to Коробъка in a private chat.
+- [ ] Wait ~60 seconds (extraction worker idle window).
+- [ ] On rpi3: `sqlite3 /home/andy/.picoclaw/facts.db "SELECT namespace, entity, attribute, value, confidence FROM facts WHERE deleted_at IS NULL"` — expect a row mentioning "грейпфрутовый сок".
+- [ ] In a fresh session (or after `/clear`), ask: "что я люблю?"
+- [ ] Verify the bot's reply mentions грейпфрутовый сок.
+
+Smoke results to be filled in once the manual run completes.
+
