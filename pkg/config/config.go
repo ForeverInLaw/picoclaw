@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/memory/facts"
 )
 
 // rrCounter is a global counter for round-robin load balancing across models.
@@ -121,6 +122,14 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 type AgentsConfig struct {
 	Defaults AgentDefaults `json:"defaults"`
 	List     []AgentConfig `json:"list,omitempty"`
+	Memory   MemoryConfig  `json:"memory,omitempty"`
+}
+
+// MemoryConfig groups memory subsystems that are shared across agents.
+// Distinct from AgentDefaults.MemoryIndex, which configures the
+// chat-history indexing layer.
+type MemoryConfig struct {
+	Facts facts.Config `json:"facts,omitempty"`
 }
 
 // AgentModelConfig supports both string and structured model config.
