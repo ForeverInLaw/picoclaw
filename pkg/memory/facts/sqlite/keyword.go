@@ -30,7 +30,9 @@ func buildFTSQuery(in string) string {
 	for i, t := range toks {
 		toks[i] = t + "*"
 	}
-	return strings.Join(toks, " ")
+	// FTS5 MATCH defaults to AND for whitespace-separated terms. For recall
+	// we want OR semantics — any token matching the row is a hit.
+	return strings.Join(toks, " OR ")
 }
 
 func (s *Store) KeywordSearch(ctx context.Context, namespaces []string, q string, k int) ([]facts.RecallHit, error) {
