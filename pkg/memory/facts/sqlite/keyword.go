@@ -4,25 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"unicode"
 
 	"github.com/sipeed/picoclaw/pkg/memory/facts"
 )
 
-// ftsSpecial is the set of characters that have meaning in FTS5 query
-// syntax. We strip them from user-provided text before assembling a query.
-const ftsSpecial = `"*():`
-
 // buildFTSQuery turns a free-form text into an FTS5 MATCH query whose tokens
-// each end in `*` so they match prefixes. Empty input yields "".
+// each end in `*` so they match prefixes. Anything that isn't a letter,
+// digit, or space is replaced with a space — this strips FTS5 operators
+// (`"`, `*`, `(`, `)`, `:`) as well as punctuation like `?` and `!` that
+// also confuse the FTS5 query parser.
 func buildFTSQuery(in string) string {
-	cleaned := make([]byte, 0, len(in))
-	for i := 0; i < len(in); i++ {
-		c := in[i]
-		if strings.IndexByte(ftsSpecial, c) >= 0 {
+	cleaned := make([]rune, 0, len(in))
+	for _, r := range in {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == ' ' || r == '\t' || r == '\n' {
+			cleaned = append(cleaned, r)
+		} else {
 			cleaned = append(cleaned, ' ')
-			continue
 		}
-		cleaned = append(cleaned, c)
 	}
 	toks := strings.Fields(string(cleaned))
 	if len(toks) == 0 {
