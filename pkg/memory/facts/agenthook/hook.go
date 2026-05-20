@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/memory/facts"
 	"github.com/sipeed/picoclaw/pkg/memory/facts/extract"
 	"github.com/sipeed/picoclaw/pkg/memory/facts/recall"
@@ -94,8 +95,16 @@ func (h *Hook) BeforeLLM(ctx context.Context, req *agent.LLMHookRequest) (*agent
 		return req, agent.HookDecision{Action: agent.HookActionContinue}, nil
 	}
 	hits, err := h.recaller.Recall(ctx, ns, input)
-	if err != nil || len(hits) == 0 {
-		// Recall failures are non-fatal; keep the turn moving.
+	if err != nil {
+		logger.WarnCF("memory.facts", "recall failed", map[string]any{
+			"channel": req.Channel, "chat_id": req.ChatID, "error": err.Error(),
+		})
+		return req, agent.HookDecision{Action: agent.HookActionContinue}, nil
+	}
+	logger.InfoCF("memory.facts", "recall", map[string]any{
+		"channel": req.Channel, "chat_id": req.ChatID, "namespaces": ns, "hit_count": len(hits),
+	})
+	if len(hits) == 0 {
 		return req, agent.HookDecision{Action: agent.HookActionContinue}, nil
 	}
 	prefix := recall.Render(hits)
