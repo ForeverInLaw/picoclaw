@@ -37,3 +37,25 @@ func TestParseFacts_StripsFencing(t *testing.T) {
 		t.Fatalf("want 0, got %d", len(out))
 	}
 }
+
+func TestParseFacts_StripsThinkBlock(t *testing.T) {
+	raw := "<think>пользователь сказал что любит грейпфрут — извлекаю</think>{\"facts\":[{\"entity\":\"Андрей\",\"attribute\":\"likes\",\"value\":\"грейпфрут\",\"confidence\":0.9}]}"
+	out, err := ParseFacts(raw)
+	if err != nil {
+		t.Fatalf("ParseFacts: %v", err)
+	}
+	if len(out) != 1 || out[0].Value != "грейпфрут" {
+		t.Fatalf("bad parse: %+v", out)
+	}
+}
+
+func TestParseFacts_ExtractsFromPreamble(t *testing.T) {
+	raw := "Конечно! Вот факты в нужном формате:\n\n{\"facts\":[{\"entity\":\"X\",\"attribute\":\"Y\",\"value\":\"Z\",\"confidence\":0.5}]}\n\nГотово."
+	out, err := ParseFacts(raw)
+	if err != nil {
+		t.Fatalf("ParseFacts: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("want 1, got %d", len(out))
+	}
+}

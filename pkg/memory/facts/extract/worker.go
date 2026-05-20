@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/memory/facts"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
@@ -59,11 +60,21 @@ func (w *Worker) Run(ctx context.Context, j Job) {
 	}
 
 	parsed, err := ParseFacts(resp)
+	rawSnippet := resp
+	if len(rawSnippet) > 400 {
+		rawSnippet = rawSnippet[:400] + "..."
+	}
 	if err != nil {
+		logger.WarnCF("memory.facts", "extract: parse failed", map[string]any{
+			"session_key": j.SessionKey, "error": err.Error(), "raw": rawSnippet,
+		})
 		_ = w.log.RecordFailure(ctx, j.SessionKey,
 			fmt.Sprintf("[%d,%d)", j.StartIdx, j.EndIdx), err.Error())
 		return
 	}
+	logger.InfoCF("memory.facts", "extract: parsed", map[string]any{
+		"session_key": j.SessionKey, "fact_count": len(parsed), "raw": rawSnippet,
+	})
 
 	for _, ef := range parsed {
 		if err := w.persist(ctx, ef, j); err != nil {
