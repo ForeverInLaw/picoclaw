@@ -41,6 +41,9 @@ import (
 	"github.com/sipeed/picoclaw/pkg/heartbeat"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	factsagenthook "github.com/sipeed/picoclaw/pkg/memory/facts/agenthook"
+	factsbootstrap "github.com/sipeed/picoclaw/pkg/memory/facts/bootstrap"
+	factsextract "github.com/sipeed/picoclaw/pkg/memory/facts/extract"
 	"github.com/sipeed/picoclaw/pkg/pid"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/state"
@@ -206,6 +209,50 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) error 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Wire the facts memory subsystem (mem0-style atomic-fact recall and
+	// extraction). No-op when agents.memory.facts.enabled is false.
+	var factsLLM *factsextract.ProviderLLM
+	if cfg.Agents.Memory.Facts.Enabled {
+		extractModelCfg, mErr := cfg.GetModelConfig(cfg.Agents.Memory.Facts.ExtractionModel)
+		if mErr != nil {
+			logger.WarnCF("memory.facts", "extraction model not in model_list", map[string]any{
+				"slug": cfg.Agents.Memory.Facts.ExtractionModel, "error": mErr.Error(),
+			})
+		} else {
+			extractProv, extractModelID, pErr := providers.CreateProviderFromConfig(extractModelCfg)
+			if pErr != nil {
+				logger.WarnCF("memory.facts", "extraction provider build failed", map[string]any{
+					"slug": cfg.Agents.Memory.Facts.ExtractionModel, "error": pErr.Error(),
+				})
+			} else {
+				factsLLM = &factsextract.ProviderLLM{Provider: extractProv, Model: extractModelID}
+			}
+		}
+	}
+	factsSubsys, factsErr := factsbootstrap.Bootstrap(
+		ctx,
+		cfg.Agents.Memory.Facts,
+		nil, // embedding provider — wired in a follow-up milestone
+		factsLLM,
+		"",
+	)
+	if factsErr != nil {
+		logger.WarnCF("memory.facts", "facts memory disabled", map[string]any{"error": factsErr.Error()})
+	} else if factsSubsys != nil && factsSubsys.Recaller != nil {
+		factsHook := factsagenthook.New(factsagenthook.TelegramScope{}, factsSubsys.Recaller, factsSubsys.AsyncWorker)
+		if err := agentLoop.MountHook(agent.NamedHook("memory.facts", factsHook)); err != nil {
+			logger.WarnCF("memory.facts", "MountHook failed", map[string]any{"error": err.Error()})
+		}
+		factsSubsys.AsyncWorker.Start(ctx)
+		factsSubsys.StartDecayTicker(ctx, 24*time.Hour, nil)
+		defer factsSubsys.Close()
+		logger.InfoCF("memory.facts", "facts memory enabled", map[string]any{
+			"sqlite_path":      cfg.Agents.Memory.Facts.SQLitePath,
+			"extraction_model": cfg.Agents.Memory.Facts.ExtractionModel,
+			"embedding_model":  cfg.Agents.Memory.Facts.EmbeddingModel,
+		})
+	}
 
 	go agentLoop.Run(ctx)
 
