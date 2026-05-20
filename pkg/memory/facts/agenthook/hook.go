@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/memory/facts"
@@ -64,6 +65,7 @@ type Hook struct {
 	scope    ChannelScope
 	recaller *recall.Recaller
 	queue    AsyncWorker
+	pending  sync.Map // turnID -> []protocoltypes.Message
 }
 
 // New builds a hook. If any required dependency is nil the hook is a no-op
@@ -103,6 +105,13 @@ func (h *Hook) BeforeLLM(ctx context.Context, req *agent.LLMHookRequest) (*agent
 
 	out := req.Clone()
 	out.Messages = prependSystem(out.Messages, prefix)
+	// Capture the original messages so AfterLLM can ship a real window to
+	// the extractor without re-reading the conversation store.
+	if req.Meta.TurnID != "" {
+		captured := make([]protocoltypes.Message, len(req.Messages))
+		copy(captured, req.Messages)
+		h.pending.Store(req.Meta.TurnID, captured)
+	}
 	return out, agent.HookDecision{Action: agent.HookActionModify}, nil
 }
 
@@ -117,11 +126,28 @@ func (h *Hook) AfterLLM(ctx context.Context, resp *agent.LLMHookResponse) (*agen
 	if resp.Meta.SessionKey == "" {
 		return resp, agent.HookDecision{Action: agent.HookActionContinue}, nil
 	}
+
+	var window []protocoltypes.Message
+	if resp.Meta.TurnID != "" {
+		if v, ok := h.pending.LoadAndDelete(resp.Meta.TurnID); ok {
+			if msgs, ok := v.([]protocoltypes.Message); ok {
+				window = msgs
+			}
+		}
+	}
+	if resp.Response != nil && resp.Response.Content != "" {
+		window = append(window, protocoltypes.Message{Role: "assistant", Content: resp.Response.Content})
+	}
+	if len(window) == 0 {
+		// Nothing useful to extract from.
+		return resp, agent.HookDecision{Action: agent.HookActionContinue}, nil
+	}
+
 	h.queue.Enqueue(extract.Job{
 		SessionKey: resp.Meta.SessionKey,
-		// Window + indices are populated by the worker when it reads
-		// recent history. Iteration is a best-effort upper bound.
-		EndIdx: resp.Meta.Iteration + 1,
+		Window:     window,
+		StartIdx:   0,
+		EndIdx:     len(window),
 	})
 	return resp, agent.HookDecision{Action: agent.HookActionContinue}, nil
 }

@@ -17,9 +17,12 @@ const (
 
 func (w *Worker) persist(ctx context.Context, ef ExtractedFact, j Job) error {
 	canonical := strings.ToLower(strings.TrimSpace(ef.Entity + " " + ef.Attribute + " " + ef.Value))
-	vec, norm, err := w.embed.Embed(ctx, canonical)
-	if err != nil {
-		return err
+	// Embedding is best-effort. When the embedder is unavailable we still
+	// persist the fact and fall back to string-equality for dedup.
+	vec, norm, embErr := w.embed.Embed(ctx, canonical)
+	if embErr != nil {
+		vec = nil
+		norm = 0
 	}
 
 	existing, err := w.store.FindByKey(ctx, w.namespace, ef.Entity, ef.Attribute)
@@ -47,13 +50,17 @@ func (w *Worker) persist(ctx context.Context, ef ExtractedFact, j Job) error {
 
 	default:
 		// Existing live fact. Compute cosine of the new embedding vs the
-		// stored one. If similar enough, treat as a duplicate (bump
-		// confidence); otherwise treat as a contradiction.
-		sim := 0.0
-		if len(existing.Embedding) == len(vec) && existing.EmbeddingNorm > 0 {
-			sim = facts.Cosine(vec, norm, existing.Embedding, existing.EmbeddingNorm)
+		// stored one when both have embeddings; otherwise fall back to
+		// case-insensitive value equality.
+		var isDup bool
+		if len(existing.Embedding) > 0 && len(vec) > 0 &&
+			len(existing.Embedding) == len(vec) && existing.EmbeddingNorm > 0 {
+			sim := facts.Cosine(vec, norm, existing.Embedding, existing.EmbeddingNorm)
+			isDup = sim >= dedupeCosineThreshold
+		} else {
+			isDup = strings.EqualFold(strings.TrimSpace(existing.Value), strings.TrimSpace(ef.Value))
 		}
-		if sim >= dedupeCosineThreshold {
+		if isDup {
 			existing.Confidence = clamp01(existing.Confidence + confidenceBumpStep)
 			existing.LastSeenAt = now
 			existing.UpdatedAt = now

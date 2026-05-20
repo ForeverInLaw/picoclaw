@@ -116,8 +116,9 @@ func TestHook_AfterLLM_EnqueuesExtraction(t *testing.T) {
 	q := &fakeQueue{}
 	h := New(TelegramScope{BotUsername: "c0md_bot"}, nil, q)
 	resp := &agent.LLMHookResponse{
-		Meta:    agent.EventMeta{SessionKey: "tg:chat:-100123", Iteration: 4},
-		Channel: "telegram",
+		Meta:     agent.EventMeta{SessionKey: "tg:chat:-100123", Iteration: 4, TurnID: "t1"},
+		Channel:  "telegram",
+		Response: &protocoltypes.LLMResponse{Content: "ответ бота"},
 	}
 	_, dec, _ := h.AfterLLM(context.Background(), resp)
 	if dec.Action != agent.HookActionContinue {
@@ -128,5 +129,21 @@ func TestHook_AfterLLM_EnqueuesExtraction(t *testing.T) {
 	}
 	if q.jobs[0].SessionKey != "tg:chat:-100123" {
 		t.Fatalf("session: %q", q.jobs[0].SessionKey)
+	}
+	if len(q.jobs[0].Window) == 0 {
+		t.Fatal("window should include the assistant reply")
+	}
+}
+
+func TestHook_AfterLLM_NoWindowSkipsEnqueue(t *testing.T) {
+	q := &fakeQueue{}
+	h := New(TelegramScope{BotUsername: "c0md_bot"}, nil, q)
+	resp := &agent.LLMHookResponse{
+		Meta:    agent.EventMeta{SessionKey: "tg:chat:-100123", Iteration: 4},
+		Channel: "telegram",
+	}
+	_, _, _ = h.AfterLLM(context.Background(), resp)
+	if len(q.jobs) != 0 {
+		t.Fatalf("want 0 enqueued without window, got %d", len(q.jobs))
 	}
 }
