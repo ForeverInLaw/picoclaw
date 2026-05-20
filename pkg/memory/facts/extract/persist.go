@@ -16,6 +16,19 @@ const (
 )
 
 func (w *Worker) persist(ctx context.Context, ef ExtractedFact, j Job) error {
+	// Skip obvious placeholder rows the LLM sometimes emits when it mirrors
+	// the prompt's example schema verbatim.
+	if isPlaceholder(ef.Entity) || isPlaceholder(ef.Attribute) || isPlaceholder(ef.Value) {
+		return nil
+	}
+	namespace := j.Namespace
+	if namespace == "" {
+		namespace = w.namespace
+	}
+	if namespace == "" {
+		// Without a namespace we cannot scope the fact; drop it.
+		return nil
+	}
 	canonical := strings.ToLower(strings.TrimSpace(ef.Entity + " " + ef.Attribute + " " + ef.Value))
 	// Embedding is best-effort. When the embedder is unavailable we still
 	// persist the fact and fall back to string-equality for dedup.
@@ -25,13 +38,13 @@ func (w *Worker) persist(ctx context.Context, ef ExtractedFact, j Job) error {
 		norm = 0
 	}
 
-	existing, err := w.store.FindByKey(ctx, w.namespace, ef.Entity, ef.Attribute)
+	existing, err := w.store.FindByKey(ctx, namespace, ef.Entity, ef.Attribute)
 	now := time.Now().UTC()
 
 	switch {
 	case errors.Is(err, facts.ErrNotFound):
 		_, err := w.store.Insert(ctx, facts.Fact{
-			Namespace:     w.namespace,
+			Namespace:     namespace,
 			Entity:        ef.Entity,
 			Attribute:     ef.Attribute,
 			Value:         ef.Value,
@@ -72,7 +85,7 @@ func (w *Worker) persist(ctx context.Context, ef ExtractedFact, j Job) error {
 			return err
 		}
 		_, err := w.store.Insert(ctx, facts.Fact{
-			Namespace:     w.namespace,
+			Namespace:     namespace,
 			Entity:        ef.Entity,
 			Attribute:     ef.Attribute,
 			Value:         ef.Value,
@@ -86,6 +99,27 @@ func (w *Worker) persist(ctx context.Context, ef ExtractedFact, j Job) error {
 		})
 		return err
 	}
+}
+
+// isPlaceholder reports whether the value is one of the known placeholder
+// strings that LLMs occasionally mirror from the prompt schema instead of
+// returning real data.
+func isPlaceholder(s string) bool {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return true
+	}
+	// Common placeholder shapes: "...", "…", "string", "<entity>".
+	switch t {
+	case "...", "…":
+		return true
+	case "string", "name", "value", "attribute", "entity":
+		return true
+	}
+	if strings.HasPrefix(t, "<") && strings.HasSuffix(t, ">") {
+		return true
+	}
+	return false
 }
 
 func clamp01(v float64) float64 {

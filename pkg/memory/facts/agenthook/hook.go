@@ -143,8 +143,15 @@ func (h *Hook) AfterLLM(ctx context.Context, resp *agent.LLMHookResponse) (*agen
 		return resp, agent.HookDecision{Action: agent.HookActionContinue}, nil
 	}
 
+	// Compute the primary namespace from the response context so facts get
+	// scoped per chat / per user instead of an empty namespace.
+	ns := ""
+	if nsList := h.scope.Namespaces(resp.Channel, resp.ChatID, ""); len(nsList) > 0 {
+		ns = nsList[0]
+	}
 	h.queue.Enqueue(extract.Job{
 		SessionKey: resp.Meta.SessionKey,
+		Namespace:  ns,
 		Window:     window,
 		StartIdx:   0,
 		EndIdx:     len(window),

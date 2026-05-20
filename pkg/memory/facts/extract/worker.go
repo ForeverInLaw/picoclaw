@@ -25,9 +25,12 @@ type ExtractionLLM interface {
 // Job is a unit of work for the extractor.
 type Job struct {
 	SessionKey string
-	Window     []protocoltypes.Message
-	StartIdx   int
-	EndIdx     int
+	// Namespace, when set, overrides Worker's default namespace for facts
+	// inserted from this job. Empty falls back to the Worker default.
+	Namespace string
+	Window    []protocoltypes.Message
+	StartIdx  int
+	EndIdx    int
 }
 
 // Worker turns Jobs into persisted facts. One Worker per agent instance.
