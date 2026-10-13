@@ -25,7 +25,11 @@ func TestLoadConfig_EmptyModelListInheritsDefaultsAfterDecoding(t *testing.T) {
 	}
 	t.Run("custom entries", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.json")
-		if err := os.WriteFile(path, []byte(`{"model_list":[{"model_name":"custom","model":"openai/custom"}]}`), 0o600); err != nil {
+		if err := os.WriteFile(
+			path,
+			[]byte(`{"model_list":[{"model_name":"custom","model":"openai/custom"}]}`),
+			0o600,
+		); err != nil {
 			t.Fatal(err)
 		}
 		cfg, err := LoadConfig(path)
@@ -49,7 +53,10 @@ func TestLoadConfig_EmptyModelListInheritsDefaultsAfterDecoding(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(cfg.ModelList) != 1 || cfg.ModelList[0].APIKey != "legacy-key" || !cfg.Tools.Web.Exa.Enabled {
-				t.Fatalf("legacy providers must retain precedence and common environment processing: %+v", cfg.ModelList)
+				t.Fatalf(
+					"legacy providers must retain precedence and common environment processing: %+v",
+					cfg.ModelList,
+				)
 			}
 		})
 	}

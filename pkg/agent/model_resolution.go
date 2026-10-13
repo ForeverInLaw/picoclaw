@@ -187,7 +187,8 @@ func resolvedCandidateConfig(cfg *config.Config, name, workspace, provider, mode
 		if !alias {
 			nameMatches = mc.Model == name || id == name
 		}
-		if nameMatches && providers.NormalizeProvider(protocol) == providers.NormalizeProvider(provider) && id == model {
+		if nameMatches && providers.NormalizeProvider(protocol) == providers.NormalizeProvider(provider) &&
+			id == model {
 			matching.ModelList = append(matching.ModelList, mc)
 		}
 	}

@@ -62,7 +62,12 @@ func TestExpiredDeliveryRemainsFailedAcrossManagerRecoveryAndStreamFinalize(t *t
 	channel.deliveryMu.Unlock()
 	msg := bus.OutboundMessage{DeliveryID: bus.DeliveryID(ctx), Channel: "telegram", ChatID: "42", Content: content}
 	require.ErrorIs(t, manager.SendMessage(ctx, msg), channels.ErrSendFailed)
-	require.ErrorIs(t, stream.Finalize(ctx, content), channels.ErrSendFailed, "expiry cannot falsely confirm a failed stream")
+	require.ErrorIs(
+		t,
+		stream.Finalize(ctx, content),
+		channels.ErrSendFailed,
+		"expiry cannot falsely confirm a failed stream",
+	)
 	require.Equal(t, 2, sends, "expiry must not authorize retransmission of the same operation")
 }
 
@@ -345,7 +350,13 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 			source.WriteString("TAIL_MARKER")
 			content := source.String()
 			finalizeErr := stream.Finalize(ctx, content)
-			msg := bus.OutboundMessage{DeliveryID: bus.DeliveryID(ctx), Channel: "telegram", ChatID: "-123/7", ReplyToMessageID: "42", Content: content}
+			msg := bus.OutboundMessage{
+				DeliveryID:       bus.DeliveryID(ctx),
+				Channel:          "telegram",
+				ChatID:           "-123/7",
+				ReplyToMessageID: "42",
+				Content:          content,
+			}
 			deliveryErr := manager.SendMessage(ctx, msg)
 			if mode == "ambiguous_send" {
 				require.ErrorIs(t, deliveryErr, channels.ErrSendFailed)

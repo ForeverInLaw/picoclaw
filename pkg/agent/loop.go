@@ -512,7 +512,15 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			if target == nil {
 				cancelDrain()
 				if finalResponse != "" {
-					al.publishResponseWithControls(responseCtx, msg, msg.Channel, msg.ChatID, finalResponse, msg.MessageID, &queued)
+					al.publishResponseWithControls(
+						responseCtx,
+						msg,
+						msg.Channel,
+						msg.ChatID,
+						finalResponse,
+						msg.MessageID,
+						&queued,
+					)
 				}
 				return
 			}
@@ -583,7 +591,15 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 
 			if finalResponse != "" {
-				al.publishResponseWithControls(responseCtx, msg, target.Channel, target.ChatID, finalResponse, target.ReplyToMessageID, &queued)
+				al.publishResponseWithControls(
+					responseCtx,
+					msg,
+					target.Channel,
+					target.ChatID,
+					finalResponse,
+					target.ReplyToMessageID,
+					&queued,
+				)
 			}
 		}()
 	}
@@ -606,7 +622,12 @@ func (al *AgentLoop) drainBusToSteering(
 	return al.drainBus(ctx, activeScope, activeAgentID, pending, true)
 }
 
-func (al *AgentLoop) drainBus(ctx context.Context, activeScope, activeAgentID string, pending int, steer bool) []bus.InboundMessage {
+func (al *AgentLoop) drainBus(
+	ctx context.Context,
+	activeScope, activeAgentID string,
+	pending int,
+	steer bool,
+) []bus.InboundMessage {
 	var queued []bus.InboundMessage
 	for {
 		var msg bus.InboundMessage
@@ -737,7 +758,11 @@ func (al *AgentLoop) publishResponseIfNeeded(
 		published = err == nil
 	}
 	if err != nil {
-		logger.WarnCF("agent", "Failed to publish outbound response", map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
+		logger.WarnCF(
+			"agent",
+			"Failed to publish outbound response",
+			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()},
+		)
 	}
 	if !published {
 		return

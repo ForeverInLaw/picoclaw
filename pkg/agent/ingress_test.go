@@ -85,7 +85,11 @@ func TestRunStreamFailureAndOrdinaryDeliveryShareLogicalIdentity(t *testing.T) {
 	}
 	defer func() { _ = manager.StopAll(t.Context()) }()
 	content := strings.Repeat("complete answer paragraph\n", 3000)
-	p := &phasedAnswerScriptProvider{answerScriptProvider: answerScriptProvider{responses: []*providers.LLMResponse{{Content: content, ContentPhase: providers.ContentPhaseAnswer}}}}
+	p := &phasedAnswerScriptProvider{
+		answerScriptProvider: answerScriptProvider{
+			responses: []*providers.LLMResponse{{Content: content, ContentPhase: providers.ContentPhaseAnswer}},
+		},
+	}
 	al.GetRegistry().GetDefaultAgent().Provider = p
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -620,7 +624,12 @@ func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
 				cfg.Agents.Defaults.Model = "primary-alias"
 				cfg.Agents.Defaults.ModelFallbacks = []string{reference}
 				cfg.ModelList = []config.ModelConfig{
-					{ModelName: "primary-alias", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL},
+					{
+						ModelName: "primary-alias",
+						Model:     "openai/gpt-primary",
+						APIKey:    "primary-key",
+						APIBase:   primary.URL,
+					},
 					{
 						ModelName: "backup-alias",
 						Model:     protocol + "/claude-backup",
@@ -698,7 +707,10 @@ func TestRunResetRevokesCompletedAnswerWaitingForOutboundCapacity(t *testing.T) 
 	}
 	view := captured.(session.ConversationTurn)
 	for n := 0; n < 64; n++ {
-		if err := mb.PublishOutbound(t.Context(), bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "queued output"}); err != nil {
+		if err := mb.PublishOutbound(
+			t.Context(),
+			bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "queued output"},
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -841,12 +853,20 @@ func TestRunConcreteModelSwitchKeepsExactReferenceWithinDuplicateAlias(t *testin
 				if body.Model != "claude-first" || r.Header.Get("Authorization") != "Bearer first-key" {
 					t.Errorf("selected endpoint received model/auth %s/%s", body.Model, r.Header.Get("Authorization"))
 				}
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"exact model"},"finish_reason":"stop"}]}`))
+				_, _ = w.Write(
+					[]byte(
+						`{"choices":[{"message":{"role":"assistant","content":"exact model"},"finish_reason":"stop"}]}`,
+					),
+				)
 			}))
 			defer first.Close()
 			wrong := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				wrongCalls.Add(1)
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"wrong model"},"finish_reason":"stop"}]}`))
+				_, _ = w.Write(
+					[]byte(
+						`{"choices":[{"message":{"role":"assistant","content":"wrong model"},"finish_reason":"stop"}]}`,
+					),
+				)
 			}))
 			defer wrong.Close()
 			initial, cfg, _, _, cleanup := newTestAgentLoop(t)

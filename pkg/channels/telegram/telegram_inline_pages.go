@@ -263,7 +263,12 @@ func (c *TelegramChannel) sendInlineAnswer(ctx context.Context, inlineMessageID,
 
 // The caller holds inlineMu. Generated source is durable before the edit;
 // confirmation is durable only after Telegram acknowledges that stable edit.
-func (c *TelegramChannel) publishInlinePages(ctx context.Context, inlineMessageID string, pages telegramInlinePages, retained bool) error {
+func (c *TelegramChannel) publishInlinePages(
+	ctx context.Context,
+	inlineMessageID string,
+	pages telegramInlinePages,
+	retained bool,
+) error {
 	if err := c.editInlinePage(ctx, inlineMessageID, pages, 0); err != nil {
 		return err
 	}

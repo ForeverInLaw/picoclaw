@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 )
 

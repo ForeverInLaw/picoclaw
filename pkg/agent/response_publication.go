@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
@@ -22,7 +23,10 @@ func publicationFor(ctx context.Context) *responsePublication {
 }
 
 func (al *AgentLoop) publishResponseWithControls(
-	ctx context.Context, request bus.InboundMessage, channel, chatID, content, replyID string, queued *[]bus.InboundMessage,
+	ctx context.Context,
+	request bus.InboundMessage,
+	channel, chatID, content, replyID string,
+	queued *[]bus.InboundMessage,
 ) {
 	if scope, agentID, ok := al.resolveSteeringTarget(request); ok {
 		drainCtx, cancel := context.WithCancel(ctx)

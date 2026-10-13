@@ -8,6 +8,11 @@ rollback cannot refill a conversation that was reset. A successful reset also
 cancels that turn. Storage failures produce a failed reset reply and leave the
 active generation unchanged.
 
+The final answer's bus enqueue uses the same generation gate as reset. Waiting
+for outbound capacity holds no conversation lock; reset commands remain
+responsive and revoke an older answer that has finished generation but has not
+yet entered the delivery queue.
+
 Reset commands are handled immediately while a request is active, including
 `/clear_inline` sent from a private chat during an inline request. Queued steering
 for the reset conversation is cleared, and the command receives its own reply.
@@ -24,6 +29,10 @@ as automatic context.
 Explicit archive requests can still use `chat_memory` with its existing chat
 access controls. Reset does not erase indexed records or archive files. It
 also does not remove agent instructions, skills, or the user profile.
+
+Archive summaries respect the exact requested time window, including partial
+first and last hours. Boundary excerpts are rebuilt for that request while the
+stored hourly rollups keep their canonical hour starts.
 
 The historical reset symptom was reproduced using `MEMORY.md` and recent daily
 notes while archive retrieval was disabled. `memory_index.enabled` defaults to

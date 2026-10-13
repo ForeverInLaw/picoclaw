@@ -80,7 +80,9 @@ func TestRichReplyNormalizesMathOutsideActualCodeFences(t *testing.T) {
 		{"unfinished real fence", "before \\(x\\)\n~~~\n\\(code\\)", "before $x$\n~~~\n\\(code\\)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil }}
+			caller := &stubCaller{
+				callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil },
+			}
 			channel := newTestChannel(t, caller)
 			require.NoError(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: "42", Content: tc.source}))
 			var payload struct {
@@ -171,9 +173,15 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 	reopened.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
 	for _, current := range []*TelegramChannel{channel, reopened} {
 		before := len(caller.calls)
-		require.NoError(t, current.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), telego.ChosenInlineResult{
-			ResultID: "generate", InlineMessageID: "published-result", Query: "long answer", From: telego.User{ID: 42},
-		}))
+		require.NoError(
+			t,
+			current.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), telego.ChosenInlineResult{
+				ResultID:        "generate",
+				InlineMessageID: "published-result",
+				Query:           "long answer",
+				From:            telego.User{ID: 42},
+			}),
+		)
 		require.Len(t, caller.calls, before, "chosen-result redelivery must retain the published keyboard")
 		select {
 		case duplicate := <-mb.InboundChan():
@@ -226,7 +234,12 @@ func TestChosenInlineFailedAdmissionCanRetryAfterRestartAndRetainsShortCompletio
 	channel.config.Agents.Defaults.Workspace = t.TempDir()
 	channel.config.Channels.Telegram.Inline.Enabled = true
 	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
-	result := telego.ChosenInlineResult{ResultID: "generate", InlineMessageID: "retry-publication", Query: "question", From: telego.User{ID: 42}}
+	result := telego.ChosenInlineResult{
+		ResultID:        "generate",
+		InlineMessageID: "retry-publication",
+		Query:           "question",
+		From:            telego.User{ID: 42},
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(ctx), result), context.Canceled)
@@ -246,7 +259,13 @@ func TestChosenInlineFailedAdmissionCanRetryAfterRestartAndRetainsShortCompletio
 	default:
 	}
 	reopened.SetRunning(true)
-	require.NoError(t, reopened.Send(t.Context(), bus.OutboundMessage{ChatID: "inline:retry-publication", Content: "short completed answer"}))
+	require.NoError(
+		t,
+		reopened.Send(
+			t.Context(),
+			bus.OutboundMessage{ChatID: "inline:retry-publication", Content: "short completed answer"},
+		),
+	)
 	third := newTestChannel(t, caller)
 	third.config = channel.config
 	third.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
@@ -273,11 +292,22 @@ func TestChosenInlineRetainedSourceRecoversFailedPublicationWithoutGeneration(t 
 	channel.config.Channels.Telegram.Inline.Enabled = true
 	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
 	channel.SetRunning(true)
-	result := telego.ChosenInlineResult{ResultID: "generate", InlineMessageID: "retained-publication", Query: "question", From: telego.User{ID: 42}}
+	result := telego.ChosenInlineResult{
+		ResultID:        "generate",
+		InlineMessageID: "retained-publication",
+		Query:           "question",
+		From:            telego.User{ID: 42},
+	}
 	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
 	<-mb.InboundChan()
 	failEdit = true
-	require.Error(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: "inline:retained-publication", Content: "RETAINED_COMPLETE_ANSWER"}))
+	require.Error(
+		t,
+		channel.Send(
+			t.Context(),
+			bus.OutboundMessage{ChatID: "inline:retained-publication", Content: "RETAINED_COMPLETE_ANSWER"},
+		),
+	)
 	failEdit = false
 	reopened := newTestChannel(t, caller)
 	reopened.config = channel.config

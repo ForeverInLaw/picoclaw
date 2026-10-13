@@ -1157,7 +1157,7 @@ func TestSendMessage_WithSplitting(t *testing.T) {
 	}
 }
 
-type progressLengthChannel struct{ mockChannelWithLength }
+type progressLengthChannel struct{ *mockChannelWithLength }
 
 func (c *progressLengthChannel) SendProgress(ctx context.Context, msg bus.OutboundMessage) error {
 	return c.Send(ctx, msg)
@@ -1168,15 +1168,26 @@ func TestSendMessage_ProgressRespectsAdapterLengthCapability(t *testing.T) {
 		t.Run(fmt.Sprint(capable), func(t *testing.T) {
 			m := newTestManager()
 			var received []bus.OutboundMessage
-			base := mockChannelWithLength{mockChannel: mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error { received = append(received, msg); return nil }}, maxLen: 5}
+			base := mockChannelWithLength{
+				mockChannel: mockChannel{
+					sendFn: func(_ context.Context, msg bus.OutboundMessage) error { received = append(received, msg); return nil },
+				},
+				maxLen: 5,
+			}
 			var ch Channel = &base
 			if capable {
-				ch = &progressLengthChannel{base}
+				ch = &progressLengthChannel{&base}
 			}
 			m.channels["test"] = ch
 			m.workers["test"] = &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 			progress := &bus.ProgressMessage{RequestID: "request", ActionID: "action"}
-			msg := bus.OutboundMessage{Channel: "test", ChatID: "42", Content: "long activity result", Progress: progress, ReplyToMessageID: "19"}
+			msg := bus.OutboundMessage{
+				Channel:          "test",
+				ChatID:           "42",
+				Content:          "long activity result",
+				Progress:         progress,
+				ReplyToMessageID: "19",
+			}
 			if err := m.SendMessage(t.Context(), msg); err != nil {
 				t.Fatal(err)
 			}
@@ -1200,10 +1211,13 @@ func TestSendMessage_ReturnsFailureAndStopsRemainingFragments(t *testing.T) {
 		t.Run(failure.Error(), func(t *testing.T) {
 			m := newTestManager()
 			var received []string
-			ch := &mockChannelWithLength{mockChannel: mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
-				received = append(received, msg.Content)
-				return failure
-			}}, maxLen: 5}
+			ch := &mockChannelWithLength{
+				mockChannel: mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+					received = append(received, msg.Content)
+					return failure
+				}},
+				maxLen: 5,
+			}
 			m.channels["test"] = ch
 			m.workers["test"] = &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
 			ctx, cancel := context.WithCancel(t.Context())
@@ -1237,14 +1251,22 @@ func TestSendMessage_ReturnsFailureAndStopsRemainingFragments(t *testing.T) {
 func TestWorker_FailedMessageStopsFragmentsButAllowsNextMessage(t *testing.T) {
 	m := newTestManager()
 	delivered := make(chan string, 4)
-	ch := &mockChannelWithLength{mockChannel: mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
-		delivered <- msg.Content
-		if msg.Content == SplitMessage("abcdefghij", 5)[0] {
-			return ErrSendFailed
-		}
-		return nil
-	}}, maxLen: 5}
-	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1), queue: make(chan bus.OutboundMessage, 2), done: make(chan struct{})}
+	ch := &mockChannelWithLength{
+		mockChannel: mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+			delivered <- msg.Content
+			if msg.Content == SplitMessage("abcdefghij", 5)[0] {
+				return ErrSendFailed
+			}
+			return nil
+		}},
+		maxLen: 5,
+	}
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+		queue:   make(chan bus.OutboundMessage, 2),
+		done:    make(chan struct{}),
+	}
 	w.queue <- bus.OutboundMessage{Content: "abcdefghij"}
 	w.queue <- bus.OutboundMessage{Content: "next"}
 	close(w.queue)

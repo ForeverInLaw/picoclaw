@@ -112,10 +112,16 @@ func TestService_SummarizeClipsPartialStartWithoutFragmentingPersistedHours(t *t
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(text, "OUTSIDE_START") || strings.Contains(text, "PRIVATE_NEIGHBOR") || strings.Contains(text, "INSIDE_START") != (minute < 40) || !strings.Contains(text, "CURRENT_HOUR") {
+		if strings.Contains(text, "OUTSIDE_START") || strings.Contains(text, "PRIVATE_NEIGHBOR") ||
+			strings.Contains(text, "INSIDE_START") != (minute < 40) ||
+			!strings.Contains(text, "CURRENT_HOUR") {
 			t.Fatalf("summary crossed an exact time/chat boundary at minute%d: %s", minute, text)
 		}
-		rows, err := idx.ListChatRollups(t.Context(), memoryindex.ChatScope{Channel: "telegram", ChatID: "-1"}, memoryindex.TimeWindow{})
+		rows, err := idx.ListChatRollups(
+			t.Context(),
+			memoryindex.ChatScope{Channel: "telegram", ChatID: "-1"},
+			memoryindex.TimeWindow{},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
