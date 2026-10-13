@@ -112,7 +112,13 @@ func (s *telegramStreamer) editPreview(ctx context.Context, messageID int, inlin
 	if inlineID == "" {
 		params.ChatID = tu.ID(s.chatID)
 	} else {
-		params.ReplyMarkup = &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
+		s.channel.inlineMu.Lock()
+		defer s.channel.inlineMu.Unlock()
+		state := s.channel.inlineReplyLocked(inlineID)
+		if state.finalized {
+			return nil
+		}
+		params.ReplyMarkup = inlineStatusMarkup(state.markup, state.retryText)
 	}
 	_, err := s.channel.bot.EditMessageText(ctx, params)
 	if isTelegramFormattingError(err) {

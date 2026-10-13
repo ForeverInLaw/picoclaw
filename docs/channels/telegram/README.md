@@ -84,3 +84,9 @@ and to its original published destination. Retained results expire after 30 days
 the per-bot store is capped at 256 results and 64 MiB, retiring older results when
 needed. Expired page buttons report that the page is unavailable. Keep the workspace
 state directory when restarting the bot if published page navigation is needed.
+
+Inline recovery status appears as a disabled keyboard row beneath the answer.
+Updating that row leaves answer text and formulas intact. The row is cleared
+when recovery completes or fails, and final delivery replaces it with any
+required page navigation. Queued retry updates cannot restore status after the
+answer has already been finalized.

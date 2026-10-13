@@ -33,7 +33,10 @@ func (c *TelegramChannel) SendProgress(ctx context.Context, msg bus.OutboundMess
 	if msg.Progress == nil {
 		return fmt.Errorf("telegram progress payload missing: %w", channels.ErrSendFailed)
 	}
-	if isTelegramInlineChatID(msg.ChatID) {
+	if inlineID, ok := telegramInlineMessageID(msg.ChatID); ok {
+		if msg.Progress.Kind == bus.ProgressRetry {
+			return c.sendInlineRetryStatus(ctx, inlineID, msg)
+		}
 		return nil
 	}
 	chatID, threadID, err := parseTelegramChatID(msg.ChatID)

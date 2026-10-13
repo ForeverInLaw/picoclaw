@@ -97,6 +97,8 @@ func (c *TelegramChannel) loadInlinePages(inlineMessageID string) (telegramInlin
 }
 
 func (c *TelegramChannel) showInlinePage(ctx context.Context, inlineMessageID string, ownerID int64, page int) error {
+	c.inlineMu.Lock()
+	defer c.inlineMu.Unlock()
 	pages, err := c.loadInlinePages(inlineMessageID)
 	if err != nil {
 		return err
@@ -104,7 +106,13 @@ func (c *TelegramChannel) showInlinePage(ctx context.Context, inlineMessageID st
 	if pages.OwnerID == 0 || pages.OwnerID != ownerID {
 		return fmt.Errorf("inline answer belongs to another user")
 	}
-	return c.editInlinePage(ctx, inlineMessageID, pages, page)
+	if err = c.editInlinePage(ctx, inlineMessageID, pages, page); err != nil {
+		return err
+	}
+	state := c.inlineReplyLocked(inlineMessageID)
+	state.finalized = true
+	state.retryText = ""
+	return nil
 }
 
 // Bound persistent result state by age, count, and total bytes. Navigation of a
@@ -203,12 +211,17 @@ func (c *TelegramChannel) editInlinePage(ctx context.Context, inlineMessageID st
 		return c.editInlinePage(ctx, inlineMessageID, pages, 0)
 	}
 	if isTelegramMessageNotModified(err) {
-		return nil
+		err = nil
+	}
+	if err == nil {
+		c.inlineReplyLocked(inlineMessageID).markup = params.ReplyMarkup
 	}
 	return telegramDeliveryError(err)
 }
 
 func (c *TelegramChannel) sendInlineAnswer(ctx context.Context, inlineMessageID, content string) error {
+	c.inlineMu.Lock()
+	defer c.inlineMu.Unlock()
 	pages := telegramInlinePages{Content: normalizeRichMarkdown(content)}
 	if strings.TrimSpace(pages.Content) == "" {
 		return nil
@@ -218,5 +231,11 @@ func (c *TelegramChannel) sendInlineAnswer(ctx context.Context, inlineMessageID,
 			return fmt.Errorf("save complete inline answer: %w", err)
 		}
 	}
-	return c.editInlinePage(ctx, inlineMessageID, pages, 0)
+	if err := c.editInlinePage(ctx, inlineMessageID, pages, 0); err != nil {
+		return err
+	}
+	state := c.inlineReplyLocked(inlineMessageID)
+	state.finalized = true
+	state.retryText = ""
+	return nil
 }
