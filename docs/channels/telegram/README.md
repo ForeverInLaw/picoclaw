@@ -54,3 +54,13 @@ keeps all pages available.
 This uses [Telego 1.12.1](https://github.com/mymmrac/telego/releases/tag/v1.12.1)
 and [Telegram Bot API 10.3](https://core.telegram.org/bots/api), checked on
 2026-10-13. A custom `base_url` must provide the same rich-message methods.
+
+## Tool activity
+
+Every executed tool in direct chats and groups gets a separate activity message,
+including shell commands, file operations, web search, and custom tools. It starts
+with the action preview and is edited with its result or error. Longer output is
+available in a collapsed details block; output beyond the activity limit is
+marked `[truncated]`. Activity delivery retries edit the same message and never
+replace the assistant's answer. Inline tool permissions stay restricted and
+inline destinations do not receive these activity messages.
