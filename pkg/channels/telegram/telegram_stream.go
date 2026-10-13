@@ -27,7 +27,13 @@ func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (chann
 		return nil, err
 	}
 	cfg := c.config.Channels.Telegram.Streaming
-	stream := &telegramStreamer{channel: c, replyTo: bus.StreamReplyTo(ctx), draftID: cryptoRandInt(), throttleInterval: time.Duration(cfg.ThrottleSeconds) * time.Second, minGrowth: cfg.MinGrowthChars}
+	stream := &telegramStreamer{
+		channel:          c,
+		replyTo:          bus.StreamReplyTo(ctx),
+		draftID:          cryptoRandInt(),
+		throttleInterval: time.Duration(cfg.ThrottleSeconds) * time.Second,
+		minGrowth:        cfg.MinGrowthChars,
+	}
 	if inlineID, ok := telegramInlineMessageID(chatID); ok {
 		stream.inlineMessageID = inlineID
 		return stream, nil
@@ -54,7 +60,7 @@ type telegramStreamer struct {
 	lastAt           time.Time
 	previewFailed    bool
 	finalized        bool
-	cancelled        bool
+	canceled         bool
 	mu               sync.Mutex
 }
 
@@ -64,7 +70,7 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.previewFailed || s.finalized || s.cancelled || strings.TrimSpace(content) == "" {
+	if s.previewFailed || s.finalized || s.canceled || strings.TrimSpace(content) == "" {
 		return nil
 	}
 	now := time.Now()
@@ -77,9 +83,22 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 	case s.inlineMessageID != "":
 		err = s.editPreview(ctx, 0, s.inlineMessageID, preview)
 	case s.chatID > 0:
-		err = s.channel.bot.SendRichMessageDraft(ctx, &telego.SendRichMessageDraftParams{ChatID: s.chatID, MessageThreadID: s.threadID, DraftID: s.draftID, RichMessage: tu.RichMessageMarkdown(preview)})
+		err = s.channel.bot.SendRichMessageDraft(
+			ctx,
+			&telego.SendRichMessageDraftParams{
+				ChatID:          s.chatID,
+				MessageThreadID: s.threadID,
+				DraftID:         s.draftID,
+				RichMessage:     tu.RichMessageMarkdown(preview),
+			},
+		)
 	case s.previewMessageID == 0:
-		params := &telego.SendRichMessageParams{ChatID: tu.ID(s.chatID), MessageThreadID: s.threadID, ReplyParameters: replyParameters(s.replyTo), RichMessage: tu.RichMessageMarkdown(preview)}
+		params := &telego.SendRichMessageParams{
+			ChatID:          tu.ID(s.chatID),
+			MessageThreadID: s.threadID,
+			ReplyParameters: replyParameters(s.replyTo),
+			RichMessage:     tu.RichMessageMarkdown(preview),
+		}
 		var message *telego.Message
 		message, err = s.channel.bot.SendRichMessage(ctx, params)
 		if isTelegramFormattingError(err) {
@@ -97,7 +116,11 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 	if err != nil {
 		// Preview is best effort. Preserve its identity and retry complete final
 		// delivery separately; never restart the model or replay a tool.
-		logger.WarnCF("telegram", "Rich answer preview failed; retaining final delivery", map[string]any{"error": err.Error()})
+		logger.WarnCF(
+			"telegram",
+			"Rich answer preview failed; retaining final delivery",
+			map[string]any{"error": err.Error()},
+		)
 		s.previewFailed = true
 		return nil
 	}
@@ -138,7 +161,7 @@ func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.cancelled {
+	if s.canceled {
 		return context.Canceled
 	}
 	if s.finalized {
@@ -149,13 +172,19 @@ func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
 	case s.inlineMessageID != "":
 		err = safeFinalEdit(ctx, func() error { return s.channel.sendInlineAnswer(ctx, s.inlineMessageID, content) })
 	case s.previewMessageID != 0:
-		err = safeFinalEdit(ctx, func() error { return s.channel.editRichReply(ctx, s.chatID, s.threadID, s.previewMessageID, content) })
+		err = safeFinalEdit(
+			ctx,
+			func() error { return s.channel.editRichReply(ctx, s.chatID, s.threadID, s.previewMessageID, content) },
+		)
 		if err != nil && ctx.Err() == nil {
 			// Editing can become unavailable (e.g. the preview was deleted).
 			// Send a complete new reply while retaining its request association.
 			_, err = s.channel.sendRichReply(ctx, s.chatID, s.threadID, s.replyTo, content)
 			if err == nil {
-				_ = s.channel.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: tu.ID(s.chatID), MessageID: s.previewMessageID})
+				_ = s.channel.bot.DeleteMessage(
+					ctx,
+					&telego.DeleteMessageParams{ChatID: tu.ID(s.chatID), MessageID: s.previewMessageID},
+				)
 			}
 		}
 	default:
@@ -195,12 +224,15 @@ func richAnswerPreview(content string, limit int) string {
 func (s *telegramStreamer) Cancel(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.finalized || s.cancelled {
+	if s.finalized || s.canceled {
 		return
 	}
-	s.cancelled = true
+	s.canceled = true
 	if s.previewMessageID != 0 {
-		_ = s.channel.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: tu.ID(s.chatID), MessageID: s.previewMessageID})
+		_ = s.channel.bot.DeleteMessage(
+			ctx,
+			&telego.DeleteMessageParams{ChatID: tu.ID(s.chatID), MessageID: s.previewMessageID},
+		)
 	}
 	// Private drafts expire automatically. Inline destinations retain their
 	// selected placeholder/last preview; cancellation stops further edits.

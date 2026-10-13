@@ -29,7 +29,6 @@ import (
 
 var (
 	reHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+([^\n]+)`)
-	reBlockquote = regexp.MustCompile(`^>\s*(.*)$`)
 	reLink       = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	reBoldStar   = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	reBoldUnder  = regexp.MustCompile(`__(.+?)__`)
@@ -221,19 +220,6 @@ func prependQuotedTelegramReply(message *telego.Message, quotedBody, content str
 
 	author := telegramMessageAuthor(message.ReplyToMessage)
 	return fmt.Sprintf("[quoted message from %s]: %s\n\n%s", author, quotedBody, content)
-}
-
-func telegramMessageText(message *telego.Message) string {
-	if message == nil {
-		return ""
-	}
-	if strings.TrimSpace(message.Text) != "" {
-		return message.Text
-	}
-	if strings.TrimSpace(message.Caption) != "" {
-		return message.Caption
-	}
-	return ""
 }
 
 func telegramMessageAuthor(message *telego.Message) string {
@@ -531,14 +517,6 @@ func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) 
 	return c.downloadFileWithInfo(file, ext)
 }
 
-func parseContent(text string, useMarkdownV2 bool) string {
-	if useMarkdownV2 {
-		return markdownToTelegramMarkdownV2(text)
-	}
-
-	return markdownToTelegramHTML(text)
-}
-
 // parseTelegramChatID splits "chatID/threadID" into its components.
 // Returns threadID=0 when no "/" is present (non-forum messages).
 func parseTelegramChatID(chatID string) (int64, int, error) {
@@ -556,20 +534,6 @@ func parseTelegramChatID(chatID string) (int64, int, error) {
 		return 0, 0, fmt.Errorf("invalid thread ID in chat ID %q: %w", chatID, err)
 	}
 	return cid, tid, nil
-}
-
-func logParseFailed(err error, useMarkdownV2 bool) {
-	parsingName := "HTML"
-	if useMarkdownV2 {
-		parsingName = "MarkdownV2"
-	}
-
-	logger.ErrorCF("telegram",
-		fmt.Sprintf("%s parse failed, falling back to plain text", parsingName),
-		map[string]any{
-			"error": err.Error(),
-		},
-	)
 }
 
 // isBotMentioned checks if the bot is mentioned in the message via entities.

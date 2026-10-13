@@ -64,10 +64,21 @@ func (c *TelegramChannel) SendProgress(ctx context.Context, msg bus.OutboundMess
 	}
 	if entry == nil {
 		message, sendErr := c.bot.SendRichMessage(ctx, &telego.SendRichMessageParams{
-			ChatID: tu.ID(chatID), MessageThreadID: threadID, ReplyParameters: replyParameters(msg.ReplyToMessageID), RichMessage: rich,
+			ChatID: tu.ID(
+				chatID,
+			),
+			MessageThreadID: threadID,
+			ReplyParameters: replyParameters(msg.ReplyToMessageID),
+			RichMessage:     rich,
 		})
 		if isTelegramFormattingError(sendErr) {
-			message, sendErr = c.sendPlainReply(ctx, chatID, threadID, msg.ReplyToMessageID, limitActivityText(plain, telegramInlineMessageLimit))
+			message, sendErr = c.sendPlainReply(
+				ctx,
+				chatID,
+				threadID,
+				msg.ReplyToMessageID,
+				limitActivityText(plain, telegramInlineMessageLimit),
+			)
 		}
 		if sendErr != nil {
 			return telegramDeliveryError(sendErr)
@@ -78,9 +89,19 @@ func (c *TelegramChannel) SendProgress(ctx context.Context, msg bus.OutboundMess
 		entry = &telegramActivity{messageID: message.MessageID}
 		c.activities[key] = entry
 	} else {
-		_, err = c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{ChatID: tu.ID(chatID), MessageID: entry.messageID, RichMessage: &rich})
+		_, err = c.bot.EditMessageText(
+			ctx,
+			&telego.EditMessageTextParams{ChatID: tu.ID(chatID), MessageID: entry.messageID, RichMessage: &rich},
+		)
 		if isTelegramFormattingError(err) {
-			_, err = c.bot.EditMessageText(ctx, tu.EditMessageText(tu.ID(chatID), entry.messageID, limitActivityText(plain, telegramInlineMessageLimit)))
+			_, err = c.bot.EditMessageText(
+				ctx,
+				tu.EditMessageText(
+					tu.ID(chatID),
+					entry.messageID,
+					limitActivityText(plain, telegramInlineMessageLimit),
+				),
+			)
 		}
 		if err != nil && !isTelegramMessageNotModified(err) {
 			return telegramDeliveryError(err)
@@ -144,7 +165,14 @@ func renderTelegramActivity(msg bus.OutboundMessage) (telego.InputRichMessage, s
 		plain += "\n\n" + output
 		if len([]rune(output)) > 600 || strings.Count(output, "\n") > 6 {
 			summary := limitActivityText(strings.SplitN(output, "\n", 2)[0], 200)
-			blocks = append(blocks, tu.RichBlockParagraph(tu.RichTextPlain(summary)), tu.RichBlockDetails(tu.RichTextPlain("Tool output"), tu.RichBlockPreformatted(tu.RichTextPlain(output))))
+			blocks = append(
+				blocks,
+				tu.RichBlockParagraph(tu.RichTextPlain(summary)),
+				tu.RichBlockDetails(
+					tu.RichTextPlain("Tool output"),
+					tu.RichBlockPreformatted(tu.RichTextPlain(output)),
+				),
+			)
 		} else {
 			blocks = append(blocks, tu.RichBlockPreformatted(tu.RichTextPlain(output)))
 		}

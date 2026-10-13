@@ -25,7 +25,16 @@ func TestInlineRetryStatusNeverChangesAnswerAndClearsOnRecovery(t *testing.T) {
 	stream, err := channel.BeginStream(context.Background(), "inline:result")
 	require.NoError(t, err)
 	require.NoError(t, stream.Update(context.Background(), "Partial answer $x^2$"))
-	progress := bus.OutboundMessage{ChatID: "inline:result", Content: "Temporary failure. Retrying (1/2)…", Progress: &bus.ProgressMessage{RequestID: "request", ActionID: "model:1", Kind: bus.ProgressRetry, State: bus.ProgressStarted}}
+	progress := bus.OutboundMessage{
+		ChatID:  "inline:result",
+		Content: "Temporary failure. Retrying (1/2)…",
+		Progress: &bus.ProgressMessage{
+			RequestID: "request",
+			ActionID:  "model:1",
+			Kind:      bus.ProgressRetry,
+			State:     bus.ProgressStarted,
+		},
+	}
 	require.NoError(t, channel.SendProgress(context.Background(), progress))
 	require.Len(t, caller.calls, 2)
 	require.Contains(t, caller.calls[1].URL, "/editMessageReplyMarkup")
@@ -67,14 +76,32 @@ func TestInlineRetryStatusNeverChangesAnswerAndClearsOnRecovery(t *testing.T) {
 func TestInlineRetryStatusFailureLeavesFinalErrorDeliveryAvailable(t *testing.T) {
 	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
 		if strings.HasSuffix(url, "/editMessageReplyMarkup") {
-			return &ta.Response{Ok: false, Error: &ta.Error{ErrorCode: 500, Description: "temporary status edit failure"}}, nil
+			return &ta.Response{
+				Ok:    false,
+				Error: &ta.Error{ErrorCode: 500, Description: "temporary status edit failure"},
+			}, nil
 		}
 		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
 	}}
 	channel := newTestChannel(t, caller)
-	progress := bus.OutboundMessage{ChatID: "inline:result", Content: "Retrying…", Progress: &bus.ProgressMessage{RequestID: "request", ActionID: "model:1", Kind: bus.ProgressRetry, State: bus.ProgressStarted}}
+	progress := bus.OutboundMessage{
+		ChatID:  "inline:result",
+		Content: "Retrying…",
+		Progress: &bus.ProgressMessage{
+			RequestID: "request",
+			ActionID:  "model:1",
+			Kind:      bus.ProgressRetry,
+			State:     bus.ProgressStarted,
+		},
+	}
 	require.Error(t, channel.SendProgress(context.Background(), progress))
-	require.NoError(t, channel.Send(context.Background(), bus.OutboundMessage{ChatID: "inline:result", Content: "The model request failed. Please try again."}))
+	require.NoError(
+		t,
+		channel.Send(
+			context.Background(),
+			bus.OutboundMessage{ChatID: "inline:result", Content: "The model request failed. Please try again."},
+		),
+	)
 	progress.Progress.State = bus.ProgressFailed
 	require.NoError(t, channel.SendProgress(context.Background(), progress))
 	require.Len(t, caller.calls, 2)
@@ -98,11 +125,37 @@ func TestInlineRetryClearsWithoutReplacingFinalPageNavigation(t *testing.T) {
 	channel.config.Agents.Defaults.Workspace = t.TempDir()
 	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, bus.NewMessageBus(), nil)
 	channel.SetRunning(true)
-	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(context.Background()), telego.ChosenInlineResult{InlineMessageID: "result", ResultID: "generate", Query: "long answer", From: telego.User{ID: 42}}))
+	require.NoError(
+		t,
+		channel.handleChosenInlineResult(
+			(&th.Context{}).WithContext(context.Background()),
+			telego.ChosenInlineResult{
+				InlineMessageID: "result",
+				ResultID:        "generate",
+				Query:           "long answer",
+				From:            telego.User{ID: 42},
+			},
+		),
+	)
 	caller.calls = nil
-	progress := bus.OutboundMessage{ChatID: "inline:result", Content: "Retrying (1/2)…", Progress: &bus.ProgressMessage{RequestID: "request", ActionID: "model:1", Kind: bus.ProgressRetry, State: bus.ProgressStarted}}
+	progress := bus.OutboundMessage{
+		ChatID:  "inline:result",
+		Content: "Retrying (1/2)…",
+		Progress: &bus.ProgressMessage{
+			RequestID: "request",
+			ActionID:  "model:1",
+			Kind:      bus.ProgressRetry,
+			State:     bus.ProgressStarted,
+		},
+	}
 	require.NoError(t, channel.SendProgress(context.Background(), progress))
-	require.NoError(t, channel.Send(context.Background(), bus.OutboundMessage{ChatID: "inline:result", Content: strings.Repeat("Answer paragraph\n\n", 2000)}))
+	require.NoError(
+		t,
+		channel.Send(
+			context.Background(),
+			bus.OutboundMessage{ChatID: "inline:result", Content: strings.Repeat("Answer paragraph\n\n", 2000)},
+		),
+	)
 	progress.Progress.State = bus.ProgressCompleted
 	require.NoError(t, channel.SendProgress(context.Background(), progress))
 	require.Len(t, caller.calls, 2)

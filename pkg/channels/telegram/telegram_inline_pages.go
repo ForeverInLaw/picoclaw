@@ -35,7 +35,13 @@ const inlinePagesLifetime = 30 * 24 * time.Hour
 func (c *TelegramChannel) inlinePagesPath(inlineMessageID string) string {
 	botID := sha256.Sum256([]byte(strings.SplitN(c.config.Channels.Telegram.Token, ":", 2)[0]))
 	messageID := sha256.Sum256([]byte(inlineMessageID))
-	return filepath.Join(c.config.WorkspacePath(), ".state", "telegram-inline", hex.EncodeToString(botID[:8]), hex.EncodeToString(messageID[:])+".json")
+	return filepath.Join(
+		c.config.WorkspacePath(),
+		".state",
+		"telegram-inline",
+		hex.EncodeToString(botID[:8]),
+		hex.EncodeToString(messageID[:])+".json",
+	)
 }
 
 func (c *TelegramChannel) saveInlinePages(inlineMessageID string, pages telegramInlinePages) error {
@@ -175,15 +181,35 @@ func inlinePageContent(pages telegramInlinePages, page int) (string, *telego.Inl
 	}
 	buttons := []telego.InlineKeyboardButton{}
 	if page > 0 {
-		buttons = append(buttons, telego.InlineKeyboardButton{Text: "← Previous", CallbackData: telegramInlinePagePrefix + strconv.Itoa(page-1)})
+		buttons = append(
+			buttons,
+			telego.InlineKeyboardButton{
+				Text:         "← Previous",
+				CallbackData: telegramInlinePagePrefix + strconv.Itoa(page-1),
+			},
+		)
 	}
 	if page+1 < len(chunks) {
-		buttons = append(buttons, telego.InlineKeyboardButton{Text: "Next →", CallbackData: telegramInlinePagePrefix + strconv.Itoa(page+1)})
+		buttons = append(
+			buttons,
+			telego.InlineKeyboardButton{Text: "Next →", CallbackData: telegramInlinePagePrefix + strconv.Itoa(page+1)},
+		)
 	}
-	return chunks[page] + fmt.Sprintf("\n\nPage %d/%d", page+1, len(chunks)), &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{buttons}}, nil
+	return chunks[page] + fmt.Sprintf(
+		"\n\nPage %d/%d",
+		page+1,
+		len(chunks),
+	), &telego.InlineKeyboardMarkup{
+		InlineKeyboard: [][]telego.InlineKeyboardButton{buttons},
+	}, nil
 }
 
-func (c *TelegramChannel) editInlinePage(ctx context.Context, inlineMessageID string, pages telegramInlinePages, page int) error {
+func (c *TelegramChannel) editInlinePage(
+	ctx context.Context,
+	inlineMessageID string,
+	pages telegramInlinePages,
+	page int,
+) error {
 	content, markup, err := inlinePageContent(pages, page)
 	if err != nil {
 		return err
