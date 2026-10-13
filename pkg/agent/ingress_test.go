@@ -385,7 +385,12 @@ func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
 			initial, cfg, _, _, cleanup := newTestAgentLoop(t)
 			defer cleanup()
 			initial.Close()
-			cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{Enabled: true, MaxResults: 5, MaxSnippetChars: 500, MinQueryChars: 3}
+			cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{
+				Enabled:         true,
+				MaxResults:      5,
+				MaxSnippetChars: 500,
+				MinQueryChars:   3,
+			}
 			run := func() (*AgentLoop, *bus.MessageBus, *ingressProvider, func()) {
 				mb := bus.NewMessageBus()
 				p := &ingressProvider{requests: make(chan ingressRequest, 10)}
@@ -410,7 +415,18 @@ func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
 			publishIncoming(t, mb, msg)
 			_ = finalOutbound(t, mb)
 			agent := al.registry.GetDefaultAgent()
-			if err := agent.MemoryIndex.AddObservation(t.Context(), memoryindex.Observation{SessionKey: msg.SessionKey, Channel: "telegram", ChatID: msg.ChatID, PeerKind: "direct", Role: "user", Content: "OLD_LATE_WRITE bicycle", CreatedAt: time.Now()}); err != nil {
+			if err := agent.MemoryIndex.AddObservation(
+				t.Context(),
+				memoryindex.Observation{
+					SessionKey: msg.SessionKey,
+					Channel:    "telegram",
+					ChatID:     msg.ChatID,
+					PeerKind:   "direct",
+					Role:       "user",
+					Content:    "OLD_LATE_WRITE bicycle",
+					CreatedAt:  time.Now(),
+				},
+			); err != nil {
 				t.Fatal(err)
 			}
 			msg.Content = "FRESH_RETRIEVAL bicycle"
@@ -428,7 +444,10 @@ func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
 				}
 
 				for {
-					hits, err := agent.MemoryIndex.Search(t.Context(), memoryindex.SearchRequest{Query: "bicycle", Channel: "telegram", ChatID: msg.ChatID, Limit: 10})
+					hits, err := agent.MemoryIndex.Search(
+						t.Context(),
+						memoryindex.SearchRequest{Query: "bicycle", Channel: "telegram", ChatID: msg.ChatID, Limit: 10},
+					)
 					found := false
 					for _, hit := range hits {
 						found = found || strings.Contains(hit.Content, "FRESH_RETRIEVAL")
@@ -463,10 +482,14 @@ func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
 			input := conversationInput(request.messages)
 			close(request.release)
 			_ = finalOutbound(t, mb)
-			if !strings.Contains(input, "RETRIEVED_MEMORY") || !strings.Contains(input, "FRESH_RETRIEVAL") || strings.Contains(input, "OLD_DIALOG") || strings.Contains(input, "OLD_LATE_WRITE") {
-				t.Fatalf("fresh conversation retrieval did not preserve its generation boundary across restart: %s", input)
+			if !strings.Contains(input, "RETRIEVED_MEMORY") || !strings.Contains(input, "FRESH_RETRIEVAL") ||
+				strings.Contains(input, "OLD_DIALOG") ||
+				strings.Contains(input, "OLD_LATE_WRITE") {
+				t.Fatalf(
+					"fresh conversation retrieval did not preserve its generation boundary across restart: %s",
+					input,
+				)
 			}
-
 		})
 	}
 }
@@ -498,7 +521,11 @@ func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
 					_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
 					return
 				}
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"cross-provider recovered"},"finish_reason":"stop"}]}`))
+				_, _ = w.Write(
+					[]byte(
+						`{"choices":[{"message":{"role":"assistant","content":"cross-provider recovered"},"finish_reason":"stop"}]}`,
+					),
+				)
 			}))
 			defer backup.Close()
 			initial, cfg, _, _, cleanup := newTestAgentLoop(t)
@@ -506,7 +533,15 @@ func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
 			initial.Close()
 			cfg.Agents.Defaults.Model = "primary-alias"
 			cfg.Agents.Defaults.ModelFallbacks = []string{reference}
-			cfg.ModelList = []config.ModelConfig{{ModelName: "primary-alias", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL}, {ModelName: "backup-alias", Model: "anthropic/claude-backup", APIKey: "backup-key", APIBase: backup.URL}}
+			cfg.ModelList = []config.ModelConfig{
+				{ModelName: "primary-alias", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL},
+				{
+					ModelName: "backup-alias",
+					Model:     "anthropic/claude-backup",
+					APIKey:    "backup-key",
+					APIBase:   backup.URL,
+				},
+			}
 			provider, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
 			if err != nil {
 				t.Fatal(err)
@@ -522,9 +557,13 @@ func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
 			publishIncoming(t, mb, directIngressMessage("recover through backup"))
 			out := finalOutbound(t, mb)
 			if primaryCalls.Load() != 1 || backupCalls.Load() != 2 || out.Content != "cross-provider recovered" {
-				t.Fatalf("fallback endpoint/attempts primary=%d backup=%d reply=%q", primaryCalls.Load(), backupCalls.Load(), out.Content)
+				t.Fatalf(
+					"fallback endpoint/attempts primary=%d backup=%d reply=%q",
+					primaryCalls.Load(),
+					backupCalls.Load(),
+					out.Content,
+				)
 			}
-
 		})
 	}
 }
@@ -536,7 +575,10 @@ func TestRunResetControlsRemainResponsiveWithBackpressuredAcknowledgements(t *te
 	publishIncoming(t, mb, directIngressMessage("blocked turn"))
 	_ = inboundRequest(t, p)
 	for n := 0; n < 64; n++ {
-		if err := mb.PublishOutbound(t.Context(), bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "queued output"}); err != nil {
+		if err := mb.PublishOutbound(
+			t.Context(),
+			bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "queued output"},
+		); err != nil {
 			t.Fatal(err)
 		}
 	}

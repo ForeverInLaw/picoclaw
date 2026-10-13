@@ -323,8 +323,7 @@ func TestSend_AmbiguousTransportErrorDoesNotRetry(t *testing.T) {
 }
 
 func TestSend_TransientErrorStopsBeforeRemainingChunks(t *testing.T) {
-	// With a long message that gets split into 2 chunks, if both HTML and
-	// plain text fail on the first chunk, Send should return early.
+	// A transport failure on the first chunk stops delivery before the rest.
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			return nil, errors.New("send failed")
@@ -340,7 +339,7 @@ func TestSend_TransientErrorStopsBeforeRemainingChunks(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	// Should fail on the first chunk (2 calls: HTML + fallback), never reaching the second chunk.
+	// An unknown send outcome must not trigger a plain fallback or another chunk.
 	assert.Len(t, caller.calls, 1, "stop delivery after a transport failure")
 }
 

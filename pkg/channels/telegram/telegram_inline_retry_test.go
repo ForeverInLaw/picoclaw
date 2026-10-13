@@ -184,13 +184,42 @@ func TestInlineRetryIgnoresFinalizedAnswersAfterGuardEviction(t *testing.T) {
 	channel.config.Agents.Defaults.Workspace = t.TempDir()
 	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, bus.NewMessageBus(), nil)
 	channel.SetRunning(true)
-	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), telego.ChosenInlineResult{InlineMessageID: "selected", ResultID: "generate", Query: "answer", From: telego.User{ID: 42}}))
-	progress := bus.OutboundMessage{ChatID: "inline:selected", Content: "Retrying…", Progress: &bus.ProgressMessage{RequestID: "request", ActionID: "retry", Kind: bus.ProgressRetry, State: bus.ProgressStarted}}
+	require.NoError(
+		t,
+		channel.handleChosenInlineResult(
+			(&th.Context{}).WithContext(t.Context()),
+			telego.ChosenInlineResult{
+				InlineMessageID: "selected",
+				ResultID:        "generate",
+				Query:           "answer",
+				From:            telego.User{ID: 42},
+			},
+		),
+	)
+	progress := bus.OutboundMessage{
+		ChatID:  "inline:selected",
+		Content: "Retrying…",
+		Progress: &bus.ProgressMessage{
+			RequestID: "request",
+			ActionID:  "retry",
+			Kind:      bus.ProgressRetry,
+			State:     bus.ProgressStarted,
+		},
+	}
 	require.NoError(t, channel.SendProgress(t.Context(), progress))
 	require.Len(t, caller.calls, 2, "selected requests must show retry status before their first preview")
-	require.NoError(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: "inline:selected", Content: "Completed answer"}))
+	require.NoError(
+		t,
+		channel.Send(t.Context(), bus.OutboundMessage{ChatID: "inline:selected", Content: "Completed answer"}),
+	)
 	for n := 0; n < 2049; n++ {
-		require.NoError(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: fmt.Sprintf("inline:other-%d", n), Content: "Completed answer"}))
+		require.NoError(
+			t,
+			channel.Send(
+				t.Context(),
+				bus.OutboundMessage{ChatID: fmt.Sprintf("inline:other-%d", n), Content: "Completed answer"},
+			),
+		)
 	}
 	caller.calls = nil
 	require.NoError(t, channel.SendProgress(t.Context(), progress))

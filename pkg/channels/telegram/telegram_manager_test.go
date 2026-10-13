@@ -129,7 +129,12 @@ func TestManagerInlineFormattingFallbackPreservesLaterSourcePosition(t *testing.
 		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
 	}))
 	defer server.Close()
-	bot, err := telego.NewBot(testToken, telego.WithAPIServer(server.URL), telego.WithHTTPClient(server.Client()), telego.WithDiscardLogger())
+	bot, err := telego.NewBot(
+		testToken,
+		telego.WithAPIServer(server.URL),
+		telego.WithHTTPClient(server.Client()),
+		telego.WithDiscardLogger(),
+	)
 	require.NoError(t, err)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = t.TempDir()
@@ -142,15 +147,49 @@ func TestManagerInlineFormattingFallbackPreservesLaterSourcePosition(t *testing.
 	manager.RegisterChannel("telegram", outboundTelegram{channel})
 	require.NoError(t, manager.StartAll(t.Context()))
 	defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
-	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), telego.ChosenInlineResult{InlineMessageID: "result", Query: "answer", ResultID: "generate", From: telego.User{ID: 42}}))
+	require.NoError(
+		t,
+		channel.handleChosenInlineResult(
+			(&th.Context{}).WithContext(t.Context()),
+			telego.ChosenInlineResult{
+				InlineMessageID: "result",
+				Query:           "answer",
+				ResultID:        "generate",
+				From:            telego.User{ID: 42},
+			},
+		),
+	)
 	var source strings.Builder
 	for n := 0; n < 300; n++ {
-		fmt.Fprintf(&source, "BLOCK%04d\nRepeated paragraph %s\n\n```go\n%s\n```\n\n", n, strings.Repeat("shared ", 30), strings.Repeat("repeat(); ", 20))
+		fmt.Fprintf(
+			&source,
+			"BLOCK%04d\nRepeated paragraph %s\n\n```go\n%s\n```\n\n",
+			n,
+			strings.Repeat("shared ", 30),
+			strings.Repeat("repeat(); ", 20),
+		)
 	}
 	source.WriteString("LAST_POSITION")
-	require.NoError(t, manager.SendMessage(t.Context(), bus.OutboundMessage{Channel: "telegram", ChatID: "inline:result", Content: source.String()}))
+	require.NoError(
+		t,
+		manager.SendMessage(
+			t.Context(),
+			bus.OutboundMessage{Channel: "telegram", ChatID: "inline:result", Content: source.String()},
+		),
+	)
 	rejectLater = true
-	require.NoError(t, channel.handleInlineCallbackQuery((&th.Context{}).WithContext(t.Context()), telego.CallbackQuery{ID: "later", InlineMessageID: "result", From: telego.User{ID: 42}, Data: telegramInlinePagePrefix + "2"}))
+	require.NoError(
+		t,
+		channel.handleInlineCallbackQuery(
+			(&th.Context{}).WithContext(t.Context()),
+			telego.CallbackQuery{
+				ID:              "later",
+				InlineMessageID: "result",
+				From:            telego.User{ID: 42},
+				Data:            telegramInlinePagePrefix + "2",
+			},
+		),
+	)
 	marker := regexp.MustCompile(`BLOCK(\d{4})`)
 	oldID := marker.FindStringSubmatch(rejected)
 	newID := marker.FindStringSubmatch(plain)
@@ -162,14 +201,30 @@ func TestManagerInlineFormattingFallbackPreservesLaterSourcePosition(t *testing.
 	require.NoError(t, err)
 	require.Greater(t, oldPosition, 100)
 	require.LessOrEqual(t, newPosition, oldPosition)
-	require.LessOrEqual(t, oldPosition-newPosition, 9, "plain pagination must retain the selected source position, not jump to page zero")
+	require.LessOrEqual(
+		t,
+		oldPosition-newPosition,
+		9,
+		"plain pagination must retain the selected source position, not jump to page zero",
+	)
 	require.NotContains(t, plain, "BLOCK0000")
 	pageCount := regexp.MustCompile(`Page \d+/(\d+)`).FindStringSubmatch(plain)
 	require.Len(t, pageCount, 2)
 	count, err := strconv.Atoi(pageCount[1])
 	require.NoError(t, err)
 	lastPage := strconv.Itoa(count - 1)
-	require.NoError(t, channel.handleInlineCallbackQuery((&th.Context{}).WithContext(t.Context()), telego.CallbackQuery{ID: "last", InlineMessageID: "result", From: telego.User{ID: 42}, Data: telegramInlinePagePrefix + lastPage}))
+	require.NoError(
+		t,
+		channel.handleInlineCallbackQuery(
+			(&th.Context{}).WithContext(t.Context()),
+			telego.CallbackQuery{
+				ID:              "last",
+				InlineMessageID: "result",
+				From:            telego.User{ID: 42},
+				Data:            telegramInlinePagePrefix + lastPage,
+			},
+		),
+	)
 	require.Contains(t, plain, "LAST_POSITION")
 }
 
@@ -194,7 +249,9 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 				if strings.HasSuffix(r.URL.Path, "/editMessageText") {
 					edits++
 					if mode == "deleted_preview" && edits == 1 {
-						_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"message to edit not found"}`))
+						_, _ = w.Write(
+							[]byte(`{"ok":false,"error_code":400,"description":"message to edit not found"}`),
+						)
 						return
 					}
 					tailDelivered = tailDelivered || strings.Contains(body.Rich.Markdown, "TAIL_MARKER")
@@ -218,7 +275,12 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 				_, _ = fmt.Fprintf(w, `{"ok":true,"result":{"message_id":%d}}`, sends)
 			}))
 			defer server.Close()
-			bot, err := telego.NewBot(testToken, telego.WithAPIServer(server.URL), telego.WithHTTPClient(server.Client()), telego.WithDiscardLogger())
+			bot, err := telego.NewBot(
+				testToken,
+				telego.WithAPIServer(server.URL),
+				telego.WithHTTPClient(server.Client()),
+				telego.WithDiscardLogger(),
+			)
 			require.NoError(t, err)
 			cfg := config.DefaultConfig()
 			cfg.Channels.Telegram.Streaming.Enabled = true
@@ -226,7 +288,11 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 			defer mb.Close()
 			manager, err := channels.NewManager(cfg, mb, nil)
 			require.NoError(t, err)
-			channel := &TelegramChannel{bot: bot, config: cfg, BaseChannel: channels.NewBaseChannel("telegram", nil, mb, nil)}
+			channel := &TelegramChannel{
+				bot:         bot,
+				config:      cfg,
+				BaseChannel: channels.NewBaseChannel("telegram", nil, mb, nil),
+			}
 			manager.RegisterChannel("telegram", outboundTelegram{channel})
 			require.NoError(t, manager.StartAll(t.Context()))
 			defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
@@ -260,7 +326,11 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 				require.False(t, tail)
 				require.ErrorIs(t, channel.Send(ctx, msg), channels.ErrSendFailed)
 			} else {
-				require.True(t, tail, "remaining source must remain deliverable after a rejected send or deleted preview")
+				require.True(
+					t,
+					tail,
+					"remaining source must remain deliverable after a rejected send or deleted preview",
+				)
 				require.GreaterOrEqual(t, count, 4, "fixture must exercise at least three complete answer chunks")
 			}
 		})

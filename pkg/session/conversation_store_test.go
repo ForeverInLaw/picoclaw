@@ -11,7 +11,7 @@ func TestConversationStorePersistentBoundaryRemainsAuthoritativeAcrossInstances(
 		t.Fatal(err)
 	}
 	second := NewConversationStore(NewSessionManager(dir), dir)
-	if err := second.ResetConversation("chat"); err != nil {
+	if err = second.ResetConversation("chat"); err != nil {
 		t.Fatal(err)
 	}
 	captured.AddMessage("chat", "assistant", "LATE_OLD_RESULT")
@@ -31,7 +31,7 @@ func TestConversationStoreMemoryOnlyResetIsAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ResetConversation("chat"); err != nil {
+	if err = store.ResetConversation("chat"); err != nil {
 		t.Fatal(err)
 	}
 	old.AddMessage("chat", "user", "old")

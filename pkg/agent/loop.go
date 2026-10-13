@@ -1480,10 +1480,11 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, nil
 	}
 	if observeOnly {
-		agent, _, err := captureConversationAgent(agent, opts.SessionKey)
-		if err != nil {
-			return "", err
+		observedAgent, _, captureErr := captureConversationAgent(agent, opts.SessionKey)
+		if captureErr != nil {
+			return "", captureErr
 		}
+		agent = observedAgent
 		agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 		recordMemoryObservation(
 			ctx,
@@ -1659,11 +1660,11 @@ func (al *AgentLoop) runAgentLoop(
 		!constants.IsInternalChannel(opts.Channel) &&
 		!(opts.Channel == "telegram" && strings.HasPrefix(strings.TrimSpace(opts.ChatID), "inline:")) {
 		channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
-		if err := al.RecordLastChannel(channelKey); err != nil {
+		if recordErr := al.RecordLastChannel(channelKey); recordErr != nil {
 			logger.WarnCF(
 				"agent",
 				"Failed to record last channel",
-				map[string]any{"error": err.Error()},
+				map[string]any{"error": recordErr.Error()},
 			)
 		}
 	}

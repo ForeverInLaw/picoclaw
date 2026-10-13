@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/tools"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +12,9 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 func TestTelegramToolProgressAndFinalReplyAreIndependent(t *testing.T) {
@@ -97,7 +97,8 @@ func TestRunToolActivityKeepsLLMOnlyResultsPrivate(t *testing.T) {
 		var completed *bus.ProgressMessage
 		for {
 			msg := <-mb.OutboundChan()
-			if strings.Contains(msg.Content, "PRIVATE_") || (msg.Progress != nil && strings.Contains(msg.Progress.Result+msg.Progress.Error, "PRIVATE_")) {
+			if strings.Contains(msg.Content, "PRIVATE_") ||
+				(msg.Progress != nil && strings.Contains(msg.Progress.Result+msg.Progress.Error, "PRIVATE_")) {
 				t.Errorf("private tool context was published: %+v", msg)
 			}
 			if msg.Progress == nil {
@@ -125,17 +126,27 @@ type activityFileProvider struct {
 }
 
 func (p *activityFileProvider) GetDefaultModel() string { return "activity" }
-func (p *activityFileProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+
+func (p *activityFileProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
 	p.calls++
 	if p.tool == "" {
 		p.tool = "read_file"
 		p.arguments = map[string]any{"path": "public.txt"}
 	}
 	if p.calls == 1 {
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "file", Name: p.tool, Arguments: p.arguments}}}, nil
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{ID: "file", Name: p.tool, Arguments: p.arguments}},
+		}, nil
 	}
 	return &providers.LLMResponse{Content: "done"}, nil
 }
+
 func TestRunFileActivityRetainsExplicitOutputWithSensitiveDataFiltering(t *testing.T) {
 	for _, channel := range []string{"telegram", "discord"} {
 		t.Run(channel, func(t *testing.T) {
@@ -151,10 +162,14 @@ func TestRunFileActivityRetainsExplicitOutputWithSensitiveDataFiltering(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(directory, "config.json"), data, 0600); err != nil {
+			if err = os.WriteFile(filepath.Join(directory, "config.json"), data, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(directory, config.SecurityConfigFile), []byte("model_list:\n  test:\n    api_keys: [SECRET_CONFIG_KEY]\n"), 0600); err != nil {
+			if err = os.WriteFile(
+				filepath.Join(directory, config.SecurityConfigFile),
+				[]byte("model_list:\n  test:\n    api_keys: [SECRET_CONFIG_KEY]\n"),
+				0o600,
+			); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err = config.LoadConfig(filepath.Join(directory, "config.json"))
@@ -166,7 +181,11 @@ func TestRunFileActivityRetainsExplicitOutputWithSensitiveDataFiltering(t *testi
 			a := al.registry.GetDefaultAgent()
 			a.Provider = &activityFileProvider{}
 			al.RegisterTool(tools.NewReadFileTool(a.Workspace, true, 1<<20, nil))
-			if err := os.WriteFile(filepath.Join(a.Workspace, "public.txt"), []byte("PUBLIC_FILE_OUTPUT SECRET_CONFIG_KEY"), 0600); err != nil {
+			if err = os.WriteFile(
+				filepath.Join(a.Workspace, "public.txt"),
+				[]byte("PUBLIC_FILE_OUTPUT SECRET_CONFIG_KEY"),
+				0o600,
+			); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
@@ -203,7 +222,13 @@ func TestRunSearchFailurePublishesExplicitSafeActivity(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"invalid_api_key"}`))
 	}))
 	defer server.Close()
-	search, err := tools.NewWebSearchTool(tools.WebSearchToolOptions{ParallelEnabled: true, ParallelAPIKeys: []string{"test-key"}, ParallelBaseURL: server.URL})
+	search, err := tools.NewWebSearchTool(
+		tools.WebSearchToolOptions{
+			ParallelEnabled: true,
+			ParallelAPIKeys: []string{"test-key"},
+			ParallelBaseURL: server.URL,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +236,10 @@ func TestRunSearchFailurePublishesExplicitSafeActivity(t *testing.T) {
 	defer cleanup()
 	defer al.Close()
 	defer mb.Close()
-	al.registry.GetDefaultAgent().Provider = &activityFileProvider{tool: "web_search", arguments: map[string]any{"query": "bicycle"}}
+	al.registry.GetDefaultAgent().Provider = &activityFileProvider{
+		tool:      "web_search",
+		arguments: map[string]any{"query": "bicycle"},
+	}
 	al.RegisterTool(search)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -225,7 +253,8 @@ func TestRunSearchFailurePublishesExplicitSafeActivity(t *testing.T) {
 			break
 		}
 		if out.Progress.State == bus.ProgressFailed {
-			found = strings.Contains(out.Progress.Result, "Search failed") && strings.Contains(out.Progress.Result, "401")
+			found = strings.Contains(out.Progress.Result, "Search failed") &&
+				strings.Contains(out.Progress.Result, "401")
 		}
 	}
 	if !found {

@@ -74,7 +74,7 @@ func TestService_SummarizeRefreshesPartialHoursWithoutDuplicatePersistedRollups(
 		if len(rows) != 2 || !rows[1].WindowEnd.Equal(now) {
 			t.Fatalf("persisted rollups at minute%d=%+v", minute, rows)
 		}
-		if err := idx.Close(); err != nil {
+		if err = idx.Close(); err != nil {
 			t.Fatal(err)
 		}
 		idx, err = memoryindex.Open(path, memoryindex.Config{})
@@ -623,26 +623,71 @@ func TestService_SearchReturnsEachObservationOnceAcrossLexicalAndSemanticResults
 	defer idx.Close()
 	now := time.Now()
 	for _, sender := range []string{"alice", "bob"} {
-		err := idx.AddObservation(t.Context(), memoryindex.Observation{SessionKey: "generation:" + sender, Channel: "telegram", ChatID: "-1", PeerKind: "group", SenderID: sender, Role: "user", Content: "bicycle " + strings.Repeat("long shared paragraph ", 20), CreatedAt: now.Add(-time.Minute)})
+		err = idx.AddObservation(
+			t.Context(),
+			memoryindex.Observation{
+				SessionKey: "generation:" + sender,
+				Channel:    "telegram",
+				ChatID:     "-1",
+				PeerKind:   "group",
+				SenderID:   sender,
+				Role:       "user",
+				Content:    "bicycle " + strings.Repeat("long shared paragraph ", 20),
+				CreatedAt:  now.Add(-time.Minute),
+			},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	embeddingCfg := config.MemoryEmbeddingConfig{Enabled: true, MinContentChars: 1, MaxBatch: 8}
-	embedder := NewEmbedder(&config.ModelConfig{ModelName: "embed", Model: "embed", APIKey: "test", APIBase: server.URL}, embeddingCfg)
+	embedder := NewEmbedder(
+		&config.ModelConfig{ModelName: "embed", Model: "embed", APIKey: "test", APIBase: server.URL},
+		embeddingCfg,
+	)
 	service := New(idx, config.MemoryIndexConfig{Enabled: true, MaxResults: 5, Embeddings: embeddingCfg}, embedder)
-	hits, err := service.Search(t.Context(), SearchRequest{CurrentChannel: "telegram", CurrentChatID: "-1", CurrentPeer: "group", Query: "bicycle", Limit: 5})
+	hits, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel: "telegram",
+			CurrentChatID:  "-1",
+			CurrentPeer:    "group",
+			Query:          "bicycle",
+			Limit:          5,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(hits) != 2 || hits[0].SenderID == hits[1].SenderID {
 		t.Fatalf("same observation appeared twice or distinct observations were lost: %+v", hits)
 	}
-	fresh, err := service.Search(t.Context(), SearchRequest{CurrentChannel: "telegram", CurrentChatID: "-1", CurrentPeer: "group", ExactSessionKey: "generation:bob", Query: "bicycle", Limit: 5})
+	fresh, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel:  "telegram",
+			CurrentChatID:   "-1",
+			CurrentPeer:     "group",
+			ExactSessionKey: "generation:bob",
+			Query:           "bicycle",
+			Limit:           5,
+		},
+	)
 	if err != nil || len(fresh) != 1 || fresh[0].SenderID != "bob" {
 		t.Fatalf("generation restriction leaked lexical or semantic sources: %+v, %v", fresh, err)
 	}
-	future, err := service.Search(t.Context(), SearchRequest{CurrentChannel: "telegram", CurrentChatID: "-1", CurrentPeer: "group", ExactSessionKey: "generation:bob", Since: now, Query: "bicycle", Limit: 5})
+	future, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel:  "telegram",
+			CurrentChatID:   "-1",
+			CurrentPeer:     "group",
+			ExactSessionKey: "generation:bob",
+			Since:           now,
+			Query:           "bicycle",
+			Limit:           5,
+		},
+	)
 	if err != nil || len(future) != 0 {
 		t.Fatalf("time restriction leaked lexical or semantic sources: %+v, %v", future, err)
 	}

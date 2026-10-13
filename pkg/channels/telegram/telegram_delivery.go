@@ -42,12 +42,23 @@ type telegramReplyDelivery struct {
 // Only edits are retried here. A rejected new send can resume at its current
 // part; an unacknowledged transport failure has an unknown outcome and fails
 // closed instead of risking a duplicate message.
-func (c *TelegramChannel) deliverReply(ctx context.Context, chatID int64, threadID int, replyTo, content string, editID int) (int, *telegramReplyDelivery, error) {
+func (c *TelegramChannel) deliverReply(
+	ctx context.Context,
+	chatID int64,
+	threadID int,
+	replyTo, content string,
+	editID int,
+) (int, *telegramReplyDelivery, error) {
 	content = normalizeRichMarkdown(content)
 	if strings.TrimSpace(content) == "" {
 		return 0, nil, nil
 	}
-	key := telegramReplyKey{chatID: chatID, threadID: threadID, replyTo: replyTo, source: sha256.Sum256([]byte(content))}
+	key := telegramReplyKey{
+		chatID:   chatID,
+		threadID: threadID,
+		replyTo:  replyTo,
+		source:   sha256.Sum256([]byte(content)),
+	}
 	c.deliveryMu.Lock()
 	defer c.deliveryMu.Unlock()
 	if c.pendingReplies == nil {
@@ -58,7 +69,8 @@ func (c *TelegramChannel) deliverReply(ctx context.Context, chatID int64, thread
 	// placeholder ID. Preserve its progress when that same answer falls through.
 	if delivery == nil && editID == 0 {
 		for candidate, pending := range c.pendingReplies {
-			if candidate.chatID == chatID && candidate.threadID == threadID && candidate.source == key.source && strings.HasPrefix(candidate.replyTo, "edit:") {
+			if candidate.chatID == chatID && candidate.threadID == threadID && candidate.source == key.source &&
+				strings.HasPrefix(candidate.replyTo, "edit:") {
 				key = candidate
 				delivery = pending
 				break
@@ -92,15 +104,19 @@ func (c *TelegramChannel) deliverReply(ctx context.Context, chatID int64, thread
 	if err == nil {
 		delete(c.pendingReplies, key)
 		if delivery.deletedPreview != 0 {
-			_ = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: delivery.deletedPreview})
+			_ = c.bot.DeleteMessage(
+				ctx,
+				&telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: delivery.deletedPreview},
+			)
 		}
 	}
 	return delivery.firstID, delivery, err
 }
 
 func (d *telegramReplyDelivery) usePlainParts() {
-	var replacements []telegramReplyPart
-	for _, chunk := range channels.SplitMessage(d.parts[d.next].content, telegramInlineMessageLimit) {
+	chunks := channels.SplitMessage(d.parts[d.next].content, telegramInlineMessageLimit)
+	replacements := make([]telegramReplyPart, 0, len(chunks))
+	for _, chunk := range chunks {
 		replacements = append(replacements, telegramReplyPart{content: chunk, plain: true})
 	}
 	parts := append([]telegramReplyPart(nil), d.parts[:d.next]...)
@@ -108,7 +124,13 @@ func (d *telegramReplyDelivery) usePlainParts() {
 	d.parts = append(parts, d.parts[d.next+1:]...)
 }
 
-func (d *telegramReplyDelivery) resume(ctx context.Context, c *TelegramChannel, chatID int64, threadID int, replyTo string) error {
+func (d *telegramReplyDelivery) resume(
+	ctx context.Context,
+	c *TelegramChannel,
+	chatID int64,
+	threadID int,
+	replyTo string,
+) error {
 	for d.next < len(d.parts) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -148,7 +170,15 @@ func (d *telegramReplyDelivery) resume(ctx context.Context, c *TelegramChannel, 
 				params.ReplyParameters = reply
 				message, err = c.bot.SendMessage(ctx, params)
 			} else {
-				message, err = c.bot.SendRichMessage(ctx, &telego.SendRichMessageParams{ChatID: tu.ID(chatID), MessageThreadID: threadID, ReplyParameters: reply, RichMessage: tu.RichMessageMarkdown(part.content)})
+				message, err = c.bot.SendRichMessage(
+					ctx,
+					&telego.SendRichMessageParams{
+						ChatID:          tu.ID(chatID),
+						MessageThreadID: threadID,
+						ReplyParameters: reply,
+						RichMessage:     tu.RichMessageMarkdown(part.content),
+					},
+				)
 			}
 		}
 		if err != nil {
@@ -159,7 +189,11 @@ func (d *telegramReplyDelivery) resume(ctx context.Context, c *TelegramChannel, 
 			if !editing {
 				var apiError *ta.Error
 				if !errors.As(err, &apiError) {
-					d.terminalErr = fmt.Errorf("Telegram new-message delivery outcome is unknown; partial reply retained: %w: %w", channels.ErrSendFailed, err)
+					d.terminalErr = fmt.Errorf(
+						"Telegram new-message delivery outcome is unknown; partial reply retained: %w: %w",
+						channels.ErrSendFailed,
+						err,
+					)
 					return d.terminalErr
 				}
 			}
@@ -187,5 +221,7 @@ func unavailablePreview(err error) bool {
 		return false
 	}
 	description := strings.ToLower(apiError.Description)
-	return strings.Contains(description, "message to edit not found") || strings.Contains(description, "message can't be edited") || strings.Contains(description, "message cannot be edited")
+	return strings.Contains(description, "message to edit not found") ||
+		strings.Contains(description, "message can't be edited") ||
+		strings.Contains(description, "message cannot be edited")
 }

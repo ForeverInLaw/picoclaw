@@ -34,7 +34,7 @@ func (i *Index) UpsertChatRollup(ctx context.Context, record RollupRecord) error
 	// with each request. Remove superseded intervals in the same transaction,
 	// including legacy partial-hour rows and their derived embeddings.
 	for _, table := range []string{"chat_rollup_embeddings", "chat_rollups"} {
-		if _, err := tx.ExecContext(ctx,
+		if _, err = tx.ExecContext(ctx,
 			`DELETE FROM `+table+` WHERE channel = ? AND chat_id = ? AND window_start_ms = ? AND window_end_ms != ?`,
 			record.Channel, record.ChatID, record.WindowStart.UnixMilli(), record.WindowEnd.UnixMilli(),
 		); err != nil {

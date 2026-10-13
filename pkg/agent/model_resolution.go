@@ -108,7 +108,12 @@ func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*conf
 
 // candidateProviderResolver keeps one resolved credential/endpoint per turn,
 // including request-local retries, while preserving the injected primary client.
-func candidateProviderResolver(cfg *config.Config, workspace string, primary providers.LLMProvider, candidates []providers.FallbackCandidate) func(string, string) (providers.LLMProvider, error) {
+func candidateProviderResolver(
+	cfg *config.Config,
+	workspace string,
+	primary providers.LLMProvider,
+	candidates []providers.FallbackCandidate,
+) func(string, string) (providers.LLMProvider, error) {
 	clients := make(map[string]providers.LLMProvider)
 	primaryProvider := ""
 	if len(candidates) > 0 {

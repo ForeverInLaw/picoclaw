@@ -31,12 +31,18 @@ func TestLoadConfig_AppliesEnvironmentWithoutConfigFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Tools.Web.PrimaryProvider != "exa" || !cfg.Tools.Web.Parallel.Enabled || len(cfg.Tools.Web.Parallel.APIKeys) != 2 ||
-				!cfg.Tools.Web.Exa.Enabled || cfg.Tools.Web.Exa.APIKey != "exa-key" || !cfg.Channels.Telegram.Enabled ||
-				cfg.Channels.Telegram.Token != "telegram-token" ||
-				cfg.Agents.Defaults.MaxTokens != 1234 {
-				t.Fatal("missing-file and JSON configurations must share environment processing")
+			parallel := cfg.Tools.Web.Parallel
+			if cfg.Tools.Web.PrimaryProvider != "exa" || !parallel.Enabled || len(parallel.APIKeys) != 2 {
+				t.Fatal("missing-file and JSON configurations must share search environment processing")
 			}
+			if !cfg.Tools.Web.Exa.Enabled || cfg.Tools.Web.Exa.APIKey != "exa-key" {
+				t.Fatal("Exa environment settings were ignored")
+			}
+			telegram := cfg.Channels.Telegram
+			if !telegram.Enabled || telegram.Token != "telegram-token" || cfg.Agents.Defaults.MaxTokens != 1234 {
+				t.Fatal("missing-file and JSON configurations must share channel/model environment processing")
+			}
+
 			if err := cfg.ValidateModelList(); err != nil {
 				t.Fatalf("default model validation: %v", err)
 			}

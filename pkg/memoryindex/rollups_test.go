@@ -21,7 +21,7 @@ func TestIndex_RefreshRollupReplacesLegacyPartialHourRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, minute := range []int{15, 20} {
-		if _, err := legacy.ExecContext(
+		if _, err = legacy.ExecContext(
 			t.Context(),
 			`INSERT INTO chat_rollups VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			"telegram",
@@ -37,7 +37,7 @@ func TestIndex_RefreshRollupReplacesLegacyPartialHourRecords(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := legacy.Close(); err != nil {
+	if err = legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
 	for _, record := range []RollupRecord{
@@ -45,11 +45,11 @@ func TestIndex_RefreshRollupReplacesLegacyPartialHourRecords(t *testing.T) {
 		{Channel: "telegram", ChatID: "42", WindowStart: hour.Add(-time.Hour), WindowEnd: hour, Summary: "previous hour"},
 		{Channel: "telegram", ChatID: "42", WindowStart: hour, WindowEnd: hour.Add(30 * time.Minute), Summary: "latest partial"},
 	} {
-		if err := idx.UpsertChatRollup(t.Context(), record); err != nil {
+		if err = idx.UpsertChatRollup(t.Context(), record); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := idx.Close(); err != nil {
+	if err = idx.Close(); err != nil {
 		t.Fatal(err)
 	}
 	idx, err = Open(path, Config{})

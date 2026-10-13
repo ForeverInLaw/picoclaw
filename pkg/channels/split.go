@@ -54,7 +54,13 @@ func SplitMessageWithOffsets(content string, maxLen int) []MessageChunk {
 	for start < totalLen {
 		remaining := totalLen - start
 		if remaining <= maxLen {
-			messages = append(messages, MessageChunk{Content: string(runes[start:totalLen]), SourceOffset: sourceBase + max(start-prefixLen, 0)})
+			messages = append(
+				messages,
+				MessageChunk{
+					Content:      string(runes[start:totalLen]),
+					SourceOffset: sourceBase + max(start-prefixLen, 0),
+				},
+			)
 			break
 		}
 
@@ -111,7 +117,10 @@ func SplitMessageWithOffsets(content string, maxLen int) []MessageChunk {
 							msgEnd = innerLimit
 						}
 						chunk := strings.TrimRight(string(runes[start:msgEnd]), " \t\n\r") + "\n```"
-						messages = append(messages, MessageChunk{Content: chunk, SourceOffset: sourceBase + max(start-prefixLen, 0)})
+						messages = append(
+							messages,
+							MessageChunk{Content: chunk, SourceOffset: sourceBase + max(start-prefixLen, 0)},
+						)
 						remaining := strings.TrimSpace(header + "\n" + string(runes[msgEnd:totalLen]))
 						// Replace the tail of runes with the reconstructed remaining.
 						sourceBase += max(msgEnd-prefixLen, 0)
@@ -136,7 +145,10 @@ func SplitMessageWithOffsets(content string, maxLen int) []MessageChunk {
 						} else {
 							splitAt := min(start+maxLen-5, totalLen)
 							chunk := strings.TrimRight(string(runes[start:splitAt]), " \t\n\r") + "\n```"
-							messages = append(messages, MessageChunk{Content: chunk, SourceOffset: sourceBase + max(start-prefixLen, 0)})
+							messages = append(
+								messages,
+								MessageChunk{Content: chunk, SourceOffset: sourceBase + max(start-prefixLen, 0)},
+							)
 							remaining := strings.TrimSpace(header + "\n" + string(runes[splitAt:totalLen]))
 							sourceBase += max(splitAt-prefixLen, 0)
 							prefixLen = len([]rune(header)) + 1
@@ -154,7 +166,10 @@ func SplitMessageWithOffsets(content string, maxLen int) []MessageChunk {
 			msgEnd = start + effectiveLimit
 		}
 
-		messages = append(messages, MessageChunk{Content: string(runes[start:msgEnd]), SourceOffset: sourceBase + max(start-prefixLen, 0)})
+		messages = append(
+			messages,
+			MessageChunk{Content: string(runes[start:msgEnd]), SourceOffset: sourceBase + max(start-prefixLen, 0)},
+		)
 		// Advance start, skipping leading whitespace of next chunk
 		start = msgEnd
 		for start < totalLen && (runes[start] == ' ' || runes[start] == '\t' || runes[start] == '\n' || runes[start] == '\r') {
