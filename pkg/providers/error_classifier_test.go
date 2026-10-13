@@ -2,8 +2,12 @@ package providers
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"syscall"
 	"testing"
 )
 
@@ -72,7 +76,6 @@ func TestClassifyError_RateLimitPatterns(t *testing.T) {
 		"too many requests",
 		"resource has been exhausted",
 		"resource_exhausted",
-		"quota exceeded",
 		"usage limit reached",
 	}
 
@@ -112,6 +115,10 @@ func TestClassifyError_OverloadedPatterns(t *testing.T) {
 
 func TestClassifyError_BillingPatterns(t *testing.T) {
 	patterns := []string{
+		"quota exceeded",
+		"quota_exceeded",
+		"insufficient credits",
+		"credits exhausted",
 		"exceeded your current quota",
 		"payment required",
 		"insufficient credits",
@@ -334,5 +341,44 @@ func TestIsImageSizeError(t *testing.T) {
 	}
 	if IsImageSizeError("normal error message") {
 		t.Error("should not match normal error")
+	}
+}
+
+func TestClassifyErrorOnlyRetriesUnderlyingNetworkFailures(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		transient bool
+	}{
+		{"TLS trust", &url.Error{Op: "Post", URL: "https://example.test", Err: x509.UnknownAuthorityError{}}, false},
+		{
+			"invalid protocol",
+			&url.Error{Op: "Post", URL: "invalid://example.test", Err: errors.New("unsupported protocol scheme")},
+			false,
+		},
+		{
+			"invalid address",
+			&url.Error{Op: "Post", URL: "https://example.test", Err: &net.AddrError{Err: "invalid port", Addr: "bad"}},
+			false,
+		},
+		{"missing DNS", &net.DNSError{Err: "no such host", Name: "missing.test", IsNotFound: true}, false},
+		{
+			"connection reset",
+			&url.Error{
+				Op:  "Post",
+				URL: "https://example.test",
+				Err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET},
+			},
+			true,
+		},
+	}
+	for _, scenario := range cases {
+		t.Run(scenario.name, func(t *testing.T) {
+			failure := ClassifyError(scenario.err, "openai", "model")
+			got := failure != nil && failure.IsTransient()
+			if got != scenario.transient {
+				t.Fatalf("classification=%+v transient=%v want %v", failure, got, scenario.transient)
+			}
+		})
 	}
 }

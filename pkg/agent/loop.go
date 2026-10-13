@@ -2062,6 +2062,7 @@ turnLoop:
 			})
 
 		modelAttempts := 0
+		retryAnnounced := false
 		var lastProviderError error
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
 			providerCtx, providerCancel := context.WithCancel(bus.WithStreamReplyTo(turnCtx, ts.opts.ReplyToMessageID))
@@ -2158,6 +2159,7 @@ turnLoop:
 					activeCandidates,
 					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
 						if modelAttempts > 0 && modelAttempts < modelMaxAttempts && lastProviderError != nil {
+							retryAnnounced = true
 							al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
 						}
 						return callProvider(ctx, model)
@@ -2193,12 +2195,16 @@ turnLoop:
 				err = errEmptyAnswer
 				if !emptyRecoveryUsed && retry < maxRetries && modelAttempts < modelMaxAttempts {
 					emptyRecoveryUsed = true
+					retryAnnounced = true
 					al.reportModelRetry(turnCtx, ts, modelAttempts, "empty_answer", err, 0)
 					continue
 				}
 				break
 			}
 			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
+				if retryAnnounced {
+					al.finishModelRetry(turnCtx, ts, context.Canceled)
+				}
 				turnStatus = TurnEndStatusAborted
 				return al.abortTurn(ts)
 			}
@@ -2226,9 +2232,13 @@ turnLoop:
 
 			delay, reason, isTransient := modelRetryDelay(err, retry, waited)
 			if isTransient && retry < maxRetries && modelAttempts < modelMaxAttempts {
+				retryAnnounced = true
 				al.reportModelRetry(turnCtx, ts, modelAttempts, reason, err, delay)
 				if sleepErr := sleepWithContext(turnCtx, delay); sleepErr != nil {
 					if ts.hardAbortRequested() {
+						if retryAnnounced {
+							al.finishModelRetry(turnCtx, ts, context.Canceled)
+						}
 						turnStatus = TurnEndStatusAborted
 						return al.abortTurn(ts)
 					}
@@ -2259,6 +2269,7 @@ turnLoop:
 					},
 				)
 
+				retryAnnounced = true
 				al.publishProgress(turnCtx, ts, &bus.ProgressMessage{RequestID: ts.turnID, ActionID: fmt.Sprintf("model:%d", iteration), Kind: bus.ProgressRetry, State: bus.ProgressStarted}, "Context window exceeded. Compressing history and retrying...")
 
 				if compression, ok := al.forceCompression(ts.agent, ts.sessionKey); ok {
@@ -2289,6 +2300,10 @@ turnLoop:
 				continue
 			}
 			break
+		}
+
+		if retryAnnounced {
+			al.finishModelRetry(turnCtx, ts, err)
 		}
 
 		if err != nil {
