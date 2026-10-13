@@ -302,3 +302,13 @@ func (e *FallbackExhaustedError) Error() string {
 	}
 	return sb.String()
 }
+
+// Unwrap exposes the final attempted request to shared recovery classification.
+func (e *FallbackExhaustedError) Unwrap() error {
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		if !e.Attempts[i].Skipped && e.Attempts[i].Error != nil {
+			return e.Attempts[i].Error
+		}
+	}
+	return nil
+}

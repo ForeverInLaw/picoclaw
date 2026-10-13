@@ -2,8 +2,17 @@ package providers
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net"
 	"regexp"
 	"strings"
+	"time"
+
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	openai "github.com/openai/openai-go/v3"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 // Common patterns in Go HTTP error messages
@@ -109,12 +118,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	}
 
 	// Context cancellation: user abort, never fallback.
-	if err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		return nil
 	}
 
 	// Context deadline exceeded: treat as timeout, always fallback.
-	if err == context.DeadlineExceeded {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return &FailoverError{
 			Reason:   FailoverTimeout,
 			Provider: provider,
@@ -123,7 +132,30 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		}
 	}
 
+	var classified *FailoverError
+	if errors.As(err, &classified) {
+		return classified
+	}
 	msg := strings.ToLower(err.Error())
+	status, delay, code := errorHTTPMetadata(err)
+	msg += " " + strings.ToLower(code)
+	// Hard quota exhaustion often arrives as HTTP 429; it cannot recover with backoff.
+	if strings.Contains(msg, "insufficient_quota") || strings.Contains(msg, "exceeded your current quota") || strings.Contains(msg, "billing_hard_limit") || strings.Contains(msg, "quota exhausted") {
+		return &FailoverError{Reason: FailoverBilling, Provider: provider, Model: model, Status: status, RetryAfter: delay, Wrapped: err}
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		reason := FailoverNetwork
+		if networkErr != nil && networkErr.Timeout() {
+			reason = FailoverTimeout
+		}
+		return &FailoverError{Reason: reason, Provider: provider, Model: model, Wrapped: err}
+	}
+	if status > 0 {
+		if reason := classifyByStatus(status); reason != "" {
+			return &FailoverError{Reason: reason, Provider: provider, Model: model, Status: status, RetryAfter: delay, Wrapped: err}
+		}
+	}
 
 	// Image dimension/size errors: non-retriable, non-fallback.
 	if IsImageDimensionError(msg) || IsImageSizeError(msg) {
@@ -174,7 +206,7 @@ func classifyByStatus(status int) FailoverReason {
 		return FailoverRateLimit
 	case status == 400:
 		return FailoverFormat
-	case transientStatusCodes[status]:
+	case transientStatusCodes[status] || status >= 500 && status <= 599:
 		return FailoverTimeout
 	}
 	return ""
@@ -250,4 +282,26 @@ func parseDigits(s string) int {
 		}
 	}
 	return n
+}
+
+func errorHTTPMetadata(err error) (int, time.Duration, string) {
+	var transport *protocoltypes.HTTPError
+	if errors.As(err, &transport) {
+		return transport.StatusCode, transport.RetryAfter, transport.Code
+	}
+	var openaiErr *openai.Error
+	if errors.As(err, &openaiErr) {
+		if openaiErr.Response != nil {
+			return openaiErr.StatusCode, common.RetryAfter(openaiErr.Response.Header, time.Now()), openaiErr.Code
+		}
+		return openaiErr.StatusCode, 0, openaiErr.Code
+	}
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) {
+		if anthropicErr.Response != nil {
+			return anthropicErr.StatusCode, common.RetryAfter(anthropicErr.Response.Header, time.Now()), ""
+		}
+		return anthropicErr.StatusCode, 0, ""
+	}
+	return 0, 0, ""
 }

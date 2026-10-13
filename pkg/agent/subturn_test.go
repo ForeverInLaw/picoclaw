@@ -1426,7 +1426,7 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 		},
 	}
 	msgBus := bus.NewMessageBus()
-	provider := &simpleMockProviderAPI{}
+	provider := &simpleMockProviderAPI{response: "sub-turn answer"}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	ctx := context.Background()
@@ -1472,7 +1472,7 @@ func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 		},
 	}
 	msgBus := bus.NewMessageBus()
-	provider := &simpleMockProviderAPI{}
+	provider := &simpleMockProviderAPI{response: "sub-turn answer"}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	ctx := context.Background()
@@ -1529,7 +1529,7 @@ func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 		},
 	}
 	msgBus := bus.NewMessageBus()
-	provider := &simpleMockProviderAPI{}
+	provider := &simpleMockProviderAPI{response: "sub-turn answer"}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	ctx := context.Background()

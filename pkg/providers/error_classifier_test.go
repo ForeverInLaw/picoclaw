@@ -70,7 +70,6 @@ func TestClassifyError_RateLimitPatterns(t *testing.T) {
 		"rate limit exceeded",
 		"rate_limit reached",
 		"too many requests",
-		"exceeded your current quota",
 		"resource has been exhausted",
 		"resource_exhausted",
 		"quota exceeded",
@@ -113,6 +112,7 @@ func TestClassifyError_OverloadedPatterns(t *testing.T) {
 
 func TestClassifyError_BillingPatterns(t *testing.T) {
 	patterns := []string{
+		"exceeded your current quota",
 		"payment required",
 		"insufficient credits",
 		"credit balance too low",

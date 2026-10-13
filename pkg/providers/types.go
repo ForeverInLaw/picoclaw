@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
@@ -94,15 +95,17 @@ const (
 	FailoverFormat     FailoverReason = "format"
 	FailoverOverloaded FailoverReason = "overloaded"
 	FailoverUnknown    FailoverReason = "unknown"
+	FailoverNetwork    FailoverReason = "network"
 )
 
 // FailoverError wraps an LLM provider error with classification metadata.
 type FailoverError struct {
-	Reason   FailoverReason
-	Provider string
-	Model    string
-	Status   int
-	Wrapped  error
+	Reason     FailoverReason
+	Provider   string
+	Model      string
+	Status     int
+	RetryAfter time.Duration
+	Wrapped    error
 }
 
 func (e *FailoverError) Error() string {
@@ -137,4 +140,9 @@ const (
 // Unclassified content must be held until the complete response is known.
 type PhasedStreamingProvider interface {
 	ChatStreamContent(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any, onUpdate func(StreamContent)) (*LLMResponse, error)
+}
+
+// IsTransient identifies failures that can recover by retrying the same request.
+func (e *FailoverError) IsTransient() bool {
+	return e.Reason == FailoverTimeout || e.Reason == FailoverNetwork || e.Reason == FailoverRateLimit || e.Reason == FailoverOverloaded
 }

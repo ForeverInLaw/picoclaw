@@ -1989,6 +1989,8 @@ turnLoop:
 				"tools_json":    formatToolsForLog(providerToolDefs),
 			})
 
+		modelAttempts := 0
+		var lastProviderError error
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
 			providerCtx, providerCancel := context.WithCancel(bus.WithStreamReplyTo(turnCtx, ts.opts.ReplyToMessageID))
 			ts.setProviderCancel(providerCancel)
@@ -2010,24 +2012,40 @@ turnLoop:
 				streamer, streamUpdater = selectStreamingTargets(providerCtx, al.bus, al.channelManager, ts.channel, ts.chatID)
 			}
 
-			callProvider := func(ctx context.Context, model string) (*providers.LLMResponse, error) {
+			callProvider := func(ctx context.Context, model string) (reply *providers.LLMResponse, requestErr error) {
+				defer func() {
+					if requestErr != nil {
+						lastProviderError = requestErr
+					}
+				}()
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if modelAttempts >= modelMaxAttempts {
+					return nil, errModelAttemptBudget
+				}
+				modelAttempts++
 				if streamingEnabled && (streamer != nil || streamUpdater != nil) {
-					var lastSnapshot string
+					lastSnapshots := make(map[providers.ContentPhase]string)
 					var response *providers.LLMResponse
 					var err error
 					onUpdate := func(update providers.StreamContent) {
 						accumulated := update.Content
-						contentDeltaLen := len(accumulated) - len(lastSnapshot)
+						contentDeltaLen := len(accumulated) - len(lastSnapshots[update.Phase])
 						if contentDeltaLen < 0 {
 							contentDeltaLen = len(accumulated)
 						}
-						lastSnapshot = accumulated
+						lastSnapshots[update.Phase] = accumulated
+						deltaPayload := LLMDeltaPayload{ContentPhase: update.Phase}
+						if update.Phase == providers.ContentPhaseReasoning {
+							deltaPayload.ReasoningDeltaLen = contentDeltaLen
+						} else {
+							deltaPayload.ContentDeltaLen = contentDeltaLen
+						}
 						al.emitEvent(
 							EventKindLLMDelta,
 							ts.eventMeta("runTurn", "turn.llm.delta"),
-							LLMDeltaPayload{
-								ContentDeltaLen: contentDeltaLen,
-							},
+							deltaPayload,
 						)
 						if update.Phase == providers.ContentPhaseAnswer {
 							offerStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, accumulated))
@@ -2067,6 +2085,9 @@ turnLoop:
 					providerCtx,
 					activeCandidates,
 					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
+						if modelAttempts > 0 && modelAttempts < modelMaxAttempts && lastProviderError != nil {
+							al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
+						}
 						return callProvider(ctx, model)
 					},
 				)
@@ -2088,7 +2109,8 @@ turnLoop:
 
 		var response *providers.LLMResponse
 		var err error
-		maxRetries := 2
+		maxRetries := modelMaxAttempts - 1
+		waited := time.Duration(0)
 		emptyRecoveryUsed := false
 		for retry := 0; retry <= maxRetries; retry++ {
 			response, err = callLLM(callMessages, providerToolDefs)
@@ -2097,9 +2119,9 @@ turnLoop:
 					break
 				}
 				err = errEmptyAnswer
-				if !emptyRecoveryUsed && retry < maxRetries {
+				if !emptyRecoveryUsed && retry < maxRetries && modelAttempts < modelMaxAttempts {
 					emptyRecoveryUsed = true
-					al.emitEvent(EventKindLLMRetry, ts.eventMeta("runTurn", "turn.llm.retry"), LLMRetryPayload{Attempt: retry + 1, MaxRetries: maxRetries, Reason: "empty_answer", Error: err.Error()})
+					al.reportModelRetry(turnCtx, ts, modelAttempts, "empty_answer", err, 0)
 					continue
 				}
 				break
@@ -2109,6 +2131,10 @@ turnLoop:
 				return al.abortTurn(ts)
 			}
 
+			if turnCtx.Err() != nil {
+				err = turnCtx.Err()
+				break
+			}
 			errMsg := strings.ToLower(err.Error())
 			isTimeoutError := errors.Is(err, context.DeadlineExceeded) ||
 				strings.Contains(errMsg, "deadline exceeded") ||
@@ -2126,25 +2152,10 @@ turnLoop:
 				strings.Contains(errMsg, "prompt is too long") ||
 				strings.Contains(errMsg, "request too large"))
 
-			if isTimeoutError && retry < maxRetries {
-				backoff := time.Duration(retry+1) * 5 * time.Second
-				al.emitEvent(
-					EventKindLLMRetry,
-					ts.eventMeta("runTurn", "turn.llm.retry"),
-					LLMRetryPayload{
-						Attempt:    retry + 1,
-						MaxRetries: maxRetries,
-						Reason:     "timeout",
-						Error:      err.Error(),
-						Backoff:    backoff,
-					},
-				)
-				logger.WarnCF("agent", "Timeout error, retrying after backoff", map[string]any{
-					"error":   err.Error(),
-					"retry":   retry,
-					"backoff": backoff.String(),
-				})
-				if sleepErr := sleepWithContext(turnCtx, backoff); sleepErr != nil {
+			delay, reason, isTransient := modelRetryDelay(err, retry, waited)
+			if isTransient && retry < maxRetries && modelAttempts < modelMaxAttempts {
+				al.reportModelRetry(turnCtx, ts, modelAttempts, reason, err, delay)
+				if sleepErr := sleepWithContext(turnCtx, delay); sleepErr != nil {
 					if ts.hardAbortRequested() {
 						turnStatus = TurnEndStatusAborted
 						return al.abortTurn(ts)
@@ -2152,10 +2163,11 @@ turnLoop:
 					err = sleepErr
 					break
 				}
+				waited += delay
 				continue
 			}
 
-			if isContextError && retry < maxRetries && !ts.opts.NoHistory {
+			if isContextError && retry < maxRetries && modelAttempts < modelMaxAttempts && !ts.opts.NoHistory {
 				al.emitEvent(
 					EventKindLLMRetry,
 					ts.eventMeta("runTurn", "turn.llm.retry"),
@@ -2175,13 +2187,7 @@ turnLoop:
 					},
 				)
 
-				if retry == 0 && !constants.IsInternalChannel(ts.channel) {
-					al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: ts.channel,
-						ChatID:  ts.chatID,
-						Content: "Context window exceeded. Compressing history and retrying...",
-					})
-				}
+				al.publishProgress(turnCtx, ts, &bus.ProgressMessage{RequestID: ts.turnID, ActionID: fmt.Sprintf("model:%d", iteration), Kind: bus.ProgressRetry, State: bus.ProgressStarted}, "Context window exceeded. Compressing history and retrying...")
 
 				if compression, ok := al.forceCompression(ts.agent, ts.sessionKey); ok {
 					al.emitEvent(

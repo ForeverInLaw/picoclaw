@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"time"
 )
 
@@ -146,6 +147,7 @@ type LLMResponsePayload struct {
 
 // LLMDeltaPayload describes a streamed LLM delta.
 type LLMDeltaPayload struct {
+	ContentPhase      providers.ContentPhase
 	ContentDeltaLen   int
 	ReasoningDeltaLen int
 }

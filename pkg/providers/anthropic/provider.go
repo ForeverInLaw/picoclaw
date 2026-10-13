@@ -45,6 +45,7 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
 	client := anthropic.NewClient(
 		option.WithAuthToken(token),
+		option.WithMaxRetries(0),
 		option.WithBaseURL(baseURL),
 	)
 	return &Provider{
@@ -77,7 +78,7 @@ func (p *Provider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
-	var opts []option.RequestOption
+	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	if p.tokenSource != nil {
 		tok, err := p.tokenSource()
 		if err != nil {
@@ -115,7 +116,7 @@ func (p *Provider) ChatStream(
 	options map[string]any,
 	onUpdate func(content string),
 ) (*LLMResponse, error) {
-	var opts []option.RequestOption
+	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	if p.tokenSource != nil {
 		tok, err := p.tokenSource()
 		if err != nil {

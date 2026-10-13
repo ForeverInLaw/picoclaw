@@ -32,6 +32,7 @@ const defaultCodexInstructions = "You are Codex, a coding assistant."
 func NewCodexProvider(token, accountID string) *CodexProvider {
 	opts := []option.RequestOption{
 		option.WithBaseURL("https://chatgpt.com/backend-api/codex"),
+		option.WithMaxRetries(0),
 		option.WithAPIKey(token),
 		option.WithHeader("originator", "codex_cli_rs"),
 		option.WithHeader("OpenAI-Beta", "responses=experimental"),
@@ -88,7 +89,7 @@ func (p *CodexProvider) chat(
 	options map[string]any,
 	onUpdate func(StreamContent),
 ) (*LLMResponse, error) {
-	var opts []option.RequestOption
+	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	accountID := p.accountID
 	resolvedModel, fallbackReason := resolveCodexModel(model)
 	if fallbackReason != "" {
