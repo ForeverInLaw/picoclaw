@@ -22,7 +22,8 @@ import (
 const telegramInlinePagePrefix = "__picoclaw_inline_page__:"
 
 // Published answers are transport state, separate from conversation history.
-// Store only paginated results so their navigation survives bot restarts.
+// Selected result ownership is recorded before generation. Paginated answers
+// retain their complete source so navigation survives bot restarts.
 type telegramInlinePages struct {
 	Content string `json:"content"`
 	Plain   bool   `json:"plain,omitempty"`

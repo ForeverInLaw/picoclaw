@@ -254,7 +254,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 
 	if inlineMessageID, ok := telegramInlineMessageID(msg.ChatID); ok {
 		if err := c.editInlineMessageText(ctx, inlineMessageID, msg.Content); err != nil {
-			return fmt.Errorf("telegram inline send: %w", channels.ErrTemporary)
+			return fmt.Errorf("telegram inline send: %w", err)
 		}
 		return nil
 	}
