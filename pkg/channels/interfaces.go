@@ -74,3 +74,9 @@ type CommandRegistrarCapable interface {
 type ProgressCapable interface {
 	SendProgress(ctx context.Context, msg bus.OutboundMessage) error
 }
+
+// MessageSplittingCapable adapters handle complete answers themselves, including
+// formatting-specific limits and transport-specific pagination.
+type MessageSplittingCapable interface {
+	HandlesMessageSplitting() bool
+}

@@ -58,6 +58,10 @@ type TelegramChannel struct {
 	commandRegCancel context.CancelFunc
 }
 
+// HandlesMessageSplitting keeps rich/plain fallback and inline pagination inside
+// the Telegram adapter, where their different API limits are known.
+func (c *TelegramChannel) HandlesMessageSplitting() bool { return true }
+
 func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChannel, error) {
 	var opts []telego.BotOption
 	telegramCfg := cfg.Channels.Telegram

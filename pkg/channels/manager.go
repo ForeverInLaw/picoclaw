@@ -625,8 +625,21 @@ func newChannelWorker(name string, ch Channel) *channelWorker {
 	}
 }
 
-// runWorker processes outbound messages for a single channel, splitting
-// messages that exceed the channel's maximum message length.
+// outboundChunks leaves complete answers with adapters that own length handling.
+func outboundChunks(ch Channel, msg bus.OutboundMessage) []string {
+	if msg.Progress != nil {
+		return []string{msg.Content}
+	}
+	if splitter, ok := ch.(MessageSplittingCapable); ok && splitter.HandlesMessageSplitting() {
+		return []string{msg.Content}
+	}
+	if limit, ok := ch.(MessageLengthProvider); ok && limit.MaxMessageLength() > 0 {
+		return SplitMessage(msg.Content, limit.MaxMessageLength())
+	}
+	return []string{msg.Content}
+}
+
+// runWorker processes outbound messages for a single channel.
 func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) {
 	defer close(w.done)
 	for {
@@ -635,19 +648,10 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			if !ok {
 				return
 			}
-			maxLen := 0
-			if mlp, ok := w.ch.(MessageLengthProvider); ok {
-				maxLen = mlp.MaxMessageLength()
-			}
-			if msg.Progress == nil && maxLen > 0 && len([]rune(msg.Content)) > maxLen {
-				chunks := SplitMessage(msg.Content, maxLen)
-				for _, chunk := range chunks {
-					chunkMsg := msg
-					chunkMsg.Content = chunk
-					m.sendWithRetry(ctx, name, w, chunkMsg)
-				}
-			} else {
-				m.sendWithRetry(ctx, name, w, msg)
+			for _, chunk := range outboundChunks(w.ch, msg) {
+				chunkMsg := msg
+				chunkMsg.Content = chunk
+				m.sendWithRetry(ctx, name, w, chunkMsg)
 			}
 		case <-ctx.Done():
 			return
@@ -1062,18 +1066,10 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 		return fmt.Errorf("channel %s has no active worker", msg.Channel)
 	}
 
-	maxLen := 0
-	if mlp, ok := w.ch.(MessageLengthProvider); ok {
-		maxLen = mlp.MaxMessageLength()
-	}
-	if msg.Progress == nil && maxLen > 0 && len([]rune(msg.Content)) > maxLen {
-		for _, chunk := range SplitMessage(msg.Content, maxLen) {
-			chunkMsg := msg
-			chunkMsg.Content = chunk
-			m.sendWithRetry(ctx, msg.Channel, w, chunkMsg)
-		}
-	} else {
-		m.sendWithRetry(ctx, msg.Channel, w, msg)
+	for _, chunk := range outboundChunks(w.ch, msg) {
+		chunkMsg := msg
+		chunkMsg.Content = chunk
+		m.sendWithRetry(ctx, msg.Channel, w, chunkMsg)
 	}
 	return nil
 }
