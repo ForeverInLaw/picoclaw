@@ -600,6 +600,70 @@ func TestRunResetControlsRemainResponsiveWithBackpressuredAcknowledgements(t *te
 	}
 }
 
+func TestRunResetRevokesCompletedAnswerWaitingForOutboundCapacity(t *testing.T) {
+	al, mb, p := startIngressLoop(t)
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+	publishIncoming(t, mb, directIngressMessage("OLD_COMPLETED_ANSWER"))
+	req := inboundRequest(t, p)
+	store := al.GetRegistry().GetDefaultAgent().Sessions.(*session.ConversationStore)
+	captured, _, err := store.CaptureTurn("agent:main:main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := captured.(session.ConversationTurn)
+	for n := 0; n < 64; n++ {
+		if err := mb.PublishOutbound(t.Context(), bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "queued output"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(req.release)
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ended := false
+	for !ended {
+		select {
+		case event := <-sub.C:
+			ended = event.Kind == EventKindTurnEnd
+		case <-deadline.C:
+			t.Fatal("model turn did not finish before publication")
+		}
+	}
+	publishIncoming(t, mb, directIngressMessage("/clear"))
+	resetDeadline := time.Now().Add(time.Second)
+	for {
+		current, err := view.IsCurrent()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !current {
+			break
+		}
+		if time.Now().After(resetDeadline) {
+			t.Fatal("completed-turn publication backpressure stranded reset control")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for n := 0; n < 64; n++ {
+		<-mb.OutboundChan()
+	}
+	publishIncoming(t, mb, directIngressMessage("NEW_GENERATION"))
+	fresh := inboundRequest(t, p)
+	close(fresh.release)
+	for {
+		out := finalOutbound(t, mb)
+		if strings.Contains(out.Content, "OLD_COMPLETED_ANSWER") {
+			t.Fatal("old generation answer was published after reset")
+		}
+		if strings.Contains(out.Content, "NEW_GENERATION") {
+			if out.DeliveryID == "" {
+				t.Fatal("final answer has no logical delivery identity")
+			}
+			break
+		}
+	}
+}
+
 func TestRunDuplicateFallbackAliasPreservesSelectedProviderModelAndRetryClient(t *testing.T) {
 	var primaryCalls, firstCalls, secondCalls, mismatches atomic.Int32
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -36,6 +36,9 @@ type SessionStore interface {
 type ConversationTurn interface {
 	SessionStore
 	IsCurrent() (bool, error)
+	// CommitIfCurrent linearizes a nonblocking side effect with reset. Callers
+	// must wait for capacity outside this gate, then retry the complete commit.
+	CommitIfCurrent(operation func() error) (bool, error)
 	// ConversationKey identifies observations captured by this turn generation.
 	ConversationKey(key string) string
 }

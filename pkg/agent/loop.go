@@ -493,7 +493,8 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 			defer cancelDrain()
 
-			response, err := al.processMessage(ctx, msg)
+			responseCtx := withResponsePublication(ctx)
+			response, err := al.processMessage(responseCtx, msg)
 			if err != nil {
 				response = fmt.Sprintf("Error processing message: %v", err)
 			}
@@ -511,7 +512,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			if target == nil {
 				cancelDrain()
 				if finalResponse != "" {
-					al.publishResponseIfNeeded(ctx, msg.Channel, msg.ChatID, finalResponse, msg.MessageID)
+					al.publishResponseWithControls(responseCtx, msg, msg.Channel, msg.ChatID, finalResponse, msg.MessageID, &queued)
 				}
 				return
 			}
@@ -526,7 +527,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					})
 
 				continued, continueErr := al.Continue(
-					bus.WithStreamReplyTo(ctx, target.ReplyToMessageID),
+					bus.WithStreamReplyTo(responseCtx, target.ReplyToMessageID),
 					target.SessionKey,
 					target.Channel,
 					target.ChatID,
@@ -559,7 +560,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					})
 
 				continued, continueErr := al.Continue(
-					bus.WithStreamReplyTo(ctx, target.ReplyToMessageID),
+					bus.WithStreamReplyTo(responseCtx, target.ReplyToMessageID),
 					target.SessionKey,
 					target.Channel,
 					target.ChatID,
@@ -574,6 +575,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					return
 				}
 				if continued == "" {
+					finalResponse = ""
 					break
 				}
 
@@ -581,7 +583,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 
 			if finalResponse != "" {
-				al.publishResponseIfNeeded(ctx, target.Channel, target.ChatID, finalResponse, target.ReplyToMessageID)
+				al.publishResponseWithControls(responseCtx, msg, target.Channel, target.ChatID, finalResponse, target.ReplyToMessageID, &queued)
 			}
 		}()
 	}
@@ -597,11 +599,15 @@ func (al *AgentLoop) drainBusToSteering(
 	activeScope, activeAgentID string,
 	inherited ...int,
 ) []bus.InboundMessage {
-	var queued []bus.InboundMessage
 	pending := 0
 	if len(inherited) > 0 {
 		pending = inherited[0]
 	}
+	return al.drainBus(ctx, activeScope, activeAgentID, pending, true)
+}
+
+func (al *AgentLoop) drainBus(ctx context.Context, activeScope, activeAgentID string, pending int, steer bool) []bus.InboundMessage {
+	var queued []bus.InboundMessage
 	for {
 		var msg bus.InboundMessage
 		select {
@@ -619,7 +625,7 @@ func (al *AgentLoop) drainBusToSteering(
 		}
 
 		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
-		if !scopeOK || msgScope != activeScope || isInlineMessage(msg) ||
+		if !steer || !scopeOK || msgScope != activeScope || isInlineMessage(msg) ||
 			strings.Contains(activeScope, ":telegram:inline:user:") {
 			if pending+len(queued) >= maxPendingRequests {
 				al.rejectBusyRequest(ctx, msg)
@@ -715,12 +721,27 @@ func (al *AgentLoop) publishResponseIfNeeded(
 	if len(replyIDs) > 0 {
 		replyID = replyIDs[0]
 	}
-	al.bus.PublishOutbound(ctx, bus.OutboundMessage{
+	msg := bus.OutboundMessage{
+		DeliveryID:       bus.DeliveryID(ctx),
 		Channel:          channel,
 		ChatID:           chatID,
 		Content:          response,
 		ReplyToMessageID: replyID,
-	})
+	}
+	var published bool
+	var err error
+	if publication := publicationFor(ctx); publication != nil && publication.guard != nil {
+		published, err = al.bus.PublishOutboundGuarded(ctx, msg, publication.guard.CommitIfCurrent)
+	} else {
+		err = al.bus.PublishOutbound(ctx, msg)
+		published = err == nil
+	}
+	if err != nil {
+		logger.WarnCF("agent", "Failed to publish outbound response", map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
+	}
+	if !published {
+		return
+	}
 	logger.InfoCF("agent", "Published outbound response",
 		map[string]any{
 			"channel":     channel,
@@ -1644,6 +1665,10 @@ func (al *AgentLoop) runAgentLoop(
 		return "", err
 	}
 	agent = captured
+	if publicationFor(ctx) == nil {
+		ctx = withResponsePublication(ctx)
+	}
+	publicationFor(ctx).guard, _ = agent.Sessions.(session.ConversationTurn)
 	if !resetAt.IsZero() {
 		opts.ConversationContext.Reset = true
 		opts.ConversationContext.ResetAt = resetAt
