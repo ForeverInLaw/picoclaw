@@ -597,3 +597,82 @@ func TestRunResetControlsRemainResponsiveWithBackpressuredAcknowledgements(t *te
 		}
 	}
 }
+
+func TestRunDuplicateFallbackAliasPreservesSelectedProviderModelAndRetryClient(t *testing.T) {
+	var primaryCalls, firstCalls, secondCalls, mismatches atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryCalls.Add(1)
+		w.WriteHeader(503)
+		_, _ = w.Write([]byte(`{"error":{"message":"unavailable"}}`))
+	}))
+	defer primary.Close()
+	backupHandler := func(expectedModel, expectedKey string, calls *atomic.Int32) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body.Model != expectedModel || r.Header.Get("Authorization") != "Bearer "+expectedKey {
+				mismatches.Add(1)
+			}
+			if calls.Add(1)%2 == 1 {
+				w.WriteHeader(503)
+				_, _ = w.Write([]byte(`{"error":{"message":"unavailable"}}`))
+				return
+			}
+			_, _ = w.Write(
+				[]byte(
+					`{"choices":[{"message":{"role":"assistant","content":"duplicate alias recovered"},"finish_reason":"stop"}]}`,
+				),
+			)
+		}
+	}
+	first := httptest.NewServer(backupHandler("claude-first", "first-key", &firstCalls))
+	defer first.Close()
+	second := httptest.NewServer(backupHandler("gpt-second", "second-key", &secondCalls))
+	defer second.Close()
+	for run := 0; run < 2; run++ {
+		initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+		initial.Close()
+		cfg.Agents.Defaults.Model = "primary"
+		cfg.Agents.Defaults.ModelFallbacks = []string{"duplicated-backup"}
+		cfg.ModelList = []config.ModelConfig{
+			{ModelName: "primary", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL},
+			{ModelName: "duplicated-backup", Model: "anthropic/claude-first", APIKey: "first-key", APIBase: first.URL},
+			{ModelName: "duplicated-backup", Model: "openai/gpt-second", APIKey: "second-key", APIBase: second.URL},
+		}
+		provider, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		mb := bus.NewMessageBus()
+		al := NewAgentLoop(cfg, mb, provider)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- al.Run(ctx) }()
+		publishIncoming(t, mb, directIngressMessage("recover duplicated alias"))
+		out := finalOutbound(t, mb)
+		cancel()
+		<-done
+		al.Close()
+		mb.Close()
+		cleanup()
+		if out.Content != "duplicate alias recovered" || mismatches.Load() != 0 ||
+			primaryCalls.Load() != int32(run+1) ||
+			firstCalls.Load()+secondCalls.Load() != int32(2*(run+1)) {
+			t.Fatalf(
+				"selected alias config drifted: response=%q mismatches=%d calls=%d/%d/%d",
+				out.Content,
+				mismatches.Load(),
+				primaryCalls.Load(),
+				firstCalls.Load(),
+				secondCalls.Load(),
+			)
+		}
+	}
+	if firstCalls.Load() != 2 || secondCalls.Load() != 2 {
+		t.Fatalf("duplicate alias round-robin was not preserved: calls=%d/%d", firstCalls.Load(), secondCalls.Load())
+	}
+}

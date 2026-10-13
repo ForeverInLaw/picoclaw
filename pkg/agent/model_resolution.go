@@ -149,7 +149,7 @@ func candidateProviderResolver(
 			}
 			return nil, fmt.Errorf("no model configuration for fallback %s/%s", provider, model)
 		}
-		mc, err := resolvedModelConfig(cfg, name, workspace)
+		mc, err := resolvedCandidateConfig(cfg, name, workspace, provider, model)
 		if err != nil {
 			return nil, err
 		}
@@ -160,4 +160,32 @@ func candidateProviderResolver(
 		clients[key] = client
 		return client, nil
 	}
+}
+
+// An alias may round-robin across different provider/model references. Factory
+// selection must stay within the already-selected reference, including retries.
+func resolvedCandidateConfig(cfg *config.Config, name, workspace, provider, model string) (*config.ModelConfig, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	alias := false
+	for _, mc := range cfg.ModelList {
+		if mc.ModelName == name {
+			alias = true
+			break
+		}
+	}
+	matching := *cfg
+	matching.ModelList = nil
+	for _, mc := range cfg.ModelList {
+		protocol, id := providers.ExtractProtocol(mc.Model)
+		nameMatches := mc.ModelName == name
+		if !alias {
+			nameMatches = mc.Model == name || id == name
+		}
+		if nameMatches && protocol == provider && id == model {
+			matching.ModelList = append(matching.ModelList, mc)
+		}
+	}
+	return resolvedModelConfig(&matching, name, workspace)
 }
