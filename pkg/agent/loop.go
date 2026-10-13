@@ -1544,7 +1544,22 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			opts.SenderID,
 			opts.UserMessage,
 		)
-		al.maybeSummarize(agent, opts.SessionKey, al.newTurnEventScope(agent.ID, opts.SessionKey))
+		observedMessages := agent.ContextBuilder.BuildMessages(
+			agent.Sessions.GetHistory(opts.SessionKey), agent.Sessions.GetSummary(opts.SessionKey), "", "", nil,
+			opts.Channel, opts.ChatID, opts.ChatLabel, opts.SenderID, opts.SenderDisplayName,
+			opts.ConversationContext,
+		)
+		observedMessages = resolveMediaRefs(
+			observedMessages,
+			al.mediaStore,
+			al.GetConfig().Agents.Defaults.GetMaxMediaSize(),
+		)
+		requestTokens := estimateRequestTokens(
+			observedMessages,
+			agent.Tools.ToProviderDefsFiltered(newToolAllowlist(opts.AllowedTools)),
+			agent.MaxTokens,
+		)
+		al.maybeSummarize(agent, opts.SessionKey, al.newTurnEventScope(agent.ID, opts.SessionKey), requestTokens)
 		logger.DebugCF("agent", "Observed message without response",
 			map[string]any{
 				"agent_id":    agent.ID,
@@ -1921,7 +1936,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		for isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
-			compression, ok := al.forceCompression(ts.agent, ts.sessionKey)
+			compression, ok := al.forceCompression(ts.agent, ts.sessionKey, 0)
 			if !ok || compression.DroppedMessages <= 0 {
 				break
 			}
@@ -1982,6 +1997,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var lastToolResultForFallback string
 	var hadToolCalls bool
 	var terminalToolCompleted bool
+	lastRequestTokens := estimateRequestTokens(
+		messages,
+		ts.agent.Tools.ToProviderDefsFiltered(allowedTools),
+		ts.agent.MaxTokens,
+	)
 
 turnLoop:
 	for ts.currentIteration() < ts.agent.MaxIterations || len(pendingMessages) > 0 || func() bool {
@@ -2112,6 +2132,12 @@ turnLoop:
 			callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
 			providerToolDefs = nil
 			ts.markGracefulTerminalUsed()
+		}
+		ts.mu.RLock()
+		protectedStart := max(1, len(messages)-len(ts.persistedMessages))
+		ts.mu.RUnlock()
+		if ts.opts.NoHistory {
+			protectedStart = 1
 		}
 
 		llmOpts := map[string]any{
@@ -2330,6 +2356,25 @@ turnLoop:
 		waited := time.Duration(0)
 		emptyRecoveryUsed := false
 		for retry := 0; retry <= maxRetries; retry++ {
+			outputReserve := ts.agent.MaxTokens
+			if configured, ok := llmOpts["max_tokens"].(int); ok {
+				outputReserve = configured
+			}
+			if retry == 0 {
+				lastRequestTokens = estimateRequestTokens(callMessages, providerToolDefs, outputReserve)
+			}
+			prepared, dropped, fits := trimContextRequest(callMessages, providerToolDefs, outputReserve, ts.agent.ContextWindow, protectedStart)
+			callMessages = prepared
+			protectedStart -= dropped
+			if !fits {
+				err = fmt.Errorf("assembled request exceeds configured context window: estimated %d tokens including output reserve, limit %d; reduce the current input, instructions, tools or output limit", estimateRequestTokens(callMessages, providerToolDefs, outputReserve), ts.agent.ContextWindow)
+				break
+			}
+			if dropped > 0 {
+				al.emitEvent(EventKindContextCompress, ts.eventMeta("runTurn", "turn.context.compress"), ContextCompressPayload{
+					Reason: ContextCompressReasonProactive, DroppedMessages: dropped, RemainingMessages: len(callMessages) - 1,
+				})
+			}
 			response, err = callLLM(callMessages, providerToolDefs)
 			if err == nil || errors.Is(err, errEmptyAnswer) {
 				if hasModelOutcome(response) {
@@ -2405,7 +2450,10 @@ turnLoop:
 				retryAnnounced = true
 				al.reportModelRetry(turnCtx, ts, modelAttempts, "context_limit", err, 0)
 
-				if compression, ok := al.forceCompression(ts.agent, ts.sessionKey); ok {
+				ts.mu.RLock()
+				protectedMessages := len(ts.persistedMessages)
+				ts.mu.RUnlock()
+				if compression, ok := al.forceCompression(ts.agent, ts.sessionKey, protectedMessages); ok {
 					al.emitEvent(
 						EventKindContextCompress,
 						ts.eventMeta("runTurn", "turn.context.compress"),
@@ -2423,13 +2471,18 @@ turnLoop:
 				messages = ts.agent.ContextBuilder.BuildMessages(
 					newHistory, newSummary, retrievedMemory, "",
 					nil, ts.channel, ts.chatID, ts.opts.ChatLabel,
-					"", "",
+					ts.opts.SenderID, ts.opts.SenderDisplayName,
 					ts.opts.ConversationContext,
 				)
+				messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
+				ts.mu.RLock()
+				protectedStart = max(1, len(messages)-len(ts.persistedMessages))
+				ts.mu.RUnlock()
 				callMessages = messages
 				if gracefulTerminal {
 					callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
 				}
+				lastRequestTokens = estimateRequestTokens(callMessages, providerToolDefs, outputReserve)
 				continue
 			}
 			break
@@ -3091,7 +3144,11 @@ turnLoop:
 	}
 
 	if ts.opts.EnableSummary {
-		al.maybeSummarize(ts.agent, ts.sessionKey, ts.scope)
+		// The final answer is persisted after the last provider request. Include
+		// it once so the threshold represents the next request's full context.
+		al.maybeSummarize(ts.agent, ts.sessionKey, ts.scope, lastRequestTokens+estimateMessageTokens(providers.Message{
+			Role: "assistant", Content: finalContent,
+		}))
 	}
 
 	ts.setPhase(TurnPhaseCompleted)
@@ -3226,7 +3283,12 @@ func publishToolMessage(msgBus *bus.MessageBus, toolCtx context.Context, channel
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
-func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, turnScope turnEventScope) {
+func (al *AgentLoop) maybeSummarize(
+	agent *AgentInstance,
+	sessionKey string,
+	turnScope turnEventScope,
+	requestTokens int,
+) {
 	// Observe-only messages do not create a turn; bind their background
 	// summarization too, so a late summary cannot cross a reset boundary.
 	if store, ok := agent.Sessions.(*session.ConversationStore); ok {
@@ -3244,10 +3306,9 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, tur
 		agent = &turnAgent
 	}
 	newHistory := agent.Sessions.GetHistory(sessionKey)
-	tokenEstimate := al.estimateTokens(newHistory)
 	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
 
-	if len(newHistory) > agent.SummarizeMessageThreshold || tokenEstimate > threshold {
+	if len(newHistory) > agent.SummarizeMessageThreshold || requestTokens > threshold {
 		summarizeKey := agent.ID + ":" + sessionKey
 		if _, loading := al.summarizing.LoadOrStore(summarizeKey, true); !loading {
 			go func() {
@@ -3268,7 +3329,8 @@ type compressionResult struct {
 // It drops the oldest ~50% of Turns (a Turn is a complete user→LLM→response
 // cycle, as defined in #1316), so tool-call sequences are never split.
 //
-// If the history is a single Turn with no safe split point, the function
+// protectedMessages preserves the active turn during a provider retry. If the
+// history is a single Turn with no safe split point and no active turn, the function
 // falls back to keeping only the most recent user message. This breaks
 // Turn atomicity as a last resort to avoid a context-exceeded loop.
 //
@@ -3276,7 +3338,11 @@ type compressionResult struct {
 // prompt is built dynamically by BuildMessages and is NOT stored here.
 // The compression note is recorded in the session summary so that
 // BuildMessages can include it in the next system prompt.
-func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
+func (al *AgentLoop) forceCompression(
+	agent *AgentInstance,
+	sessionKey string,
+	protectedMessages int,
+) (compressionResult, bool) {
 	history := agent.Sessions.GetHistory(sessionKey)
 	if len(history) <= 2 {
 		return compressionResult{}, false
@@ -3293,6 +3359,12 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) (
 		// Fewer than 2 Turns — fall back to message-level midpoint
 		// aligned to the nearest Turn boundary.
 		mid = findSafeBoundary(history, len(history)/2)
+	}
+	if protectedMessages > 0 {
+		mid = min(mid, len(history)-protectedMessages)
+		if mid <= 0 {
+			return compressionResult{}, false
+		}
 	}
 	var keptHistory []providers.Message
 	if mid <= 0 {
@@ -3657,17 +3729,6 @@ func (al *AgentLoop) summarizeBatch(
 		fallback.WriteString(fmt.Sprintf("%s: %s", m.Role, content))
 	}
 	return fallback.String(), nil
-}
-
-// estimateTokens estimates the number of tokens in a message list.
-// Counts Content, ToolCalls arguments, and ToolCallID metadata so that
-// tool-heavy conversations are not systematically undercounted.
-func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
-	total := 0
-	for _, m := range messages {
-		total += estimateMessageTokens(m)
-	}
-	return total
 }
 
 func (al *AgentLoop) handleCommand(

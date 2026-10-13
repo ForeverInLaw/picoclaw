@@ -479,5 +479,24 @@
       "clear": "清空日志",
       "empty": "等待日志中..."
     }
+  },
+  "dashboardAuth": {
+    "loginTitle": "登录 PicoClaw",
+    "setupTitle": "设置仪表盘密码",
+    "changeTitle": "更改仪表盘密码",
+    "loginDescription": "输入仪表盘密码以继续。",
+    "setupDescription": "至少使用 8 个字符。此密码保护仪表盘设置、聊天和文件。",
+    "changeDescription": "更改密码将注销所有仪表盘会话。",
+    "password": "密码",
+    "confirm": "确认密码",
+    "loginSubmit": "登录",
+    "setupSubmit": "设置密码",
+    "changeSubmit": "更改密码",
+    "loading": "请稍候…",
+    "mismatch": "密码不匹配。",
+    "retry": "重试",
+    "account": "仪表盘访问",
+    "logout": "退出登录",
+    "logoutError": "无法退出登录，请重试。"
   }
 }
