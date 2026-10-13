@@ -1157,6 +1157,44 @@ func TestSendMessage_WithSplitting(t *testing.T) {
 	}
 }
 
+type progressLengthChannel struct{ mockChannelWithLength }
+
+func (c *progressLengthChannel) SendProgress(ctx context.Context, msg bus.OutboundMessage) error {
+	return c.Send(ctx, msg)
+}
+
+func TestSendMessage_ProgressRespectsAdapterLengthCapability(t *testing.T) {
+	for _, capable := range []bool{false, true} {
+		t.Run(fmt.Sprint(capable), func(t *testing.T) {
+			m := newTestManager()
+			var received []bus.OutboundMessage
+			base := mockChannelWithLength{mockChannel: mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error { received = append(received, msg); return nil }}, maxLen: 5}
+			var ch Channel = &base
+			if capable {
+				ch = &progressLengthChannel{base}
+			}
+			m.channels["test"] = ch
+			m.workers["test"] = &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+			progress := &bus.ProgressMessage{RequestID: "request", ActionID: "action"}
+			msg := bus.OutboundMessage{Channel: "test", ChatID: "42", Content: "long activity result", Progress: progress, ReplyToMessageID: "19"}
+			if err := m.SendMessage(t.Context(), msg); err != nil {
+				t.Fatal(err)
+			}
+			if capable && (len(received) != 1 || received[0].Content != msg.Content) {
+				t.Fatalf("typed progress was split: %+v", received)
+			}
+			for _, got := range received {
+				if !capable && len([]rune(got.Content)) > 5 {
+					t.Fatalf("ordinary adapter exceeded its limit: %q", got.Content)
+				}
+				if got.Progress != progress || got.ReplyToMessageID != "19" {
+					t.Fatal("progress fragments lost their delivery envelope")
+				}
+			}
+		})
+	}
+}
+
 func TestSendMessage_PreservesOrdering(t *testing.T) {
 	m := newTestManager()
 

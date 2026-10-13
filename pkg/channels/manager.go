@@ -632,7 +632,9 @@ func newChannelWorker(name string, ch Channel) *channelWorker {
 // outboundChunks leaves complete answers with adapters that own length handling.
 func outboundChunks(ch Channel, msg bus.OutboundMessage) []string {
 	if msg.Progress != nil {
-		return []string{msg.Content}
+		if _, ok := ch.(ProgressCapable); ok {
+			return []string{msg.Content}
+		}
 	}
 	if splitter, ok := ch.(MessageSplittingCapable); ok && splitter.HandlesMessageSplitting() {
 		return []string{msg.Content}
