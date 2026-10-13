@@ -27,10 +27,23 @@ type ingressRequest struct {
 	release  chan struct{}
 }
 
-type ingressTelegramChannel struct{ *telegram.TelegramChannel }
+type ingressDeliveryResult struct {
+	message bus.OutboundMessage
+	err     error
+}
+type ingressTelegramChannel struct {
+	*telegram.TelegramChannel
+	delivered chan ingressDeliveryResult
+}
 
 func (c ingressTelegramChannel) Start(context.Context) error { c.SetRunning(true); return nil }
 func (c ingressTelegramChannel) Stop(context.Context) error  { c.SetRunning(false); return nil }
+
+func (c ingressTelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	err := c.TelegramChannel.Send(ctx, msg)
+	c.delivered <- ingressDeliveryResult{msg, err}
+	return err
+}
 
 func TestRunStreamFailureAndOrdinaryDeliveryShareLogicalIdentity(t *testing.T) {
 	var sends atomic.Int32
@@ -65,13 +78,12 @@ func TestRunStreamFailureAndOrdinaryDeliveryShareLogicalIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.RegisterChannel("telegram", ingressTelegramChannel{channel})
+	delivered := make(chan ingressDeliveryResult, 1)
+	manager.RegisterChannel("telegram", ingressTelegramChannel{channel, delivered})
 	if err := manager.StartAll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = manager.StopAll(t.Context()) }()
-	// The transport dispatcher runs in production; here the actual final bus
-	// envelope is inspected and sent synchronously to observe its delivery error.
 	content := strings.Repeat("complete answer paragraph\n", 3000)
 	p := &phasedAnswerScriptProvider{answerScriptProvider: answerScriptProvider{responses: []*providers.LLMResponse{{Content: content, ContentPhase: providers.ContentPhaseAnswer}}}}
 	al.GetRegistry().GetDefaultAgent().Provider = p
@@ -80,12 +92,17 @@ func TestRunStreamFailureAndOrdinaryDeliveryShareLogicalIdentity(t *testing.T) {
 	go func() { done <- al.Run(ctx) }()
 	defer func() { cancel(); <-done }()
 	publishIncoming(t, mb, directIngressMessage("generate the complete answer"))
-	out := finalOutbound(t, mb)
-	if out.DeliveryID == "" {
+	var result ingressDeliveryResult
+	select {
+	case result = <-delivered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run final response did not reach the actual Manager worker")
+	}
+	if result.message.DeliveryID == "" {
 		t.Fatal("actual Run final envelope lost stream delivery identity")
 	}
-	if err := manager.SendMessage(t.Context(), out); !errors.Is(err, channels.ErrSendFailed) {
-		t.Fatalf("unknown final send outcome was not retained across stream/bus recovery: %v", err)
+	if !errors.Is(result.err, channels.ErrSendFailed) {
+		t.Fatalf("unknown final send outcome was not retained across stream/bus recovery: %v", result.err)
 	}
 	if sends.Load() != 2 {
 		t.Fatalf("stream recovery replayed an acknowledged or unknown send: %d", sends.Load())
