@@ -42,8 +42,8 @@ func (s *ConversationStore) boundaryPath(key string) string {
 }
 
 func (s *ConversationStore) boundaryLocked(key string) (conversationBoundary, error) {
-	if boundary, ok := s.boundaries[key]; ok {
-		return boundary, nil
+	if s.dir == "" {
+		return s.boundaries[key], nil
 	}
 	var boundary conversationBoundary
 	if s.dir != "" {
@@ -60,7 +60,6 @@ func (s *ConversationStore) boundaryLocked(key string) (conversationBoundary, er
 			}
 		}
 	}
-	s.boundaries[key] = boundary
 	return boundary, nil
 }
 
@@ -94,7 +93,9 @@ func (s *ConversationStore) ResetConversation(key string) error {
 			return fmt.Errorf("persist conversation reset: %w", err)
 		}
 	}
-	s.boundaries[key] = boundary
+	if s.dir == "" {
+		s.boundaries[key] = boundary
+	}
 	return nil
 }
 
