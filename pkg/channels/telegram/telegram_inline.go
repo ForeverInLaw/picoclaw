@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -174,11 +175,24 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 		return nil
 	}
 
+	c.inlineMu.Lock()
+	previous, readErr := c.loadInlinePages(result.InlineMessageID)
+	if readErr == nil {
+		c.inlineMu.Unlock()
+		if previous.OwnerID != result.From.ID {
+			return fmt.Errorf("inline result belongs to another user")
+		}
+		return nil
+	}
+	if !os.IsNotExist(readErr) {
+		c.inlineMu.Unlock()
+		return fmt.Errorf("read selected inline result identity: %w", readErr)
+	}
 	if err := c.saveInlinePages(result.InlineMessageID, telegramInlinePages{OwnerID: result.From.ID}); err != nil {
+		c.inlineMu.Unlock()
 		return fmt.Errorf("persist selected inline result identity: %w", err)
 	}
 
-	c.inlineMu.Lock()
 	c.inlineReplyLocked(result.InlineMessageID)
 	c.inlineMu.Unlock()
 

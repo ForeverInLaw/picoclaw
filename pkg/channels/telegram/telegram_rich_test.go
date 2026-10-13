@@ -113,7 +113,9 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 	channel := newTestChannel(t, caller)
 	channel.config.Agents.Defaults.Workspace = t.TempDir()
 	channel.config.Channels.Telegram.Inline.Enabled = true
-	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, bus.NewMessageBus(), nil)
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
 	channel.SetRunning(true)
 	require.NoError(
 		t,
@@ -121,6 +123,7 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 			ResultID: "generate", InlineMessageID: "published-result", Query: "long answer", From: telego.User{ID: 42},
 		}),
 	)
+	<-mb.InboundChan()
 	caller.calls = nil
 	content := strings.Repeat("first paragraph\n\n", 2300) + "LAST ANSWER LINE"
 	require.NoError(t, channel.Send(context.Background(), bus.OutboundMessage{
@@ -143,6 +146,19 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 
 	reopened := newTestChannel(t, caller)
 	reopened.config = channel.config
+	reopened.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	for _, current := range []*TelegramChannel{channel, reopened} {
+		before := len(caller.calls)
+		require.NoError(t, current.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), telego.ChosenInlineResult{
+			ResultID: "generate", InlineMessageID: "published-result", Query: "long answer", From: telego.User{ID: 42},
+		}))
+		require.Len(t, caller.calls, before, "chosen-result redelivery must retain the published keyboard")
+		select {
+		case duplicate := <-mb.InboundChan():
+			t.Fatalf("chosen-result redelivery dispatched generation again: %+v", duplicate)
+		default:
+		}
+	}
 	require.NoError(
 		t,
 		reopened.handleInlineCallbackQuery(
