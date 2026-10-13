@@ -178,6 +178,11 @@ func TestConversationResetReportsPersistenceFailureAndRetainsConversation(t *tes
 	if err != nil || !strings.Contains(response, "Failed to clear") {
 		t.Fatalf("failed reset = %q, %v", response, err)
 	}
+	// Restore boundary storage before continuing: persisted state is now read
+	// authoritatively, so an unreadable boundary cannot safely be assumed absent.
+	if err := os.Remove(filepath.Join(agent.Workspace, "sessions", "boundaries")); err != nil {
+		t.Fatal(err)
+	}
 	provider := &recordingProvider{}
 	agent.Provider = provider
 	msg.Content = "follow up"
