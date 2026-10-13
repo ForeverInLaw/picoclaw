@@ -428,7 +428,7 @@ func spawnSubTurn(
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("subturn panicked: %v", r)
-			result = nil
+			result = tools.ErrorResult(fmt.Sprintf("SubTurn failed: %v", err)).WithError(err)
 			logger.ErrorCF("subturn", "SubTurn panicked", map[string]any{
 				"child_id":  childID,
 				"parent_id": parentTS.turnID,
@@ -495,41 +495,24 @@ func spawnSubTurn(
 //
 // Delivery behavior:
 //   - If parent turn is still running: attempts to deliver to pendingResults channel
-//   - If channel is full: emits SubTurnOrphanResultEvent (result is lost from channel but tracked)
+//   - If channel is full: waits for space or parent shutdown
 //   - If parent turn has finished: emits SubTurnOrphanResultEvent (late arrival)
 //
 // Thread safety:
-//   - Reads parent state under lock, then releases lock before channel send
-//   - Small race window exists but is acceptable (worst case: result becomes orphan)
+//   - Registers publishers under the same lock as Finish before channel send
+//   - Finish signals blocked publishers and waits before closing their channel
 //
 // Event emissions:
 //   - SubTurnResultDeliveredEvent: successful delivery to channel
-//   - SubTurnOrphanResultEvent: delivery failed (parent finished or channel full)
+//   - SubTurnOrphanResultEvent: delivery failed because the parent finished
 func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, result *tools.ToolResult) {
-	// Let GC clean up the pendingResults channel; parent Finish will no longer close it.
-	// We use defer/recover to catch any unlikely channel panics if it were ever closed.
-	defer func() {
-		if r := recover(); r != nil {
-			logger.WarnCF("subturn", "recovered panic sending to pendingResults", map[string]any{
-				"parent_id": parentTS.turnID,
-				"child_id":  childID,
-				"recover":   r,
-			})
-			if result != nil && al != nil {
-				al.emitEvent(EventKindSubTurnOrphan,
-					parentTS.eventMeta("deliverSubTurnResult", "subturn.orphan"),
-					SubTurnOrphanPayload{ParentTurnID: parentTS.turnID, ChildTurnID: childID, Reason: "panic"},
-				)
-			}
-		}
-	}()
 	parentTS.mu.Lock()
 	isFinished := parentTS.isFinished.Load()
 	resultChan := parentTS.pendingResults
-	parentTS.mu.Unlock()
 
 	// If parent turn has already finished, treat this as an orphan result
 	if isFinished || resultChan == nil {
+		parentTS.mu.Unlock()
 		if result != nil && al != nil {
 			al.emitEvent(EventKindSubTurnOrphan,
 				parentTS.eventMeta("deliverSubTurnResult", "subturn.orphan"),
@@ -538,21 +521,38 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 		}
 		return
 	}
+	if parentTS.finishedChan == nil {
+		parentTS.finishedChan = make(chan struct{})
+	}
+	finished := parentTS.finishedChan
+	parentTS.resultPublishers.Add(1)
+	parentTS.mu.Unlock()
 
 	// Parent Turn is still running → attempt to deliver result
 	// We use a select statement with parentTS.Finished() to ensure that if the
 	// parent turn finishes while we are waiting to send the result (e.g. channel
 	// is full), we don't leak this goroutine by blocking forever.
+	delivered := false
 	select {
 	case resultChan <- result:
+		delivered = true
+	case <-finished:
+	}
+	parentTS.resultPublishers.Done()
+
+	if delivered {
 		// Successfully delivered
 		if al != nil {
+			contentLen := 0
+			if result != nil {
+				contentLen = len(result.ForLLM)
+			}
 			al.emitEvent(EventKindSubTurnResultDelivered,
 				parentTS.eventMeta("deliverSubTurnResult", "subturn.result_delivered"),
-				SubTurnResultDeliveredPayload{ContentLen: len(result.ForLLM)},
+				SubTurnResultDeliveredPayload{ContentLen: contentLen},
 			)
 		}
-	case <-parentTS.Finished():
+	} else {
 		// Parent finished while we were waiting to deliver.
 		// The result cannot be delivered to the LLM, so it becomes an orphan.
 		logger.WarnCF("subturn", "parent finished before result could be delivered", map[string]any{

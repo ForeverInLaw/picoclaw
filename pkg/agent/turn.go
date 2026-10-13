@@ -84,6 +84,7 @@ type turnState struct {
 	parentTurnID         string                 // Parent turn ID (empty for root turn)
 	childTurnIDs         []string               // Child turn IDs
 	pendingResults       chan *tools.ToolResult // Channel for SubTurn results
+	resultPublishers     sync.WaitGroup         // Registered under mu before Finish waits.
 	concurrencySem       chan struct{}          // Semaphore for limiting concurrent SubTurns
 	isFinished           atomic.Bool            // Whether this turn has finished
 	session              session.SessionStore   // Session store reference
@@ -375,19 +376,22 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 
 // Finish marks the turn as finished and closes the pendingResults channel
 func (ts *turnState) Finish(isHardAbort bool) {
-	ts.isFinished.Store(true)
-
 	// Close pendingResults channel exactly once
 	ts.closeOnce.Do(func() {
-		if ts.pendingResults != nil {
-			close(ts.pendingResults)
-		}
 		ts.mu.Lock()
+		ts.isFinished.Store(true)
 		if ts.finishedChan == nil {
 			ts.finishedChan = make(chan struct{})
 		}
 		close(ts.finishedChan)
 		ts.mu.Unlock()
+
+		// Finished releases publishers blocked on a full queue. Registration
+		// uses the same mutex, so no new Add can race with Wait reaching zero.
+		ts.resultPublishers.Wait()
+		if ts.pendingResults != nil {
+			close(ts.pendingResults)
+		}
 	})
 
 	// If this is a graceful finish (not hard abort), signal to children
