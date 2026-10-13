@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -30,45 +31,97 @@ type outboundTelegram struct{ *TelegramChannel }
 func (c outboundTelegram) Start(context.Context) error { c.SetRunning(true); return nil }
 func (c outboundTelegram) Stop(context.Context) error  { c.SetRunning(false); return nil }
 
+// A fixture clock advances the native adapter's expiry time without sleeping.
+func deliveryContextAt(ctx context.Context, startedAt time.Time) context.Context {
+	id := uuid.Must(uuid.NewV7())
+	millis := startedAt.UnixMilli()
+	for n := 5; n >= 0; n-- {
+		id[n] = byte(millis)
+		millis >>= 8
+	}
+	return bus.WithDeliveryID(ctx, id.String())
+}
+
 func TestExpiredDeliveryRemainsFailedAcrossManagerRecoveryAndStreamFinalize(t *testing.T) {
-	sends := 0
-	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
-		if strings.HasSuffix(url, "/sendRichMessage") {
-			sends++
-			if sends == 2 {
-				return nil, errors.New("unknown delivery outcome")
+	for _, unrelated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unrelatedPrune=%t", unrelated), func(t *testing.T) {
+			sends := 0
+			caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+				if strings.HasSuffix(url, "/sendRichMessage") {
+					sends++
+					if sends == 2 {
+						return nil, errors.New("unknown delivery outcome")
+					}
+				}
+				return successResponse(t), nil
+			}}
+			channel := newTestChannel(t, caller)
+			channel.config.Channels.Telegram.Streaming.Enabled = true
+			now := time.Now()
+			channel.deliveryNow = func() time.Time { return now }
+			mb := bus.NewMessageBus()
+			defer mb.Close()
+			manager, err := channels.NewManager(channel.config, mb, nil)
+			require.NoError(t, err)
+			manager.RegisterChannel("telegram", outboundTelegram{channel})
+			require.NoError(t, manager.StartAll(t.Context()))
+			defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
+			ctx := deliveryContextAt(t.Context(), now)
+			stream, ok := manager.GetStreamer(ctx, "telegram", "42")
+			require.True(t, ok)
+			content := strings.Repeat("answer paragraph\n", 3000)
+			require.ErrorIs(t, stream.Finalize(ctx, content), channels.ErrSendFailed)
+			now = now.Add(11 * time.Minute)
+			wantSends := 2
+			if unrelated {
+				freshCtx := deliveryContextAt(t.Context(), now)
+				require.NoError(
+					t,
+					manager.SendMessage(
+						freshCtx,
+						bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "independent B"},
+					),
+				)
+				wantSends++
 			}
-		}
-		return successResponse(t), nil
-	}}
+			msg := bus.OutboundMessage{
+				DeliveryID: bus.DeliveryID(ctx),
+				Channel:    "telegram",
+				ChatID:     "42",
+				Content:    content,
+			}
+			require.ErrorIs(t, manager.SendMessage(ctx, msg), channels.ErrSendFailed)
+			require.ErrorIs(
+				t,
+				stream.Finalize(ctx, content),
+				channels.ErrSendFailed,
+				"expiry cannot falsely confirm a failed stream",
+			)
+			require.Equal(t, wantSends, sends, "pruning must not authorize retransmission of the original operation")
+		})
+	}
+}
+
+func TestBeginStreamActivatesIdentityOnlyAtFirstFinalDelivery(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil },
+	}
 	channel := newTestChannel(t, caller)
 	channel.config.Channels.Telegram.Streaming.Enabled = true
-	mb := bus.NewMessageBus()
-	defer mb.Close()
-	manager, err := channels.NewManager(channel.config, mb, nil)
+	ctx := bus.EnsureDeliveryID(t.Context())
+	stream, err := channel.BeginStream(ctx, "42")
 	require.NoError(t, err)
-	manager.RegisterChannel("telegram", outboundTelegram{channel})
-	require.NoError(t, manager.StartAll(t.Context()))
-	defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
-	ctx := bus.WithDeliveryID(t.Context(), "expiring-operation")
-	stream, ok := manager.GetStreamer(ctx, "telegram", "42")
-	require.True(t, ok)
-	content := strings.Repeat("answer paragraph\n", 3000)
-	require.ErrorIs(t, stream.Finalize(ctx, content), channels.ErrSendFailed)
-	channel.deliveryMu.Lock()
-	for _, pending := range channel.pendingReplies {
-		pending.createdAt = time.Now().Add(-11 * time.Minute)
-	}
-	channel.deliveryMu.Unlock()
-	msg := bus.OutboundMessage{DeliveryID: bus.DeliveryID(ctx), Channel: "telegram", ChatID: "42", Content: content}
-	require.ErrorIs(t, manager.SendMessage(ctx, msg), channels.ErrSendFailed)
-	require.ErrorIs(
+	require.NoError(t, stream.Update(t.Context(), "preview"))
+	time.Sleep(20 * time.Millisecond)
+	beforeFinal := time.Now().Truncate(time.Millisecond)
+	require.NoError(t, stream.Finalize(t.Context(), "final answer"))
+	started, err := bus.DeliveryStartedAt(bus.DeliveryID(ctx))
+	require.NoError(t, err)
+	require.False(
 		t,
-		stream.Finalize(ctx, content),
-		channels.ErrSendFailed,
-		"expiry cannot falsely confirm a failed stream",
+		started.Before(beforeFinal),
+		"provider/tool generation and previews must not consume the final recovery lifetime",
 	)
-	require.Equal(t, 2, sends, "expiry must not authorize retransmission of the same operation")
 }
 
 func TestManagerPreservesCompleteInlineAnswerForNavigation(t *testing.T) {
@@ -339,7 +392,7 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 			manager.RegisterChannel("telegram", outboundTelegram{channel})
 			require.NoError(t, manager.StartAll(t.Context()))
 			defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
-			ctx := bus.WithDeliveryID(bus.WithStreamReplyTo(t.Context(), "42"), "multipart-operation")
+			ctx := bus.EnsureDeliveryID(bus.WithStreamReplyTo(t.Context(), "42"))
 			stream, ok := manager.GetStreamer(ctx, "telegram", "-123/7")
 			require.True(t, ok)
 			require.NoError(t, stream.Update(ctx, "PREVIEW_MARKER"))

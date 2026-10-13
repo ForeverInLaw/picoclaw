@@ -59,7 +59,11 @@ func TestIndependentIdenticalRichMessagesDoNotShareFailedDelivery(t *testing.T) 
 		return successResponse(t), nil
 	}}
 	channel := newTestChannel(t, caller)
-	msg := bus.OutboundMessage{DeliveryID: "operation-a", ChatID: "42", Content: "identical notification"}
+	msg := bus.OutboundMessage{
+		DeliveryID: bus.DeliveryID(bus.EnsureDeliveryID(t.Context())),
+		ChatID:     "42",
+		Content:    "identical notification",
+	}
 	require.ErrorIs(t, channel.Send(t.Context(), msg), channels.ErrSendFailed)
 	require.ErrorIs(t, channel.Send(t.Context(), msg), channels.ErrSendFailed)
 	require.Equal(t, 1, calls, "an uncertain send must not be replayed for the same operation")

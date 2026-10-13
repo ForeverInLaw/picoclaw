@@ -86,9 +86,6 @@ func (mb *MessageBus) InboundChan() <-chan InboundMessage {
 }
 
 func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) error {
-	if msg.DeliveryID == "" {
-		msg.DeliveryID = DeliveryID(EnsureDeliveryID(ctx))
-	}
 	return publish(ctx, mb, mb.outbound, msg)
 }
 
@@ -98,9 +95,6 @@ func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) 
 func (mb *MessageBus) PublishOutboundGuarded(
 	ctx context.Context, msg OutboundMessage, commit func(func() error) (bool, error),
 ) (bool, error) {
-	if msg.DeliveryID == "" {
-		msg.DeliveryID = DeliveryID(EnsureDeliveryID(ctx))
-	}
 	full := errors.New("outbound queue full")
 	for {
 		current, err := commit(func() error {

@@ -99,3 +99,8 @@ answer has already been finalized.
 Tool activity shows each action and a concise completion. Tools may supply explicit public activity detail (`ForActivity`); file operations, searches, and shell commands retain their intended public output. LLM-only results such as archived context stay private. Activity detail passes through the configured sensitive-data filter and does not create extra standalone messages on other channels.
 
 Multipart final replies track each acknowledged part across stream finalization and manager delivery. A logical delivery ID follows the request through both paths; independent messages have distinct IDs even when their text and destination match. Recovery resumes the remaining parts and retries edits by their stable message ID. If a new send loses its acknowledgement, delivery reports an unknown outcome and stops automatic resends for that operation. Expiring a pending cursor also reports failure, without confirming the failed stream or authorizing its replay. Pending recovery state is bounded and remains local to the running process.
+
+Delivery IDs use timestamped UUIDv7 identities activated at the first final
+delivery, so model/tool generation and previews do not consume the ten-minute
+recovery lifetime. An expired ID is rejected even after another send prunes its
+cursor; retaining unbounded failure tombstones is unnecessary.

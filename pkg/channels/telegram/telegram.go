@@ -54,6 +54,7 @@ type TelegramChannel struct {
 	inlineMu       sync.Mutex
 	inlineReplies  map[string]*telegramInlineReplyState
 	deliveryMu     sync.Mutex
+	deliveryNow    func() time.Time
 	pendingReplies map[telegramReplyKey]*telegramReplyDelivery
 
 	registerFunc     func(context.Context, []commands.Definition) error
