@@ -180,12 +180,12 @@ func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
 		terminalErr = s.delivery.terminalErr
 	}
 	s.channel.deliveryMu.Unlock()
+	if terminalErr != nil {
+		return terminalErr
+	}
 	if completed {
 		s.finalized = true
 		return nil
-	}
-	if terminalErr != nil {
-		return terminalErr
 	}
 	var err error
 	switch {

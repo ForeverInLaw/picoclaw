@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/channels/telegram"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -22,6 +25,71 @@ type ingressRequest struct {
 	messages []providers.Message
 	tools    []providers.ToolDefinition
 	release  chan struct{}
+}
+
+type ingressTelegramChannel struct{ *telegram.TelegramChannel }
+
+func (c ingressTelegramChannel) Start(context.Context) error { c.SetRunning(true); return nil }
+func (c ingressTelegramChannel) Stop(context.Context) error  { c.SetRunning(false); return nil }
+
+func TestRunStreamFailureAndOrdinaryDeliveryShareLogicalIdentity(t *testing.T) {
+	var sends atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sendRichMessage") {
+			n := sends.Add(1)
+			if n == 2 {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_ = conn.Close()
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":11}}`))
+	}))
+	defer server.Close()
+	al, cfg, mb, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer mb.Close()
+	cfg.Channels.Telegram.Token = "1234567890:aaaabbbbaaaabbbbaaaabbbbaaaabbbbccc"
+	cfg.Channels.Telegram.BaseURL = server.URL
+	cfg.Channels.Telegram.Streaming.Enabled = true
+	channel, err := telegram.NewTelegramChannel(cfg, mb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := channels.NewManager(cfg, mb, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.RegisterChannel("telegram", ingressTelegramChannel{channel})
+	if err := manager.StartAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.StopAll(t.Context()) }()
+	// The transport dispatcher runs in production; here the actual final bus
+	// envelope is inspected and sent synchronously to observe its delivery error.
+	content := strings.Repeat("complete answer paragraph\n", 3000)
+	p := &phasedAnswerScriptProvider{answerScriptProvider: answerScriptProvider{responses: []*providers.LLMResponse{{Content: content, ContentPhase: providers.ContentPhaseAnswer}}}}
+	al.GetRegistry().GetDefaultAgent().Provider = p
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- al.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	publishIncoming(t, mb, directIngressMessage("generate the complete answer"))
+	out := finalOutbound(t, mb)
+	if out.DeliveryID == "" {
+		t.Fatal("actual Run final envelope lost stream delivery identity")
+	}
+	if err := manager.SendMessage(t.Context(), out); !errors.Is(err, channels.ErrSendFailed) {
+		t.Fatalf("unknown final send outcome was not retained across stream/bus recovery: %v", err)
+	}
+	if sends.Load() != 2 {
+		t.Fatalf("stream recovery replayed an acknowledged or unknown send: %d", sends.Load())
+	}
 }
 
 type ingressProvider struct{ requests chan ingressRequest }

@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 	"github.com/stretchr/testify/require"
 
@@ -27,6 +29,42 @@ type outboundTelegram struct{ *TelegramChannel }
 
 func (c outboundTelegram) Start(context.Context) error { c.SetRunning(true); return nil }
 func (c outboundTelegram) Stop(context.Context) error  { c.SetRunning(false); return nil }
+
+func TestExpiredDeliveryRemainsFailedAcrossManagerRecoveryAndStreamFinalize(t *testing.T) {
+	sends := 0
+	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+		if strings.HasSuffix(url, "/sendRichMessage") {
+			sends++
+			if sends == 2 {
+				return nil, errors.New("unknown delivery outcome")
+			}
+		}
+		return successResponse(t), nil
+	}}
+	channel := newTestChannel(t, caller)
+	channel.config.Channels.Telegram.Streaming.Enabled = true
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	manager, err := channels.NewManager(channel.config, mb, nil)
+	require.NoError(t, err)
+	manager.RegisterChannel("telegram", outboundTelegram{channel})
+	require.NoError(t, manager.StartAll(t.Context()))
+	defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
+	ctx := bus.WithDeliveryID(t.Context(), "expiring-operation")
+	stream, ok := manager.GetStreamer(ctx, "telegram", "42")
+	require.True(t, ok)
+	content := strings.Repeat("answer paragraph\n", 3000)
+	require.ErrorIs(t, stream.Finalize(ctx, content), channels.ErrSendFailed)
+	channel.deliveryMu.Lock()
+	for _, pending := range channel.pendingReplies {
+		pending.createdAt = time.Now().Add(-11 * time.Minute)
+	}
+	channel.deliveryMu.Unlock()
+	msg := bus.OutboundMessage{DeliveryID: bus.DeliveryID(ctx), Channel: "telegram", ChatID: "42", Content: content}
+	require.ErrorIs(t, manager.SendMessage(ctx, msg), channels.ErrSendFailed)
+	require.ErrorIs(t, stream.Finalize(ctx, content), channels.ErrSendFailed, "expiry cannot falsely confirm a failed stream")
+	require.Equal(t, 2, sends, "expiry must not authorize retransmission of the same operation")
+}
 
 func TestManagerPreservesCompleteInlineAnswerForNavigation(t *testing.T) {
 	for _, asynchronous := range []bool{false, true} {
