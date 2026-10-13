@@ -2080,6 +2080,7 @@ turnLoop:
 		modelAttempts := 0
 		retryAnnounced := false
 		var lastProviderError error
+		var lastCandidateFailure *providers.FailoverError
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
 			providerCtx, providerCancel := context.WithCancel(bus.WithStreamReplyTo(turnCtx, ts.opts.ReplyToMessageID))
 			ts.setProviderCancel(providerCancel)
@@ -2170,17 +2171,23 @@ turnLoop:
 			}
 
 			if len(activeCandidates) > 1 && al.fallback != nil {
-				fbResult, fbErr := al.fallback.Execute(
-					providerCtx,
-					activeCandidates,
-					func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
-						if modelAttempts > 0 && modelAttempts < modelMaxAttempts && lastProviderError != nil {
-							retryAnnounced = true
-							al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
-						}
-						return callProvider(ctx, model)
-					},
-				)
+				retryCurrentCandidate := lastCandidateFailure != nil && lastCandidateFailure.IsTransient()
+				runCandidate := func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
+					if !retryCurrentCandidate && modelAttempts > 0 && modelAttempts < modelMaxAttempts && lastProviderError != nil {
+						retryAnnounced = true
+						al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
+					}
+					response, err := callProvider(ctx, model)
+					lastCandidateFailure = providers.ClassifyError(err, provider, model)
+					return response, err
+				}
+				var fbResult *providers.FallbackResult
+				var fbErr error
+				if retryCurrentCandidate {
+					fbResult, fbErr = al.fallback.Retry(providerCtx, lastCandidateFailure, runCandidate)
+				} else {
+					fbResult, fbErr = al.fallback.Execute(providerCtx, activeCandidates, runCandidate)
+				}
 				if fbErr != nil {
 					return nil, fbErr
 				}

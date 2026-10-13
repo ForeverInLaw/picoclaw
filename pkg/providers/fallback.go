@@ -103,6 +103,30 @@ func (fc *FallbackChain) Execute(
 	candidates []FallbackCandidate,
 	run func(ctx context.Context, provider, model string) (*LLMResponse, error),
 ) (*FallbackResult, error) {
+	return fc.execute(ctx, candidates, run, false)
+}
+
+// Retry continues the caller's failed operation after its backoff. A transient
+// failure may retry its own candidate despite the cooldown it just established;
+// unrelated requests still see that cooldown. The caller owns the attempt budget
+// and Retry-After delay, and the retry's outcome updates global health as usual.
+func (fc *FallbackChain) Retry(
+	ctx context.Context,
+	failure *FailoverError,
+	run func(ctx context.Context, provider, model string) (*LLMResponse, error),
+) (*FallbackResult, error) {
+	if failure == nil || !failure.IsTransient() {
+		return nil, fmt.Errorf("fallback: only transient failures can retry the current operation")
+	}
+	return fc.execute(ctx, []FallbackCandidate{{Provider: failure.Provider, Model: failure.Model}}, run, true)
+}
+
+func (fc *FallbackChain) execute(
+	ctx context.Context,
+	candidates []FallbackCandidate,
+	run func(ctx context.Context, provider, model string) (*LLMResponse, error),
+	retryOwnFailure bool,
+) (*FallbackResult, error) {
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("fallback: no candidates configured")
 	}
@@ -120,7 +144,7 @@ func (fc *FallbackChain) Execute(
 		// Check cooldown (per provider/model, not just provider).
 		// This allows multi-key failover where different keys use different model names.
 		cooldownKey := ModelKey(candidate.Provider, candidate.Model)
-		if !fc.cooldown.IsAvailable(cooldownKey) {
+		if !retryOwnFailure && !fc.cooldown.IsAvailable(cooldownKey) {
 			remaining := fc.cooldown.CooldownRemaining(cooldownKey)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Provider: candidate.Provider,

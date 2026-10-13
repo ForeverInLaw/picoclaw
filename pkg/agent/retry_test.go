@@ -21,6 +21,7 @@ type retryScriptProvider struct {
 	failures  []error
 	responses map[int]*providers.LLMResponse
 	messages  [][]providers.Message
+	models    []string
 }
 
 func (p *retryScriptProvider) GetDefaultModel() string { return "retry-script" }
@@ -29,10 +30,11 @@ func (p *retryScriptProvider) Chat(
 	_ context.Context,
 	m []providers.Message,
 	_ []providers.ToolDefinition,
-	_ string,
+	model string,
 	_ map[string]any,
 ) (*providers.LLMResponse, error) {
 	p.messages = append(p.messages, append([]providers.Message(nil), m...))
+	p.models = append(p.models, model)
 	index := p.calls
 	p.calls++
 	if index < len(p.failures) && p.failures[index] != nil {
@@ -270,6 +272,57 @@ func TestModelFallbackAndRecoveryShareAttemptBudget(t *testing.T) {
 			t.Fatalf("error=%v actual provider attempts=%d", err, p.calls)
 		}
 	})
+}
+
+func TestRunFallbackRecoveryUsesRemainingAttemptWithoutClearingGlobalCooldowns(t *testing.T) {
+	for _, inline := range []bool{false, true} {
+		for _, recover := range []bool{false, true} {
+			t.Run(fmt.Sprintf("inline=%t/recover=%t", inline, recover), func(t *testing.T) {
+				al, _, mb, _, cleanup := newTestAgentLoop(t)
+				defer cleanup()
+				defer al.Close()
+				p := &retryScriptProvider{failures: []error{fmt.Errorf("status: 503"), fmt.Errorf("status: 503")}}
+				if !recover {
+					p.failures = append(p.failures, fmt.Errorf("status: 503"))
+				}
+				cooldown := providers.NewCooldownTracker()
+				cooldown.MarkFailure(providers.ModelKey("openai", "already-cold"), providers.FailoverTimeout)
+				al.fallback = providers.NewFallbackChain(cooldown)
+				a := al.registry.GetDefaultAgent()
+				a.Provider = p
+				a.Candidates = []providers.FallbackCandidate{
+					{Provider: "openai", Model: "already-cold"},
+					{Provider: "openai", Model: "one"},
+					{Provider: "openai", Model: "two"},
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				done := make(chan error, 1)
+				go func() { done <- al.Run(ctx) }()
+				defer func() { cancel(); <-done }()
+				msg := directIngressMessage("recover operation")
+				if inline {
+					msg = selectedInlineMessage("42", "published", "recover operation")
+				}
+				start := time.Now()
+				publishIncoming(t, mb, msg)
+				out := finalOutbound(t, mb)
+				if p.calls != 3 || time.Since(start) < time.Second || time.Since(start) > 2*time.Second {
+					t.Fatalf("provider attempts=%d models=%v elapsed=%v", p.calls, p.models, time.Since(start))
+				}
+				if strings.Contains(out.Content, "recovered") != recover {
+					t.Fatalf("final recovery answer=%q", out.Content)
+				}
+				if strings.Join(p.models, ",") != "one,two,two" {
+					t.Fatalf("request-local recovery models=%v", p.models)
+				}
+				if cooldown.IsAvailable(providers.ModelKey("openai", "already-cold")) ||
+					cooldown.IsAvailable(providers.ModelKey("openai", "one")) ||
+					cooldown.IsAvailable(providers.ModelKey("openai", "two")) != recover {
+					t.Fatal("recovery must preserve other candidates' global cooldowns and record its own outcome")
+				}
+			})
+		}
+	}
 }
 
 func TestEmptyAnswerRecoverySharesTransientAttemptBudget(t *testing.T) {
