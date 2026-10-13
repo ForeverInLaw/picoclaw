@@ -380,53 +380,94 @@ func TestRunStopWakesIdleLoop(t *testing.T) {
 }
 
 func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
-	initial, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	initial.Close()
-	cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{Enabled: true, MaxResults: 5, MaxSnippetChars: 500, MinQueryChars: 3}
-	run := func() (*AgentLoop, *bus.MessageBus, *ingressProvider, func()) {
-		mb := bus.NewMessageBus()
-		p := &ingressProvider{requests: make(chan ingressRequest, 10)}
-		al := NewAgentLoop(cfg, mb, p)
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- al.Run(ctx) }()
-		return al, mb, p, func() { cancel(); <-done; al.Close(); mb.Close() }
-	}
-	al, mb, p, stop := run()
-	msg := directIngressMessage("OLD_DIALOG bicycle")
-	msg.SessionKey = "agent:main:fresh-retrieval"
-	publishIncoming(t, mb, msg)
-	request := inboundRequest(t, p)
-	close(request.release)
-	_ = finalOutbound(t, mb)
-	msg.Content = "/clear"
-	publishIncoming(t, mb, msg)
-	_ = finalOutbound(t, mb)
-	agent := al.registry.GetDefaultAgent()
-	if err := agent.MemoryIndex.AddObservation(t.Context(), memoryindex.Observation{SessionKey: msg.SessionKey, Channel: "telegram", ChatID: "42", PeerKind: "direct", Role: "user", Content: "OLD_LATE_WRITE bicycle", CreatedAt: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	msg.Content = "FRESH_RETRIEVAL bicycle"
-	publishIncoming(t, mb, msg)
-	request = inboundRequest(t, p)
-	close(request.release)
-	_ = finalOutbound(t, mb)
-	agent.Sessions.SetHistory(msg.SessionKey, nil)
-	if err := agent.Sessions.Save(msg.SessionKey); err != nil {
-		t.Fatal(err)
-	}
-	stop()
-	_, mb, p, stop = run()
-	defer stop()
-	msg.Content = "bicycle"
-	publishIncoming(t, mb, msg)
-	request = inboundRequest(t, p)
-	input := conversationInput(request.messages)
-	close(request.release)
-	_ = finalOutbound(t, mb)
-	if !strings.Contains(input, "RETRIEVED_MEMORY") || !strings.Contains(input, "FRESH_RETRIEVAL") || strings.Contains(input, "OLD_DIALOG") || strings.Contains(input, "OLD_LATE_WRITE") {
-		t.Fatalf("fresh conversation retrieval did not preserve its generation boundary across restart: %s", input)
+	for _, passive := range []bool{false, true} {
+		t.Run(fmt.Sprintf("passiveGroup=%t", passive), func(t *testing.T) {
+			initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+			defer cleanup()
+			initial.Close()
+			cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{Enabled: true, MaxResults: 5, MaxSnippetChars: 500, MinQueryChars: 3}
+			run := func() (*AgentLoop, *bus.MessageBus, *ingressProvider, func()) {
+				mb := bus.NewMessageBus()
+				p := &ingressProvider{requests: make(chan ingressRequest, 10)}
+				al := NewAgentLoop(cfg, mb, p)
+				ctx, cancel := context.WithCancel(t.Context())
+				done := make(chan error, 1)
+				go func() { done <- al.Run(ctx) }()
+				return al, mb, p, func() { cancel(); <-done; al.Close(); mb.Close() }
+			}
+			al, mb, p, stop := run()
+			msg := directIngressMessage("OLD_DIALOG bicycle")
+			msg.SessionKey = "agent:main:fresh-retrieval"
+			if passive {
+				msg.ChatID = "-123"
+				msg.Peer = bus.Peer{Kind: "group", ID: "-123"}
+			}
+			publishIncoming(t, mb, msg)
+			request := inboundRequest(t, p)
+			close(request.release)
+			_ = finalOutbound(t, mb)
+			msg.Content = "/clear"
+			publishIncoming(t, mb, msg)
+			_ = finalOutbound(t, mb)
+			agent := al.registry.GetDefaultAgent()
+			if err := agent.MemoryIndex.AddObservation(t.Context(), memoryindex.Observation{SessionKey: msg.SessionKey, Channel: "telegram", ChatID: msg.ChatID, PeerKind: "direct", Role: "user", Content: "OLD_LATE_WRITE bicycle", CreatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			msg.Content = "FRESH_RETRIEVAL bicycle"
+			if passive {
+				msg.Metadata = map[string]string{"observe_only": "true"}
+			}
+			publishIncoming(t, mb, msg)
+			if passive {
+				deadline := time.Now().Add(time.Second)
+				for !strings.Contains(conversationInput(agent.Sessions.GetHistory(msg.SessionKey)), "FRESH_RETRIEVAL") {
+					if time.Now().After(deadline) {
+						t.Fatal("passive group message was not recorded")
+					}
+					time.Sleep(time.Millisecond)
+				}
+
+				for {
+					hits, err := agent.MemoryIndex.Search(t.Context(), memoryindex.SearchRequest{Query: "bicycle", Channel: "telegram", ChatID: msg.ChatID, Limit: 10})
+					found := false
+					for _, hit := range hits {
+						found = found || strings.Contains(hit.Content, "FRESH_RETRIEVAL")
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if found {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("passive message did not reach retrieval index")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				msg.Metadata = nil
+			} else {
+				request = inboundRequest(t, p)
+				close(request.release)
+				_ = finalOutbound(t, mb)
+			}
+			agent.Sessions.SetHistory(msg.SessionKey, nil)
+			if err := agent.Sessions.Save(msg.SessionKey); err != nil {
+				t.Fatal(err)
+			}
+			stop()
+			_, mb, p, stop = run()
+			defer stop()
+			msg.Content = "bicycle"
+			publishIncoming(t, mb, msg)
+			request = inboundRequest(t, p)
+			input := conversationInput(request.messages)
+			close(request.release)
+			_ = finalOutbound(t, mb)
+			if !strings.Contains(input, "RETRIEVED_MEMORY") || !strings.Contains(input, "FRESH_RETRIEVAL") || strings.Contains(input, "OLD_DIALOG") || strings.Contains(input, "OLD_LATE_WRITE") {
+				t.Fatalf("fresh conversation retrieval did not preserve its generation boundary across restart: %s", input)
+			}
+
+		})
 	}
 }
 
@@ -485,5 +526,32 @@ func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+func TestRunResetControlsRemainResponsiveWithBackpressuredAcknowledgements(t *testing.T) {
+	al, mb, p := startIngressLoop(t)
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+	publishIncoming(t, mb, directIngressMessage("blocked turn"))
+	_ = inboundRequest(t, p)
+	for n := 0; n < 64; n++ {
+		if err := mb.PublishOutbound(t.Context(), bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "queued output"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publishIncoming(t, mb, directIngressMessage("/clear_inline"))
+	publishIncoming(t, mb, directIngressMessage("/clear"))
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case event := <-sub.C:
+			if event.Kind == EventKindTurnEnd && event.Payload.(TurnEndPayload).Status == TurnEndStatusAborted {
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("independent inline-reset acknowledgement blocked the subsequent active reset")
+		}
 	}
 }

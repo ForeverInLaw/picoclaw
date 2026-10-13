@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"github.com/sipeed/picoclaw/pkg/session"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/commands"
@@ -49,8 +51,10 @@ func (al *AgentLoop) handleActiveReset(ctx context.Context, msg bus.InboundMessa
 	}
 	response, handled := al.handleCommand(ctx, msg, agent, &opts)
 	if handled && response != "" {
+		replyCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		defer cancel()
 		if err := al.bus.PublishOutbound(
-			ctx,
+			replyCtx,
 			bus.OutboundMessage{
 				Channel:          msg.Channel,
 				ChatID:           msg.ChatID,
@@ -66,4 +70,18 @@ func (al *AgentLoop) handleActiveReset(ctx context.Context, msg bus.InboundMessa
 		}
 	}
 	return handled
+}
+
+func captureConversationAgent(agent *AgentInstance, key string) (*AgentInstance, time.Time, error) {
+	store, ok := agent.Sessions.(*session.ConversationStore)
+	if !ok {
+		return agent, time.Time{}, nil
+	}
+	turnStore, resetAt, err := store.CaptureTurn(key)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	clone := *agent
+	clone.Sessions = turnStore
+	return &clone, resetAt, nil
 }

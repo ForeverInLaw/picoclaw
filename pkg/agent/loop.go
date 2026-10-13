@@ -1480,6 +1480,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, nil
 	}
 	if observeOnly {
+		agent, _, err := captureConversationAgent(agent, opts.SessionKey)
+		if err != nil {
+			return "", err
+		}
 		agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 		recordMemoryObservation(
 			ctx,
@@ -1634,17 +1638,16 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
-	if store, ok := agent.Sessions.(*session.ConversationStore); ok {
-		turnStore, resetAt, err := store.CaptureTurn(opts.SessionKey)
-		if err != nil {
-			return "", err
-		}
-		turnAgent := *agent
-		turnAgent.Sessions = turnStore
-		agent = &turnAgent
-		opts.ConversationContext.Reset = !resetAt.IsZero()
+	captured, resetAt, err := captureConversationAgent(agent, opts.SessionKey)
+	if err != nil {
+		return "", err
+	}
+	agent = captured
+	if !resetAt.IsZero() {
+		opts.ConversationContext.Reset = true
 		opts.ConversationContext.ResetAt = resetAt
 	}
+
 	if opts.ConversationContext.Inline {
 		turnAgent := *agent
 		turnAgent.MemoryIndex = nil
