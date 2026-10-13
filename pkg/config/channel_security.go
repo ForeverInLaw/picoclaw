@@ -122,11 +122,14 @@ func (c *Config) refreshLegacyChannels() error {
 		if ch == nil || name != ch.Type {
 			continue
 		}
+		if ch.Type == "whatsapp_native" && c.ChannelList["whatsapp"] != nil {
+			continue
+		}
 		flat, err := ch.flatJSON()
 		if err != nil {
 			return err
 		}
-		wrapped, _ := json.Marshal(map[string]json.RawMessage{name: flat})
+		wrapped, _ := json.Marshal(map[string]json.RawMessage{legacyChannelKey(ch.Type): flat})
 		if err := json.Unmarshal(wrapped, &c.Channels); err != nil {
 			return err
 		}
@@ -146,7 +149,7 @@ func (c *Config) applyNamedChannelEnv() error {
 			return fmt.Errorf("unknown channel type %q", ch.Type)
 		}
 		// Start with platform defaults, then overlay this instance's settings.
-		defaults := legacyChannelsJSON(DefaultConfig().Channels)[ch.Type]
+		defaults := legacyChannelsJSON(DefaultConfig().Channels)[legacyChannelKey(ch.Type)]
 		if defaults != nil {
 			if err := json.Unmarshal(defaults, target); err != nil {
 				return err

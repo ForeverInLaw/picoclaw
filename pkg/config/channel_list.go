@@ -69,6 +69,9 @@ func (c *Channel) flatJSON() ([]byte, error) {
 			settings[key] = value
 		}
 	}
+	if c.Type == "whatsapp_native" {
+		settings["use_native"] = json.RawMessage("true")
+	}
 	return json.Marshal(settings)
 }
 
@@ -89,7 +92,10 @@ func builtinChannelSettings() map[string]any {
 	return result
 }
 
-func init() { RegisterChannelSettings("email", EmailConfig{}) }
+func init() {
+	RegisterChannelSettings("email", EmailConfig{})
+	RegisterChannelSettings("whatsapp_native", WhatsAppConfig{})
+}
 
 // RegisterChannelSettings extends v3 validation without modifying the schema.
 // A prototype is a struct value, matching the upstream extension contract.
@@ -172,6 +178,17 @@ func (c *Config) EffectiveChannelList() ChannelList {
 		}
 		ch, err := ChannelFromLegacy(name, data)
 		if err == nil {
+			if name == "whatsapp" {
+				if c.Channels.WhatsApp.UseNative {
+					ch.Type, ch.name = "whatsapp_native", "whatsapp_native"
+					delete(result, "whatsapp")
+					result["whatsapp_native"] = ch
+					continue
+				}
+				if _, explicit := c.ChannelList["whatsapp"]; !explicit {
+					delete(result, "whatsapp_native")
+				}
+			}
 			result[name] = ch
 		}
 	}
@@ -191,11 +208,18 @@ func (c *Config) ChannelConfig(name string) (*Config, error) {
 	}
 	copyCfg := *c
 	copyCfg.Channels = DefaultConfig().Channels
-	wrapped, _ := json.Marshal(map[string]json.RawMessage{ch.Type: flat})
+	wrapped, _ := json.Marshal(map[string]json.RawMessage{legacyChannelKey(ch.Type): flat})
 	if err := json.Unmarshal(wrapped, &copyCfg.Channels); err != nil {
 		return nil, err
 	}
 	return &copyCfg, nil
+}
+
+func legacyChannelKey(channelType string) string {
+	if channelType == "whatsapp_native" {
+		return "whatsapp"
+	}
+	return channelType
 }
 
 func (c *Config) IsChannelType(name, channelType string) bool {
@@ -313,11 +337,14 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 			if name != ch.Type {
 				continue
 			}
+			if ch.Type == "whatsapp_native" && c.ChannelList["whatsapp"] != nil {
+				continue
+			}
 			flat, err := ch.flatJSON()
 			if err != nil {
 				return err
 			}
-			wrapped, _ := json.Marshal(map[string]json.RawMessage{name: flat})
+			wrapped, _ := json.Marshal(map[string]json.RawMessage{legacyChannelKey(ch.Type): flat})
 			if err := json.Unmarshal(wrapped, &c.Channels); err != nil {
 				return err
 			}

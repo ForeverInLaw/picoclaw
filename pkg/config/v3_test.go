@@ -212,3 +212,27 @@ func TestSaveSealsMultiKeyArrayWithoutChangingRuntimeKeys(t *testing.T) {
 		t.Fatalf("sealed multi-key array failed to reload: %v", err)
 	}
 }
+
+func TestLegacyNativeWhatsAppKeepsFactoryAndInstanceName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(
+		path,
+		[]byte(`{"channels":{"whatsapp":{"enabled":true,"use_native":true,"session_store_path":"native.db"}}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := cfg.ChannelList["whatsapp_native"]
+	if entry == nil || entry.Type != "whatsapp_native" || !entry.Enabled {
+		t.Fatal("legacy native adapter changed instance identity")
+	}
+	instance, err := cfg.ChannelConfig("whatsapp_native")
+	if err != nil || !instance.Channels.WhatsApp.UseNative ||
+		instance.Channels.WhatsApp.SessionStorePath != "native.db" {
+		t.Fatalf("native factory lost settings: %v", err)
+	}
+}
