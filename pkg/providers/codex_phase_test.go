@@ -57,3 +57,33 @@ data: {"type":"response.completed","response":{"id":"r1","status":"completed","o
 		t.Fatalf("updates=%+v", updates)
 	}
 }
+
+func TestCodexIgnoresUnexpectedExplicitPhasesBeforeFinalAnswer(t *testing.T) {
+	for _, phased := range []bool{true, false} {
+		t.Run(fmt.Sprintf("explicit=%t", phased), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				output := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Legacy answer"}]}`
+				if phased {
+					output = `{"type":"message","role":"assistant","phase":"unexpected_internal","content":[{"type":"output_text","text":"PRIVATE_UNKNOWN_PHASE"}]},{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Final answer"}]}`
+				}
+				_, _ = fmt.Fprintf(
+					w,
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"status\":\"completed\",\"output\":[%s]}}\n\n",
+					output,
+				)
+			}))
+			defer server.Close()
+			provider := NewCodexProvider("test-token", "")
+			provider.client = createOpenAITestClient(server.URL, "test-token", "")
+			response, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "hello"}}, nil, "gpt-4o", nil)
+			want := "Legacy answer"
+			if phased {
+				want = "Final answer"
+			}
+			if err != nil || response == nil || response.Content != want {
+				t.Fatalf("response=%+v error=%v", response, err)
+			}
+		})
+	}
+}
