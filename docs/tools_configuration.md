@@ -109,6 +109,8 @@ General settings for fetching and processing webpage content.
 | `prefer_native`          | bool     | true    | Prefer provider's native search over configured search engines |
 | `private_host_whitelist` | string[] | `[]`    | Private/internal hosts allowed for web fetching                |
 
+The web-fetch guard blocks the benchmark range `198.18.0.0/15` alongside private and other restricted networks. Explicit IP or CIDR entries in `private_host_whitelist` can allow that range. The same policy applies to literal URLs, redirect targets, and addresses resolved when connecting.
+
 ## Exec Tool
 
 The exec tool is used to execute shell commands.
