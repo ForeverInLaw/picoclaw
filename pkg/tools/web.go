@@ -707,7 +707,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	hits, err := t.provider.Search(ctx, query, count)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("search failed: %v", err))
+		return ErrorResult(fmt.Sprintf("search failed: %v", err)).WithActivity(fmt.Sprintf("Search failed: %v", err))
 	}
 	rendered := renderWebSearchResults(query, t.provider, hits)
 
