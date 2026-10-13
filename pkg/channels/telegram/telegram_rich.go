@@ -36,7 +36,7 @@ func normalizeRichMarkdown(content string) string {
 		result.WriteString(normalizeFormulaDelimiters(content[pos:start]))
 		n := markdownDelimiterLength(content, start)
 		end := start + n
-		if n >= 3 && markdownFencePosition(content, start) {
+		if n >= 3 && markdownFenceOpening(content, start, n) {
 			end = markdownFenceEnd(content, start, n)
 		} else if content[start] == '`' {
 			for next := end; next < len(content); {
@@ -71,6 +71,17 @@ func markdownFencePosition(content string, start int) bool {
 	lineStart := strings.LastIndexByte(content[:start], '\n') + 1
 	indent := content[lineStart:start]
 	return len(indent) <= 3 && strings.Trim(indent, " ") == ""
+}
+
+func markdownFenceOpening(content string, start, length int) bool {
+	if !markdownFencePosition(content, start) {
+		return false
+	}
+	if content[start] != '`' {
+		return true
+	}
+	info := strings.SplitN(content[start+length:], "\n", 2)[0]
+	return !strings.ContainsRune(info, '`')
 }
 
 // Fences close only at a line's start, with the same character and at least

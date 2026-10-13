@@ -50,6 +50,7 @@ func TestRichRepliesPreserveFormattingFormulasAndTopicReply(t *testing.T) {
 func TestRichReplyNormalizesMathOutsideActualCodeFences(t *testing.T) {
 	for _, tc := range []struct{ name, source, want string }{
 		{"prose tildes", `literal ~~~ then \(x\)`, `literal ~~~ then $x$`},
+		{"invalid backtick fence info", "```not`fence\n\\(x\\)", "```not`fence\n$x$"},
 		{"indented prose", "    ~~~\n\\(x\\)", "    ~~~\n$x$"},
 		{"longer closing fence", "   ~~~latex\n\\(code\\)\n ~~~~~\n\\(x\\)", "   ~~~latex\n\\(code\\)\n ~~~~~\n$x$"},
 		{"invalid closing fence", "~~~\n\\(code\\)\ntext ~~~\n\\(still code\\)", "~~~\n\\(code\\)\ntext ~~~\n\\(still code\\)"},
