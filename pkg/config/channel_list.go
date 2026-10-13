@@ -112,6 +112,13 @@ func newChannelSettings(channelType string) any {
 	return reflect.New(reflect.TypeOf(proto)).Interface()
 }
 
+func IsRegisteredChannelType(channelType string) bool {
+	channelSettingsMu.RLock()
+	defer channelSettingsMu.RUnlock()
+	_, ok := channelSettingsFactory[channelType]
+	return ok
+}
+
 var BaseFieldNames = map[string]struct{}{
 	"enabled": {}, "allow_from": {}, "reasoning_channel_id": {}, "group_trigger": {}, "typing": {}, "placeholder": {},
 }
