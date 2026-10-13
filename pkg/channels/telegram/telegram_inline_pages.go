@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -24,7 +26,10 @@ const telegramInlinePagePrefix = "__picoclaw_inline_page__:"
 type telegramInlinePages struct {
 	Content string `json:"content"`
 	Plain   bool   `json:"plain,omitempty"`
+	OwnerID int64  `json:"owner_id"`
 }
+
+const inlinePagesLifetime = 30 * 24 * time.Hour
 
 func (c *TelegramChannel) inlinePagesPath(inlineMessageID string) string {
 	botID := sha256.Sum256([]byte(strings.SplitN(c.config.Channels.Telegram.Token, ":", 2)[0]))
@@ -37,9 +42,19 @@ func (c *TelegramChannel) saveInlinePages(inlineMessageID string, pages telegram
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
+	if pages.OwnerID == 0 {
+		previous, err := c.loadInlinePages(inlineMessageID)
+		if err != nil {
+			return fmt.Errorf("inline result owner unavailable: %w", err)
+		}
+		pages.OwnerID = previous.OwnerID
+	}
 	data, err := json.Marshal(pages)
 	if err != nil {
 		return err
+	}
+	if len(data) > 64<<20 {
+		return fmt.Errorf("inline answer exceeds retained result storage limit")
 	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".pages-*")
 	if err != nil {
@@ -53,19 +68,88 @@ func (c *TelegramChannel) saveInlinePages(inlineMessageID string, pages telegram
 	if err = file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), path)
+	if err = os.Rename(file.Name(), path); err != nil {
+		return err
+	}
+	c.pruneInlinePages(filepath.Dir(path), path)
+	return nil
 }
 
-func (c *TelegramChannel) showInlinePage(ctx context.Context, inlineMessageID string, page int) error {
-	data, err := os.ReadFile(c.inlinePagesPath(inlineMessageID))
+func (c *TelegramChannel) loadInlinePages(inlineMessageID string) (telegramInlinePages, error) {
+	path := c.inlinePagesPath(inlineMessageID)
+	info, err := os.Stat(path)
 	if err != nil {
-		return err
+		return telegramInlinePages{}, err
+	}
+	if time.Since(info.ModTime()) > inlinePagesLifetime {
+		return telegramInlinePages{}, fmt.Errorf("inline answer expired")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return telegramInlinePages{}, err
 	}
 	var pages telegramInlinePages
 	if err = json.Unmarshal(data, &pages); err != nil {
+		return telegramInlinePages{}, err
+	}
+	return pages, nil
+}
+
+func (c *TelegramChannel) showInlinePage(ctx context.Context, inlineMessageID string, ownerID int64, page int) error {
+	pages, err := c.loadInlinePages(inlineMessageID)
+	if err != nil {
 		return err
 	}
+	if pages.OwnerID == 0 || pages.OwnerID != ownerID {
+		return fmt.Errorf("inline answer belongs to another user")
+	}
 	return c.editInlinePage(ctx, inlineMessageID, pages, page)
+}
+
+// Bound persistent result state by age, count, and total bytes. Navigation of a
+// retired result reports expiry; conversation history remains independent.
+func (c *TelegramChannel) pruneInlinePages(directory, current string) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return
+	}
+	type storedPage struct {
+		path string
+		time time.Time
+		size int64
+	}
+	files := []storedPage{}
+	var total int64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		if path != current && time.Since(info.ModTime()) > inlinePagesLifetime {
+			_ = os.Remove(path)
+			continue
+		}
+		files = append(files, storedPage{path, info.ModTime(), info.Size()})
+		total += info.Size()
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].time.Before(files[j].time) })
+	for len(files) > 0 && (len(files) > 256 || total > 64<<20) {
+		oldest := files[0]
+		files = files[1:]
+		if oldest.path == current {
+			continue
+		}
+		if os.Remove(oldest.path) == nil {
+			total -= oldest.size
+		}
+		if len(files) == 0 {
+			break
+		}
+	}
 }
 
 func inlinePageContent(pages telegramInlinePages, page int) (string, *telego.InlineKeyboardMarkup, error) {

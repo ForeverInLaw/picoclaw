@@ -155,7 +155,7 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 	if !inlineCfg.Enabled {
 		return nil
 	}
-	if strings.TrimSpace(result.InlineMessageID) == "" || strings.TrimSpace(result.Query) == "" {
+	if strings.TrimSpace(result.InlineMessageID) == "" || strings.TrimSpace(result.Query) == "" || result.From.ID <= 0 {
 		return nil
 	}
 
@@ -165,6 +165,10 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 			"sender_id": sender.CanonicalID,
 		})
 		return nil
+	}
+
+	if err := c.saveInlinePages(result.InlineMessageID, telegramInlinePages{OwnerID: result.From.ID}); err != nil {
+		return fmt.Errorf("persist selected inline result identity: %w", err)
 	}
 
 	if err := c.clearInlineReplyMarkup(ctx, result.InlineMessageID); err != nil && !isTelegramMessageNotModified(err) {
@@ -197,7 +201,7 @@ func (c *TelegramChannel) handleInlineCallbackQuery(ctx *th.Context, query teleg
 	if strings.HasPrefix(query.Data, telegramInlinePagePrefix) {
 		page, err := strconv.Atoi(strings.TrimPrefix(query.Data, telegramInlinePagePrefix))
 		if err == nil && query.InlineMessageID != "" {
-			err = c.showInlinePage(ctx, query.InlineMessageID, page)
+			err = c.showInlinePage(ctx, query.InlineMessageID, query.From.ID, page)
 		}
 		text := ""
 		if err != nil {

@@ -64,3 +64,23 @@ available in a collapsed details block; output beyond the activity limit is
 marked `[truncated]`. Activity delivery retries edit the same message and never
 replace the assistant's answer. Inline tool permissions stay restricted and
 inline destinations do not receive these activity messages.
+
+## Answer streaming
+
+When `streaming.enabled` is true, private chats receive native rich drafts.
+Groups and inline destinations receive supported rich message edits. The final
+answer is persisted independently, with its original reply and topic reference.
+A failed preview disables further previews for that request while final delivery
+continues; final edits can be retried once without restarting generation or tools.
+Repeated finalization does not publish another answer, and cancellation stops
+further draft or message updates.
+
+Only answer content enters this stream. Tool activity and retry status have their
+own message identities. Internal reasoning and commentary that introduces tool
+calls do not appear in the answer preview.
+
+Inline page navigation is restricted to the user who selected that inline result
+and to its original published destination. Retained results expire after 30 days;
+the per-bot store is capped at 256 results and 64 MiB, retiring older results when
+needed. Expired page buttons report that the page is unavailable. Keep the workspace
+state directory when restarting the bot if published page navigation is needed.

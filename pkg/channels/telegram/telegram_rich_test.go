@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
 )
 
 func TestRichRepliesPreserveFormattingFormulasAndTopicReply(t *testing.T) {
@@ -48,6 +49,13 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 	}}
 	channel := newTestChannel(t, caller)
 	channel.config.Agents.Defaults.Workspace = t.TempDir()
+	channel.config.Channels.Telegram.Inline.Enabled = true
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, bus.NewMessageBus(), nil)
+	channel.SetRunning(true)
+	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(context.Background()), telego.ChosenInlineResult{
+		ResultID: "generate", InlineMessageID: "published-result", Query: "long answer", From: telego.User{ID: 42},
+	}))
+	caller.calls = nil
 	content := strings.Repeat("first paragraph\n\n", 2300) + "LAST ANSWER LINE"
 	require.NoError(t, channel.Send(context.Background(), bus.OutboundMessage{
 		ChatID: "inline:published-result", Content: content,
@@ -69,7 +77,10 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 
 	reopened := newTestChannel(t, caller)
 	reopened.config = channel.config
-	require.NoError(t, reopened.handleInlineCallbackQuery((&th.Context{}).WithContext(context.Background()), telego.CallbackQuery{ID: "callback", InlineMessageID: "published-result", Data: first.Markup.Buttons[0][0].Data}))
+	require.NoError(t, reopened.handleInlineCallbackQuery((&th.Context{}).WithContext(context.Background()), telego.CallbackQuery{ID: "callback", InlineMessageID: "published-result", Data: first.Markup.Buttons[0][0].Data, From: telego.User{ID: 7}}))
+	require.Contains(t, caller.calls[len(caller.calls)-1].URL, "/answerCallbackQuery")
+	require.Len(t, caller.calls, 2, "another user's callback must not edit the published result")
+	require.NoError(t, reopened.handleInlineCallbackQuery((&th.Context{}).WithContext(context.Background()), telego.CallbackQuery{ID: "callback", InlineMessageID: "published-result", Data: first.Markup.Buttons[0][0].Data, From: telego.User{ID: 42}}))
 	var last struct {
 		Rich struct {
 			Markdown string `json:"markdown"`
