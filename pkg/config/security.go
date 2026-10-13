@@ -140,6 +140,7 @@ type IRCSecurity struct {
 
 type WebToolsSecurity struct {
 	Parallel    *ParallelSearchSecurity `yaml:"parallel,omitempty"`
+	Exa         *ExaSearchSecurity      `yaml:"exa,omitempty"`
 	Brave       *BraveSecurity          `yaml:"brave,omitempty"`
 	Tavily      *TavilySecurity         `yaml:"tavily,omitempty"`
 	Perplexity  *PerplexitySecurity     `yaml:"perplexity,omitempty"`
@@ -148,6 +149,10 @@ type WebToolsSecurity struct {
 }
 
 type ParallelSearchSecurity struct {
+	APIKeys []string `yaml:"api_keys,omitempty"`
+}
+
+type ExaSearchSecurity struct {
 	APIKeys []string `yaml:"api_keys,omitempty"`
 }
 

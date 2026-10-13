@@ -77,9 +77,13 @@ func (p *ParallelSearchProvider) Search(ctx context.Context, query string, count
 type searchHTTPError struct {
 	provider string
 	status   int
+	quota    bool
 }
 
 func (e *searchHTTPError) Error() string {
+	if e.quota {
+		return fmt.Sprintf("%s search quota or credits exhausted (HTTP %d)", e.provider, e.status)
+	}
 	return fmt.Sprintf("%s search returned HTTP %d", e.provider, e.status)
 }
 
@@ -100,7 +104,16 @@ func searchJSON(ctx context.Context, client *http.Client, endpoint, apiKey, prov
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &searchHTTPError{provider: provider, status: resp.StatusCode}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		message := strings.ToLower(string(body))
+		quota := false
+		for _, marker := range []string{"insufficient_quota", "quota_exceeded", "credits exhausted", "insufficient credits", "exceeded your current quota", "payment_required", "credit balance"} {
+			if strings.Contains(message, marker) {
+				quota = true
+				break
+			}
+		}
+		return &searchHTTPError{provider: provider, status: resp.StatusCode, quota: quota}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(result); err != nil {
 		return fmt.Errorf("decode %s search: %w", provider, err)

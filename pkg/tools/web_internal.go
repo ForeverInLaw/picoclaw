@@ -21,21 +21,8 @@ var reTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
 func NewWebSearchProvider(opts WebSearchToolOptions) (SearchProvider, int, error) {
 	maxResults := 5
-	if opts.PrimaryProvider != "" && opts.PrimaryProvider != "parallel" {
-		return nil, 0, fmt.Errorf("unknown primary search provider %q", opts.PrimaryProvider)
-	}
-	if opts.ParallelEnabled && len(opts.ParallelAPIKeys) > 0 {
-		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
-		if err != nil {
-			return nil, 0, fmt.Errorf("create Parallel HTTP client: %w", err)
-		}
-		if opts.ParallelMaxResults > 0 {
-			maxResults = min(opts.ParallelMaxResults, 10)
-		}
-		return &ParallelSearchProvider{keyPool: NewAPIKeyPool(opts.ParallelAPIKeys), baseURL: opts.ParallelBaseURL, client: client}, maxResults, nil
-	}
-	if opts.PrimaryProvider == "parallel" {
-		return nil, 0, fmt.Errorf("Parallel is selected but enabled credentials are unavailable")
+	if provider, count, err := newPreferredSearchProvider(opts); provider != nil || err != nil {
+		return provider, count, err
 	}
 	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
 		client, err := utils.CreateHTTPClient(opts.Proxy, perplexityTimeout)
@@ -138,6 +125,9 @@ func renderWebSearchResults(query string, provider SearchProvider, hits []websou
 	var lines []string
 	header := fmt.Sprintf("Results for: %s", query)
 	if providerName := strings.TrimSpace(provider.ProviderName()); providerName != "" {
+		if len(hits) > 0 && hits[0].Provider != "" {
+			providerName = hits[0].Provider
+		}
 		header = fmt.Sprintf("%s (via %s)", header, providerName)
 	}
 	lines = append(lines, header)

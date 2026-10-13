@@ -630,6 +630,10 @@ type WebSearchToolOptions struct {
 	ParallelBaseURL      string
 	ParallelMaxResults   int
 	ParallelEnabled      bool
+	ExaAPIKeys           []string
+	ExaBaseURL           string
+	ExaMaxResults        int
+	ExaEnabled           bool
 	BraveAPIKeys         []string
 	BraveMaxResults      int
 	BraveEnabled         bool
