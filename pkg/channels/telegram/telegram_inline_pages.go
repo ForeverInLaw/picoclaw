@@ -26,9 +26,10 @@ const telegramInlinePagePrefix = "__picoclaw_inline_page__:"
 // Selected result ownership is recorded before generation. Paginated answers
 // retain their complete source so navigation survives bot restarts.
 type telegramInlinePages struct {
-	Content string `json:"content"`
-	Plain   bool   `json:"plain,omitempty"`
-	OwnerID int64  `json:"owner_id"`
+	Content   string `json:"content"`
+	Plain     bool   `json:"plain,omitempty"`
+	OwnerID   int64  `json:"owner_id"`
+	Published bool   `json:"published,omitempty"`
 }
 
 const inlinePagesLifetime = 30 * 24 * time.Hour
@@ -251,13 +252,30 @@ func (c *TelegramChannel) sendInlineAnswer(ctx context.Context, inlineMessageID,
 		return nil
 	}
 	_, ownerErr := c.loadInlinePages(inlineMessageID)
-	if ownerErr == nil || len([]rune(pages.Content)) > telegramRichMessageLimit-64 {
+	retained := ownerErr == nil || len([]rune(pages.Content)) > telegramRichMessageLimit-64
+	if retained {
 		if err := c.saveInlinePages(inlineMessageID, pages); err != nil {
 			return fmt.Errorf("save complete inline answer: %w", err)
 		}
 	}
+	return c.publishInlinePages(ctx, inlineMessageID, pages, retained)
+}
+
+// The caller holds inlineMu. Generated source is durable before the edit;
+// confirmation is durable only after Telegram acknowledges that stable edit.
+func (c *TelegramChannel) publishInlinePages(ctx context.Context, inlineMessageID string, pages telegramInlinePages, retained bool) error {
 	if err := c.editInlinePage(ctx, inlineMessageID, pages, 0); err != nil {
 		return err
+	}
+	if retained {
+		pages.Published = true
+		// A formatting fallback may have changed the retained plain-mode choice.
+		if saved, err := c.loadInlinePages(inlineMessageID); err == nil {
+			pages.Plain = saved.Plain
+		}
+		if err := c.saveInlinePages(inlineMessageID, pages); err != nil {
+			return fmt.Errorf("confirm inline publication: %w", err)
+		}
 	}
 	state := c.inlineReplyLocked(inlineMessageID)
 	state.finalized = true

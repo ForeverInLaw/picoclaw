@@ -183,6 +183,11 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 			return fmt.Errorf("inline result belongs to another user")
 		}
 		if previous.Content != "" {
+			if !previous.Published {
+				err := c.publishInlinePages(ctx, result.InlineMessageID, previous, true)
+				c.inlineMu.Unlock()
+				return err
+			}
 			c.inlineMu.Unlock()
 			return nil
 		}

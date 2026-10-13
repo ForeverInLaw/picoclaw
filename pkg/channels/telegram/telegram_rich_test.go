@@ -258,6 +258,43 @@ func TestChosenInlineFailedAdmissionCanRetryAfterRestartAndRetainsShortCompletio
 	}
 }
 
+func TestChosenInlineRetainedSourceRecoversFailedPublicationWithoutGeneration(t *testing.T) {
+	failEdit := false
+	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+		if failEdit && strings.HasSuffix(url, "/editMessageText") {
+			return &ta.Response{Ok: false, Error: &ta.Error{ErrorCode: 403, Description: "edit rejected"}}, nil
+		}
+		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
+	}}
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel := newTestChannel(t, caller)
+	channel.config.Agents.Defaults.Workspace = t.TempDir()
+	channel.config.Channels.Telegram.Inline.Enabled = true
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	channel.SetRunning(true)
+	result := telego.ChosenInlineResult{ResultID: "generate", InlineMessageID: "retained-publication", Query: "question", From: telego.User{ID: 42}}
+	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	<-mb.InboundChan()
+	failEdit = true
+	require.Error(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: "inline:retained-publication", Content: "RETAINED_COMPLETE_ANSWER"}))
+	failEdit = false
+	reopened := newTestChannel(t, caller)
+	reopened.config = channel.config
+	reopened.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	before := len(caller.calls)
+	require.NoError(t, reopened.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	require.Len(t, caller.calls, before+1, "retained generated text must recover through one stable edit")
+	require.Contains(t, string(caller.calls[len(caller.calls)-1].Data.BodyRaw), "RETAINED_COMPLETE_ANSWER")
+	select {
+	case <-mb.InboundChan():
+		t.Fatal("retained answer caused another model generation")
+	default:
+	}
+	require.NoError(t, reopened.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	require.Len(t, caller.calls, before+1, "confirmed publication must remain untouched")
+}
+
 func TestRichReplyFormattingFailureDeliversAllPlainContent(t *testing.T) {
 	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
 		if strings.HasSuffix(url, "/sendRichMessage") {
