@@ -236,3 +236,19 @@ func TestLegacyNativeWhatsAppKeepsFactoryAndInstanceName(t *testing.T) {
 		t.Fatalf("native factory lost settings: %v", err)
 	}
 }
+
+func TestConfigRejectsReservedInternalInstanceNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(
+		path,
+		[]byte(
+			`{"version":3,"channel_list":{"system":{"type":"telegram","enabled":true,"settings":{"token":"secret"}}}}`,
+		),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("internal channel name accepted for external transport: %v", err)
+	}
+}

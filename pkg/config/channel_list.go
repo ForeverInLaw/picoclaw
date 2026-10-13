@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
+
+	"github.com/sipeed/picoclaw/pkg/constants"
 )
 
 const CurrentVersion = 3
@@ -241,8 +244,11 @@ func (c *Config) ValidateChannels() error {
 		if ch == nil {
 			return fmt.Errorf("channel_list.%s must be an object", name)
 		}
+		if constants.IsInternalChannel(name) {
+			return fmt.Errorf("channel instance name %q is reserved for internal messages", name)
+		}
 		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(strings.ToLower(name)) ||
-			strings.ContainsAny(name, ":/\\") {
+			strings.ContainsAny(name, ":/\\") || strings.IndexFunc(name, unicode.IsSpace) >= 0 {
 			return fmt.Errorf(
 				"invalid channel instance name %q: use a lowercase name without whitespace, ':' or path separators",
 				name,
