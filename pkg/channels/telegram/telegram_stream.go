@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -74,7 +75,8 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 		return nil
 	}
 	now := time.Now()
-	if s.lastLen > 0 && now.Sub(s.lastAt) < s.throttleInterval && len(content)-s.lastLen < s.minGrowth {
+	if s.lastLen > 0 && now.Sub(s.lastAt) < s.throttleInterval &&
+		utf8.RuneCountInString(content)-s.lastLen < s.minGrowth {
 		return nil
 	}
 	preview := richAnswerPreview(content, telegramRichMessageLimit)
@@ -124,7 +126,7 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 		s.previewFailed = true
 		return nil
 	}
-	s.lastLen = len(content)
+	s.lastLen = utf8.RuneCountInString(content)
 	s.lastAt = now
 	return nil
 }
