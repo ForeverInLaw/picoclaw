@@ -198,7 +198,11 @@ func NewAgentInstance(
 			Primary:   imageModel,
 			Fallbacks: imageFallbacks,
 		}
-		imageCandidates = providers.ResolveCandidatesWithLookup(imageModelCfg, defaults.Provider, buildModelListResolver(cfg))
+		imageCandidates = providers.ResolveCandidatesWithLookup(
+			imageModelCfg,
+			defaults.Provider,
+			buildModelListResolver(cfg),
+		)
 		if imageModel == model {
 			imageProvider = provider
 		} else if mc, err := cfg.GetModelConfig(imageModel); err != nil {
@@ -369,7 +373,11 @@ func initSessionStore(dir string) session.SessionStore {
 	return session.NewConversationStore(session.NewJSONLBackend(store), dir)
 }
 
-func initMemoryIndex(cfg *config.Config, defaults *config.AgentDefaults, workspace, sessionsDir string) *memoryindex.Index {
+func initMemoryIndex(
+	cfg *config.Config,
+	defaults *config.AgentDefaults,
+	workspace, sessionsDir string,
+) *memoryindex.Index {
 	if defaults == nil || !defaults.MemoryIndex.Enabled {
 		return nil
 	}

@@ -333,7 +333,11 @@ func parseTodoScope(raw string) personaltodo.Status {
 	}
 }
 
-func renderPersonalTodoList(items []personaltodo.Item, counts personaltodo.Counts, scope, title, countsFmt, noItems string) string {
+func renderPersonalTodoList(
+	items []personaltodo.Item,
+	counts personaltodo.Counts,
+	scope, title, countsFmt, noItems string,
+) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (%s)\n", title, scope)
 	fmt.Fprintf(&b, countsFmt+"\n", counts.Open, counts.Done, counts.Total)
@@ -351,7 +355,11 @@ func renderPersonalTodoList(items []personaltodo.Item, counts personaltodo.Count
 	return b.String()
 }
 
-func renderPersonalTodoStatus(items []personaltodo.Item, counts personaltodo.Counts, title, countsFmt, previewTitle string) string {
+func renderPersonalTodoStatus(
+	items []personaltodo.Item,
+	counts personaltodo.Counts,
+	title, countsFmt, previewTitle string,
+) string {
 	var b strings.Builder
 	b.WriteString(title + "\n")
 	fmt.Fprintf(&b, countsFmt, counts.Open, counts.Done, counts.Total)

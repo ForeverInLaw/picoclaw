@@ -20,11 +20,11 @@ func (c *EmailChannel) fetchNewMessages() ([]incomingMessage, uint32, error) {
 	}
 	defer client.Close()
 
-	if err := client.Login(c.config.Username, c.config.Password).Wait(); err != nil {
-		return nil, 0, fmt.Errorf("imap login failed: %w", err)
+	if loginErr := client.Login(c.config.Username, c.config.Password).Wait(); loginErr != nil {
+		return nil, 0, fmt.Errorf("imap login failed: %w", loginErr)
 	}
-	if _, err := client.Select(c.config.Folder, nil).Wait(); err != nil {
-		return nil, 0, fmt.Errorf("imap select failed: %w", err)
+	if _, selectErr := client.Select(c.config.Folder, nil).Wait(); selectErr != nil {
+		return nil, 0, fmt.Errorf("imap select failed: %w", selectErr)
 	}
 
 	searchData, err := client.UIDSearch(&imap.SearchCriteria{}, nil).Wait()

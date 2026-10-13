@@ -63,7 +63,14 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		return nil, nil
 	}
 
-	scopes, err := s.resolveScopes(ctx, req.RequesterID, req.CurrentChannel, req.CurrentChatID, req.CurrentPeer, req.Target)
+	scopes, err := s.resolveScopes(
+		ctx,
+		req.RequesterID,
+		req.CurrentChannel,
+		req.CurrentChatID,
+		req.CurrentPeer,
+		req.Target,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -87,12 +94,25 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 
 	_ = s.ensureEmbeddings(ctx)
 	queryVec, err := s.embedder.EmbedQuery(ctx, req.Query)
-	if err != nil || len(queryVec) == 0 {
+	if err != nil {
+		queryVec = nil
+	}
+	if len(queryVec) == 0 {
 		return lexicalHits, nil
 	}
 
-	embeddingRows, err := s.index.LoadObservationEmbeddings(ctx, scopes, s.embedder.ModelName(), window.Start, window.End, 512)
-	if err != nil || len(embeddingRows) == 0 {
+	embeddingRows, err := s.index.LoadObservationEmbeddings(
+		ctx,
+		scopes,
+		s.embedder.ModelName(),
+		window.Start,
+		window.End,
+		512,
+	)
+	if err != nil {
+		embeddingRows = nil
+	}
+	if len(embeddingRows) == 0 {
 		return lexicalHits, nil
 	}
 
@@ -159,13 +179,20 @@ func (s *Service) Summarize(ctx context.Context, req SummaryRequest) (string, er
 		return "", nil
 	}
 
-	scope, err := s.resolveTarget(ctx, req.RequesterID, req.CurrentChannel, req.CurrentChatID, req.CurrentPeer, req.Target)
+	scope, err := s.resolveTarget(
+		ctx,
+		req.RequesterID,
+		req.CurrentChannel,
+		req.CurrentChatID,
+		req.CurrentPeer,
+		req.Target,
+	)
 	if err != nil {
 		return "", err
 	}
 	window := s.resolveWindow(req.SinceHours, req.UntilHours)
-	if err := s.ensureRollups(ctx, scope, window); err != nil {
-		return "", err
+	if rollupErr := s.ensureRollups(ctx, scope, window); rollupErr != nil {
+		return "", rollupErr
 	}
 
 	rollups, err := s.index.ListChatRollups(ctx, scope, window)
@@ -209,7 +236,13 @@ func (s *Service) Summarize(ctx context.Context, req SummaryRequest) (string, er
 
 	sb.WriteString("\nHourly rollups:\n")
 	for _, rollup := range rollups {
-		fmt.Fprintf(&sb, "- [%s .. %s] %s\n", formatTime(rollup.WindowStart), formatTime(rollup.WindowEnd), strings.TrimSpace(rollup.Summary))
+		fmt.Fprintf(
+			&sb,
+			"- [%s .. %s] %s\n",
+			formatTime(rollup.WindowStart),
+			formatTime(rollup.WindowEnd),
+			strings.TrimSpace(rollup.Summary),
+		)
 	}
 	if len(searchHits) > 0 {
 		sb.WriteString("\nRelevant excerpts:\n")
@@ -283,7 +316,8 @@ func (s *Service) resolveTarget(
 			exact = &e
 			break
 		}
-		if strings.Contains(normalizeLabel(entry.Label), normalized) || strings.Contains(normalizeLabel(entry.Alias), normalized) {
+		if strings.Contains(normalizeLabel(entry.Label), normalized) ||
+			strings.Contains(normalizeLabel(entry.Alias), normalized) {
 			partial = append(partial, entry)
 		}
 	}
@@ -536,24 +570,19 @@ func formatTime(ts time.Time) string {
 	return ts.UTC().Format(time.RFC3339)
 }
 
-func truncateRunes(s string, max int) string {
-	if max <= 0 {
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
 		return s
 	}
 	runes := []rune(s)
-	if len(runes) <= max {
+	if len(runes) <= limit {
 		return s
 	}
-	return string(runes[:max]) + "..."
+	return string(runes[:limit]) + "..."
 }
 
 func hitKey(hit memoryindex.Hit) string {
-	return hit.Channel + "\x00" + hit.ChatID + "\x00" + hit.CreatedAt.UTC().Format(time.RFC3339Nano) + "\x00" + hit.Content
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	return hit.Channel + "\x00" + hit.ChatID + "\x00" + hit.CreatedAt.UTC().
+		Format(time.RFC3339Nano) +
+		"\x00" + hit.Content
 }

@@ -1376,7 +1376,11 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 			WeCom:    &WeComSecurity{Token: "wecom-token", EncodingAESKey: "wecom-aes-key"},
 			WeComApp: &WeComAppSecurity{CorpSecret: "wecom-app-secret", Token: "wecom-app-token"},
 			Pico:     &PicoSecurity{Token: "pico-token-abc123"},
-			IRC:      &IRCSecurity{Password: "irc-password", NickServPassword: "nickserv-pass", SASLPassword: "sasl-pass"},
+			IRC: &IRCSecurity{
+				Password:         "irc-password",
+				NickServPassword: "nickserv-pass",
+				SASLPassword:     "sasl-pass",
+			},
 		},
 		// Web tool API keys
 		Web: WebToolsSecurity{

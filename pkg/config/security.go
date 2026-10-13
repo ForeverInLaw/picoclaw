@@ -6,7 +6,6 @@
 package config
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,8 +16,6 @@ import (
 	"github.com/caarlos0/env/v11"
 	"github.com/tencent-connect/botgo/log"
 	"gopkg.in/yaml.v3"
-
-	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
 const (
@@ -223,18 +220,6 @@ func loadSecurityConfig(securityPath string) (*SecurityConfig, error) {
 	return &sec, nil
 }
 
-// saveSecurityConfig saves the security configuration to security.yml
-func saveSecurityConfig(securityPath string, sec *SecurityConfig) error {
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	err := enc.Encode(sec)
-	if err != nil {
-		return fmt.Errorf("failed to marshal security config: %w", err)
-	}
-	return fileutil.WriteFileAtomic(securityPath, buf.Bytes(), 0o600)
-}
-
 // SensitiveDataCache caches the compiled regex for filtering sensitive data.
 // SensitiveDataCache caches the strings.Replacer for filtering sensitive data.
 // Computed once on first access via sync.Once.
@@ -287,7 +272,7 @@ func (sec *SecurityConfig) collectSensitiveValues() []string {
 // collectSensitive recursively traverses the value and collects all non-empty string fields.
 func collectSensitive(v reflect.Value, values *[]string) {
 	// Dereference pointers/interfaces to get the underlying value
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			return
 		}

@@ -152,14 +152,20 @@ func (i *Index) ListAccessibleChats(ctx context.Context, requesterID string) ([]
 			entry      ChatAccessEntry
 			lastSeenMS int64
 		)
-		if err := catalogRows.Scan(&entry.Channel, &entry.ChatID, &entry.PeerKind, &entry.Label, &lastSeenMS); err != nil {
-			return nil, fmt.Errorf("memoryindex: scan chat catalog: %w", err)
+		if scanErr := catalogRows.Scan(
+			&entry.Channel,
+			&entry.ChatID,
+			&entry.PeerKind,
+			&entry.Label,
+			&lastSeenMS,
+		); scanErr != nil {
+			return nil, fmt.Errorf("memoryindex: scan chat catalog: %w", scanErr)
 		}
 		entry.LastSeen = time.UnixMilli(lastSeenMS)
 		entriesByKey[entry.Channel+"\x00"+entry.ChatID] = entry
 	}
-	if err := catalogRows.Err(); err != nil {
-		return nil, fmt.Errorf("memoryindex: chat catalog rows: %w", err)
+	if rowsErr := catalogRows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("memoryindex: chat catalog rows: %w", rowsErr)
 	}
 
 	if strings.TrimSpace(requesterID) == "" {
@@ -180,16 +186,16 @@ func (i *Index) ListAccessibleChats(ctx context.Context, requesterID string) ([]
 	accessible := make(map[string]ChatAccessEntry)
 	for participantRows.Next() {
 		var channel, chatID string
-		if err := participantRows.Scan(&channel, &chatID); err != nil {
-			return nil, fmt.Errorf("memoryindex: scan participant chat: %w", err)
+		if scanErr := participantRows.Scan(&channel, &chatID); scanErr != nil {
+			return nil, fmt.Errorf("memoryindex: scan participant chat: %w", scanErr)
 		}
 		key := channel + "\x00" + chatID
 		if entry, ok := entriesByKey[key]; ok {
 			accessible[key] = entry
 		}
 	}
-	if err := participantRows.Err(); err != nil {
-		return nil, fmt.Errorf("memoryindex: participant chat rows: %w", err)
+	if rowsErr := participantRows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("memoryindex: participant chat rows: %w", rowsErr)
 	}
 
 	aliasRows, err := i.db.QueryContext(

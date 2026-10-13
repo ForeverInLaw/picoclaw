@@ -226,8 +226,8 @@ func TestRivaTranscriberTranscribe(t *testing.T) {
 	}()
 
 	audioPath := filepath.Join(t.TempDir(), "sample.wav")
-	if err := os.WriteFile(audioPath, buildTestWAV(), 0o644); err != nil {
-		t.Fatalf("failed to write test wav: %v", err)
+	if writeErr := os.WriteFile(audioPath, buildTestWAV(), 0o644); writeErr != nil {
+		t.Fatalf("failed to write test wav: %v", writeErr)
 	}
 
 	tr := NewRivaTranscriber("nvapi-test", config.RivaVoiceConfig{

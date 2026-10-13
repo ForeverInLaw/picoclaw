@@ -14,7 +14,8 @@ func (i *Index) UpsertChatRollup(ctx context.Context, record RollupRecord) error
 	record.Channel = strings.TrimSpace(record.Channel)
 	record.ChatID = strings.TrimSpace(record.ChatID)
 	record.Summary = strings.TrimSpace(record.Summary)
-	if record.Channel == "" || record.ChatID == "" || record.WindowStart.IsZero() || record.WindowEnd.IsZero() || record.Summary == "" {
+	if record.Channel == "" || record.ChatID == "" || record.WindowStart.IsZero() || record.WindowEnd.IsZero() ||
+		record.Summary == "" {
 		return nil
 	}
 	now := time.Now().UTC()
@@ -114,7 +115,12 @@ func (i *Index) ListChatRollups(ctx context.Context, scope ChatScope, window Tim
 	return results, nil
 }
 
-func (i *Index) ListObservationsInWindow(ctx context.Context, scope ChatScope, window TimeWindow, limit int) ([]Hit, error) {
+func (i *Index) ListObservationsInWindow(
+	ctx context.Context,
+	scope ChatScope,
+	window TimeWindow,
+	limit int,
+) ([]Hit, error) {
 	if i == nil || i.db == nil {
 		return nil, nil
 	}

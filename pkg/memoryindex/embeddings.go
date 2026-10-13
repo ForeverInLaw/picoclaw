@@ -27,7 +27,8 @@ func (i *Index) ListObservationsMissingEmbeddings(
 ) ([]struct {
 	ID      int64
 	Content string
-}, error) {
+}, error,
+) {
 	if i == nil || i.db == nil || strings.TrimSpace(modelName) == "" {
 		return nil, nil
 	}

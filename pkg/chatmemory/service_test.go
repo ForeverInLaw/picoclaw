@@ -24,21 +24,21 @@ func TestService_Summarize_ResolvesAccessibleGroupByLabel(t *testing.T) {
 	}
 	defer idx.Close()
 
-	if err := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
+	if catalogErr := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		PeerKind: "group",
 		Label:    "Тестовая группа",
-	}); err != nil {
-		t.Fatalf("UpsertChatCatalog() error: %v", err)
+	}); catalogErr != nil {
+		t.Fatalf("UpsertChatCatalog() error: %v", catalogErr)
 	}
-	if err := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
+	if participantErr := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		SenderID: "telegram:42",
 		Label:    "Сер",
-	}); err != nil {
-		t.Fatalf("UpsertChatParticipant() error: %v", err)
+	}); participantErr != nil {
+		t.Fatalf("UpsertChatParticipant() error: %v", participantErr)
 	}
 
 	now := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
@@ -66,8 +66,8 @@ func TestService_Summarize_ResolvesAccessibleGroupByLabel(t *testing.T) {
 			CreatedAt:  now.Add(-90 * time.Minute),
 		},
 	} {
-		if err := idx.AddObservation(t.Context(), obs); err != nil {
-			t.Fatalf("AddObservation() error: %v", err)
+		if observationErr := idx.AddObservation(t.Context(), obs); observationErr != nil {
+			t.Fatalf("AddObservation() error: %v", observationErr)
 		}
 	}
 
@@ -110,31 +110,31 @@ func TestService_Summarize_ResolvesAccessibleGroupByAliasForParticipant(t *testi
 	}
 	defer idx.Close()
 
-	if err := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
+	if catalogErr := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		PeerKind: "group",
 		Label:    "Тестовая группа",
-	}); err != nil {
-		t.Fatalf("UpsertChatCatalog() error: %v", err)
+	}); catalogErr != nil {
+		t.Fatalf("UpsertChatCatalog() error: %v", catalogErr)
 	}
-	if err := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
+	if participantErr := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		SenderID: "telegram:42",
 		Label:    "Сер",
-	}); err != nil {
-		t.Fatalf("UpsertChatParticipant() error: %v", err)
+	}); participantErr != nil {
+		t.Fatalf("UpsertChatParticipant() error: %v", participantErr)
 	}
-	if err := idx.SyncChatAliases(t.Context(), []memoryindex.ChatAliasRecord{{
+	if aliasErr := idx.SyncChatAliases(t.Context(), []memoryindex.ChatAliasRecord{{
 		Alias:   "test-group",
 		Channel: "telegram",
 		ChatID:  "-1001",
 		Label:   "Тестовая группа",
-	}}); err != nil {
-		t.Fatalf("SyncChatAliases() error: %v", err)
+	}}); aliasErr != nil {
+		t.Fatalf("SyncChatAliases() error: %v", aliasErr)
 	}
-	if err := idx.AddObservation(t.Context(), memoryindex.Observation{
+	if observationErr := idx.AddObservation(t.Context(), memoryindex.Observation{
 		SessionKey: "agent:main:telegram:group:-1001",
 		Channel:    "telegram",
 		ChatID:     "-1001",
@@ -144,8 +144,8 @@ func TestService_Summarize_ResolvesAccessibleGroupByAliasForParticipant(t *testi
 		SenderID:   "telegram:42",
 		Content:    "[telegram_group_message]\nsender_label: Сер\n\nОбсуждали alias resolution",
 		CreatedAt:  time.Now().UTC().Add(-30 * time.Minute),
-	}); err != nil {
-		t.Fatalf("AddObservation() error: %v", err)
+	}); observationErr != nil {
+		t.Fatalf("AddObservation() error: %v", observationErr)
 	}
 
 	service := New(idx, config.MemoryIndexConfig{
@@ -203,21 +203,21 @@ func TestService_Search_EmbeddingPathRespectsUntilWindow(t *testing.T) {
 	defer idx.Close()
 
 	now := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
-	if err := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
+	if catalogErr := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		PeerKind: "group",
 		Label:    "Тестовая группа",
-	}); err != nil {
-		t.Fatalf("UpsertChatCatalog() error: %v", err)
+	}); catalogErr != nil {
+		t.Fatalf("UpsertChatCatalog() error: %v", catalogErr)
 	}
-	if err := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
+	if participantErr := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		SenderID: "telegram:42",
 		Label:    "Сер",
-	}); err != nil {
-		t.Fatalf("UpsertChatParticipant() error: %v", err)
+	}); participantErr != nil {
+		t.Fatalf("UpsertChatParticipant() error: %v", participantErr)
 	}
 	for _, obs := range []memoryindex.Observation{
 		{
@@ -243,8 +243,8 @@ func TestService_Search_EmbeddingPathRespectsUntilWindow(t *testing.T) {
 			CreatedAt:  now.Add(-30 * time.Minute),
 		},
 	} {
-		if err := idx.AddObservation(t.Context(), obs); err != nil {
-			t.Fatalf("AddObservation() error: %v", err)
+		if observationErr := idx.AddObservation(t.Context(), obs); observationErr != nil {
+			t.Fatalf("AddObservation() error: %v", observationErr)
 		}
 	}
 
@@ -371,12 +371,24 @@ func TestService_StartupBackfill_PopulatesMissingEmbeddingsInBackground(t *testi
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		missing, err := idx.ListObservationsMissingEmbeddings(t.Context(), embedder.ModelName(), 8, embedder.MinContentChars())
+		missing, err := idx.ListObservationsMissingEmbeddings(
+			t.Context(),
+			embedder.ModelName(),
+			8,
+			embedder.MinContentChars(),
+		)
 		if err != nil {
 			t.Fatalf("ListObservationsMissingEmbeddings() error: %v", err)
 		}
 		if len(missing) == 0 {
-			rows, err := idx.LoadObservationEmbeddings(t.Context(), []memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}}, embedder.ModelName(), time.Time{}, time.Time{}, 8)
+			rows, err := idx.LoadObservationEmbeddings(
+				t.Context(),
+				[]memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}},
+				embedder.ModelName(),
+				time.Time{},
+				time.Time{},
+				8,
+			)
 			if err != nil {
 				t.Fatalf("LoadObservationEmbeddings() error: %v", err)
 			}
@@ -494,7 +506,14 @@ func TestService_StartupBackfill_SkipsShortRecentMessagesAndContinues(t *testing
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		rows, err := idx.LoadObservationEmbeddings(t.Context(), []memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}}, embedder.ModelName(), time.Time{}, time.Time{}, 8)
+		rows, err := idx.LoadObservationEmbeddings(
+			t.Context(),
+			[]memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}},
+			embedder.ModelName(),
+			time.Time{},
+			time.Time{},
+			8,
+		)
 		if err != nil {
 			t.Fatalf("LoadObservationEmbeddings() error: %v", err)
 		}

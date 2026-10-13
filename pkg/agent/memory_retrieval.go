@@ -50,7 +50,9 @@ func lookupRetrievedMemories(
 	}
 
 	var sb strings.Builder
-	sb.WriteString("RETRIEVED_MEMORY: Relevant prior dialog excerpts. Use them as reference, but prefer explicit current instructions.\n")
+	sb.WriteString(
+		"RETRIEVED_MEMORY: Relevant prior dialog excerpts. Use them as reference, but prefer explicit current instructions.\n",
+	)
 	for idx, hit := range hits {
 		fmt.Fprintf(&sb, "\n[%d] channel=%s chat=%s role=%s", idx+1, hit.Channel, hit.ChatID, hit.Role)
 		if hit.SenderID != "" {
@@ -70,7 +72,8 @@ func retrievalQuery(userMessage string) string {
 		return ""
 	}
 
-	if strings.HasPrefix(message, "[telegram_group_message]") || strings.HasPrefix(message, "[scheduled_reminder_trigger]") {
+	if strings.HasPrefix(message, "[telegram_group_message]") ||
+		strings.HasPrefix(message, "[scheduled_reminder_trigger]") {
 		if parts := strings.SplitN(message, "\n\n", 2); len(parts) == 2 {
 			message = strings.TrimSpace(parts[1])
 		}

@@ -54,19 +54,8 @@ type StatefulProvider interface {
 	Close()
 }
 
-// StreamingProvider is an optional interface for providers that support token streaming.
-// onChunk receives the accumulated text so far (not individual deltas).
-// The returned LLMResponse is the same complete response for compatibility with tool-call handling.
-type StreamingProvider interface {
-	ChatStream(
-		ctx context.Context,
-		messages []Message,
-		tools []ToolDefinition,
-		model string,
-		options map[string]any,
-		onChunk func(accumulated string),
-	) (*LLMResponse, error)
-}
+// StreamingProvider is the compatibility name for StreamingLLMProvider.
+type StreamingProvider = StreamingLLMProvider
 
 // ThinkingCapable is an optional interface for providers that support
 // extended thinking (e.g. Anthropic). Used by the agent loop to warn
@@ -139,10 +128,18 @@ const (
 // PhasedStreamingProvider only marks text as an answer when the upstream API does.
 // Unclassified content must be held until the complete response is known.
 type PhasedStreamingProvider interface {
-	ChatStreamContent(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any, onUpdate func(StreamContent)) (*LLMResponse, error)
+	ChatStreamContent(
+		ctx context.Context,
+		messages []Message,
+		tools []ToolDefinition,
+		model string,
+		options map[string]any,
+		onUpdate func(StreamContent),
+	) (*LLMResponse, error)
 }
 
 // IsTransient identifies failures that can recover by retrying the same request.
 func (e *FailoverError) IsTransient() bool {
-	return e.Reason == FailoverTimeout || e.Reason == FailoverNetwork || e.Reason == FailoverRateLimit || e.Reason == FailoverOverloaded
+	return e.Reason == FailoverTimeout || e.Reason == FailoverNetwork || e.Reason == FailoverRateLimit ||
+		e.Reason == FailoverOverloaded
 }

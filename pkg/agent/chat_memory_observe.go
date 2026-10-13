@@ -9,7 +9,8 @@ import (
 )
 
 func observeChatMemoryInbound(ctx context.Context, agent *AgentInstance, msg bus.InboundMessage) {
-	if agent == nil || agent.MemoryIndex == nil || strings.TrimSpace(msg.Channel) == "" || strings.TrimSpace(msg.ChatID) == "" {
+	if agent == nil || agent.MemoryIndex == nil || strings.TrimSpace(msg.Channel) == "" ||
+		strings.TrimSpace(msg.ChatID) == "" {
 		return
 	}
 

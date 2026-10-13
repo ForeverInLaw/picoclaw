@@ -222,14 +222,13 @@ func extractFetchedText(t *WebFetchTool, mediaType string, body []byte, bodyStr 
 	switch {
 	case mediaType == "application/json":
 		var jsonData any
-		if err := json.Unmarshal(body, &jsonData); err != nil {
-			return bodyStr, "raw", nil
+		if err := json.Unmarshal(body, &jsonData); err == nil {
+			if formatted, formatErr := json.MarshalIndent(jsonData, "", "  "); formatErr == nil {
+				return string(formatted), "json", nil
+			}
 		}
-		formatted, err := json.MarshalIndent(jsonData, "", "  ")
-		if err != nil {
-			return bodyStr, "raw", nil
-		}
-		return string(formatted), "json", nil
+		// Invalid JSON still has a usable raw response body.
+		return bodyStr, "raw", nil
 	case mediaType == "text/html" || looksLikeHTML(bodyStr):
 		if strings.EqualFold(t.format, "markdown") {
 			text, err := utils.HtmlToMarkdown(bodyStr)

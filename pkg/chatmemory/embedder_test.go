@@ -99,10 +99,16 @@ func TestEmbedder_EmbedDocuments_UsesPassageInputType(t *testing.T) {
 }
 
 func TestNormalizeEmbeddingModel_UsesAPIBaseRules(t *testing.T) {
-	if got := normalizeEmbeddingModel("nvidia/llama-nemotron-embed-1b-v2", "https://aio.ooy.cz/api/ai/proxy"); got != "nvidia/llama-nemotron-embed-1b-v2" {
+	if got := normalizeEmbeddingModel(
+		"nvidia/llama-nemotron-embed-1b-v2",
+		"https://aio.ooy.cz/api/ai/proxy",
+	); got != "nvidia/llama-nemotron-embed-1b-v2" {
 		t.Fatalf("normalizeEmbeddingModel(aio) = %q, want full nvidia-prefixed model", got)
 	}
-	if got := normalizeEmbeddingModel("nvidia/llama-nemotron-embed-1b-v2", "https://integrate.api.nvidia.com/v1"); got != "llama-nemotron-embed-1b-v2" {
+	if got := normalizeEmbeddingModel(
+		"nvidia/llama-nemotron-embed-1b-v2",
+		"https://integrate.api.nvidia.com/v1",
+	); got != "llama-nemotron-embed-1b-v2" {
 		t.Fatalf("normalizeEmbeddingModel(nvidia official) = %q, want stripped model", got)
 	}
 	if got := normalizeEmbeddingModel("openrouter/auto", "https://openrouter.ai/api/v1"); got != "auto" {

@@ -54,8 +54,8 @@ func (i *Index) bootstrapSessionFile(ctx context.Context, sessionsDir, metaName 
 	}
 
 	var meta sessionMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return fmt.Errorf("memoryindex: decode session meta: %w", err)
+	if decodeErr := json.Unmarshal(data, &meta); decodeErr != nil {
+		return fmt.Errorf("memoryindex: decode session meta: %w", decodeErr)
 	}
 	if strings.TrimSpace(meta.Key) == "" {
 		return nil

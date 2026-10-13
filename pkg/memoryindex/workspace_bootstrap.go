@@ -26,9 +26,17 @@ func (i *Index) BootstrapWorkspaceFiles(ctx context.Context, workspace string) e
 func (i *Index) SyncWorkspaceFiles(ctx context.Context, workspace string) error {
 	docs := []workspaceDocument{
 		{Label: "memory", Path: filepath.Join(workspace, "memory", "MEMORY.md"), SourceKey: "memory/MEMORY.md"},
-		{Label: "learning", Path: filepath.Join(workspace, ".learnings", "LEARNINGS.md"), SourceKey: ".learnings/LEARNINGS.md"},
+		{
+			Label:     "learning",
+			Path:      filepath.Join(workspace, ".learnings", "LEARNINGS.md"),
+			SourceKey: ".learnings/LEARNINGS.md",
+		},
 		{Label: "error", Path: filepath.Join(workspace, ".learnings", "ERRORS.md"), SourceKey: ".learnings/ERRORS.md"},
-		{Label: "feature_request", Path: filepath.Join(workspace, ".learnings", "FEATURE_REQUESTS.md"), SourceKey: ".learnings/FEATURE_REQUESTS.md"},
+		{
+			Label:     "feature_request",
+			Path:      filepath.Join(workspace, ".learnings", "FEATURE_REQUESTS.md"),
+			SourceKey: ".learnings/FEATURE_REQUESTS.md",
+		},
 	}
 
 	for _, doc := range docs {
@@ -51,8 +59,13 @@ func (i *Index) syncWorkspaceDocument(ctx context.Context, doc workspaceDocument
 	if err != nil {
 		if os.IsNotExist(err) {
 			if prevHash != "" {
-				if err := i.ReplaceSourceObservations(ctx, "workspace_doc", doc.SourceKey, nil); err != nil {
-					return err
+				if replaceErr := i.ReplaceSourceObservations(
+					ctx,
+					"workspace_doc",
+					doc.SourceKey,
+					nil,
+				); replaceErr != nil {
+					return replaceErr
 				}
 				return i.setMeta(ctx, metaKey, "")
 			}

@@ -9,31 +9,31 @@ func TestIndex_ListAccessibleChats_UsesParticipantsAndAliasAllowlist(t *testing.
 	}
 	defer idx.Close()
 
-	if err := idx.UpsertChatCatalog(t.Context(), ChatCatalogEntry{
+	if catalogErr := idx.UpsertChatCatalog(t.Context(), ChatCatalogEntry{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		PeerKind: "group",
 		Label:    "Тестовая группа",
-	}); err != nil {
-		t.Fatalf("UpsertChatCatalog(group) error: %v", err)
+	}); catalogErr != nil {
+		t.Fatalf("UpsertChatCatalog(group) error: %v", catalogErr)
 	}
-	if err := idx.UpsertChatCatalog(t.Context(), ChatCatalogEntry{
+	if catalogErr := idx.UpsertChatCatalog(t.Context(), ChatCatalogEntry{
 		Channel:  "telegram",
 		ChatID:   "-1002",
 		PeerKind: "group",
 		Label:    "Закрытая группа",
-	}); err != nil {
-		t.Fatalf("UpsertChatCatalog(closed) error: %v", err)
+	}); catalogErr != nil {
+		t.Fatalf("UpsertChatCatalog(closed) error: %v", catalogErr)
 	}
-	if err := idx.UpsertChatParticipant(t.Context(), ChatParticipantRecord{
+	if participantErr := idx.UpsertChatParticipant(t.Context(), ChatParticipantRecord{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		SenderID: "telegram:42",
 		Label:    "Сер",
-	}); err != nil {
-		t.Fatalf("UpsertChatParticipant() error: %v", err)
+	}); participantErr != nil {
+		t.Fatalf("UpsertChatParticipant() error: %v", participantErr)
 	}
-	if err := idx.SyncChatAliases(t.Context(), []ChatAliasRecord{
+	if aliasErr := idx.SyncChatAliases(t.Context(), []ChatAliasRecord{
 		{
 			Alias:             "тестовая группа",
 			Channel:           "telegram",
@@ -48,8 +48,8 @@ func TestIndex_ListAccessibleChats_UsesParticipantsAndAliasAllowlist(t *testing.
 			Label:             "Закрытая группа",
 			AllowedRequesters: []string{"telegram:77"},
 		},
-	}); err != nil {
-		t.Fatalf("SyncChatAliases() error: %v", err)
+	}); aliasErr != nil {
+		t.Fatalf("SyncChatAliases() error: %v", aliasErr)
 	}
 
 	participantChats, err := idx.ListAccessibleChats(t.Context(), "telegram:42")

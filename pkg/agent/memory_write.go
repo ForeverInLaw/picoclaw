@@ -49,7 +49,18 @@ func recordDeliveredAssistantMessages(
 
 		if msg.Channel == sourceChannel && msg.ChatID == sourceChatID {
 			agent.Sessions.AddMessage(sessionKey, "assistant", content)
-			recordMemoryObservation(ctx, agent, sessionKey, msg.Channel, msg.ChatID, sourcePeerKind, sourceChatLabel, "assistant", "", content)
+			recordMemoryObservation(
+				ctx,
+				agent,
+				sessionKey,
+				msg.Channel,
+				msg.ChatID,
+				sourcePeerKind,
+				sourceChatLabel,
+				"assistant",
+				"",
+				content,
+			)
 			sameTargetDelivered = true
 			continue
 		}

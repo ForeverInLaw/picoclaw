@@ -17,7 +17,18 @@ func TestRetrievalQuery_StripsStructuredEnvelope(t *testing.T) {
 
 func TestBuildMessages_IncludesRetrievedMemoryBlock(t *testing.T) {
 	cb := NewContextBuilder(t.TempDir())
-	msgs := cb.BuildMessages(nil, "", "RETRIEVED_MEMORY: earlier talk about sqlite", "hello", nil, "cli", "direct", "", "", "")
+	msgs := cb.BuildMessages(
+		nil,
+		"",
+		"RETRIEVED_MEMORY: earlier talk about sqlite",
+		"hello",
+		nil,
+		"cli",
+		"direct",
+		"",
+		"",
+		"",
+	)
 	if len(msgs) == 0 {
 		t.Fatal("expected messages")
 	}
@@ -52,7 +63,16 @@ func TestLookupRetrievedMemories_FormatsHits(t *testing.T) {
 	}
 
 	agent := &AgentInstance{MemoryIndex: idx}
-	got := lookupRetrievedMemories(t.Context(), agent, "agent:main:telegram:direct:1", "telegram", "1", "direct", "telegram:1", "sqlite retrieval")
+	got := lookupRetrievedMemories(
+		t.Context(),
+		agent,
+		"agent:main:telegram:direct:1",
+		"telegram",
+		"1",
+		"direct",
+		"telegram:1",
+		"sqlite retrieval",
+	)
 	if !strings.Contains(got, "RETRIEVED_MEMORY:") {
 		t.Fatalf("lookupRetrievedMemories() missing header: %q", got)
 	}
