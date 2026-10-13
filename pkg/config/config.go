@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -78,22 +79,29 @@ func (f *FlexibleStringSlice) UnmarshalText(text []byte) error {
 
 //nolint:recvcheck // Value MarshalJSON preserves Config value serialization; runtime methods need pointer receivers.
 type Config struct {
-	Agents    AgentsConfig    `json:"agents"`
-	Bindings  []AgentBinding  `json:"bindings,omitempty"`
-	Session   SessionConfig   `json:"session,omitempty"`
-	Channels  ChannelsConfig  `json:"channels"`
-	Providers ProvidersConfig `json:"providers,omitempty"`
-	ModelList []ModelConfig   `json:"model_list"` // New model-centric provider configuration
-	Gateway   GatewayConfig   `json:"gateway"`
-	Hooks     HooksConfig     `json:"hooks,omitempty"`
-	Tools     ToolsConfig     `json:"tools"`
-	Heartbeat HeartbeatConfig `json:"heartbeat"`
-	Devices   DevicesConfig   `json:"devices"`
-	Voice     VoiceConfig     `json:"voice"`
+	Version  int            `json:"version"`
+	Agents   AgentsConfig   `json:"agents"`
+	Bindings []AgentBinding `json:"bindings,omitempty"`
+	Session  SessionConfig  `json:"session,omitempty"`
+	// Channels is the typed adapter for legacy, default-named channel consumers.
+	// Serialized configurations always use ChannelList.
+	Channels    ChannelsConfig  `json:"-"`
+	ChannelList ChannelList     `json:"channel_list"`
+	Providers   ProvidersConfig `json:"providers,omitempty"`
+	ModelList   []ModelConfig   `json:"model_list"` // New model-centric provider configuration
+	Gateway     GatewayConfig   `json:"gateway"`
+	Hooks       HooksConfig     `json:"hooks,omitempty"`
+	Tools       ToolsConfig     `json:"tools"`
+	Heartbeat   HeartbeatConfig `json:"heartbeat"`
+	Devices     DevicesConfig   `json:"devices"`
+	Voice       VoiceConfig     `json:"voice"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
 
-	security *SecurityConfig
+	security              *SecurityConfig
+	legacyChannelBaseline map[string]json.RawMessage
+	configuredModels      []ModelConfig
+	runtimeModelBaseline  json.RawMessage
 }
 
 // FilterSensitiveData filters sensitive values from content before sending to LLM.
@@ -156,6 +164,9 @@ type BuildInfo struct {
 // MarshalJSON implements custom JSON marshaling for Config
 // to omit providers section when empty and session when empty
 func (c Config) MarshalJSON() ([]byte, error) {
+	c.Version = CurrentVersion
+	c.ChannelList = c.EffectiveChannelList()
+	c.ModelList = c.modelsForSave()
 	type Alias Config
 	aux := &struct {
 		Providers *ProvidersConfig `json:"providers,omitempty"`
@@ -1155,6 +1166,49 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	if parseErr := env.Parse(&cfg.Providers); parseErr != nil {
+		return nil, parseErr
+	}
+	if parseErr := env.Parse(&cfg.Agents.Defaults); parseErr != nil {
+		return nil, parseErr
+	}
+
+	if len(data) > 0 && cfg.HasProvidersConfig() {
+		var raw map[string]json.RawMessage
+		_ = json.Unmarshal(data, &raw)
+		if _, exists := raw["model_list"]; !exists {
+			cfg.ModelList = nil
+		}
+	}
+	legacyModelMigration := len(cfg.ModelList) == 0 && cfg.HasProvidersConfig()
+	// Auto-migrate: if only legacy providers config exists, convert to model_list
+	if len(cfg.ModelList) == 0 && cfg.HasProvidersConfig() {
+		cfg.ModelList = ConvertProvidersToModelList(cfg)
+	}
+	if len(cfg.ModelList) == 0 {
+		cfg.ModelList = DefaultConfig().ModelList
+	}
+
+	if legacyModelMigration {
+		selected := cfg.Agents.Defaults.GetModelName()
+		for i := range cfg.ModelList {
+			_, model, _ := strings.Cut(cfg.ModelList[i].Model, "/")
+			if selected != "" && (model == selected || cfg.ModelList[i].Model == selected) {
+				cfg.ModelList[i].ModelName = selected
+				break
+			}
+		}
+	}
+
+	// Inherit credentials from providers to model_list entries (#1635).
+	// When both providers and model_list are present, model_list entries
+	// whose api_key/api_base are empty will inherit from the matching
+	// provider (matched by protocol prefix).  Explicit model_list values
+	// always take precedence.
+	if cfg.HasProvidersConfig() {
+		InheritProviderCredentials(cfg.ModelList, cfg.Providers)
+	}
+
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
 		for _, m := range cfg.ModelList {
 			if m.APIKey != "" && !strings.HasPrefix(m.APIKey, "enc://") &&
@@ -1168,47 +1222,41 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
-	if parseErr := env.Parse(cfg); parseErr != nil {
-		return nil, parseErr
-	}
-
 	sec, err := loadSecurityConfig(securityPath(path))
 	if err != nil {
 		return nil, err
 	}
 	cfg.security = sec
+	if err := cfg.applySecurity(sec); err != nil {
+		return nil, err
+	}
+	if parseErr := env.Parse(cfg); parseErr != nil {
+		return nil, parseErr
+	}
+	if err := cfg.applyNamedChannelEnv(); err != nil {
+		return nil, err
+	}
 
 	if err := resolveAPIKeys(cfg.ModelList, filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 
 	// Expand multi-key configs into separate entries for key-level failover
+	cfg.configuredModels = cloneModels(cfg.ModelList)
 	cfg.ModelList = ExpandMultiKeyModels(cfg.ModelList)
+	cfg.runtimeModelBaseline, _ = json.Marshal(cfg.ModelList)
 
 	// Migrate legacy channel config fields to new unified structures
 	cfg.migrateChannelConfigs()
-
-	// Auto-migrate: if only legacy providers config exists, convert to model_list
-	if len(cfg.ModelList) == 0 && cfg.HasProvidersConfig() {
-		cfg.ModelList = ConvertProvidersToModelList(cfg)
-	}
-	if len(cfg.ModelList) == 0 {
-		cfg.ModelList = DefaultConfig().ModelList
-	}
-
-	// Inherit credentials from providers to model_list entries (#1635).
-	// When both providers and model_list are present, model_list entries
-	// whose api_key/api_base are empty will inherit from the matching
-	// provider (matched by protocol prefix).  Explicit model_list values
-	// always take precedence.
-	if cfg.HasProvidersConfig() {
-		InheritProviderCredentials(cfg.ModelList, cfg.Providers)
-	}
 
 	// Validate model_list for uniqueness and required fields
 	if err := cfg.ValidateModelList(); err != nil {
 		return nil, err
 	}
+	if err := cfg.ValidateChannels(); err != nil {
+		return nil, err
+	}
+	cfg.cacheRuntimeSecrets()
 
 	return cfg, nil
 }
@@ -1225,16 +1273,22 @@ func encryptPlaintextAPIKeys(models []ModelConfig, passphrase string) ([]ModelCo
 	changed := false
 	for i := range sealed {
 		m := &sealed[i]
-		if m.APIKey == "" || strings.HasPrefix(m.APIKey, "enc://") ||
-			strings.HasPrefix(m.APIKey, "file://") {
-			continue
+		m.APIKeys = append([]string(nil), m.APIKeys...)
+		keys := []*string{&m.APIKey}
+		for j := range m.APIKeys {
+			keys = append(keys, &m.APIKeys[j])
 		}
-		encrypted, err := credential.Encrypt(passphrase, "", m.APIKey)
-		if err != nil {
-			return nil, fmt.Errorf("cannot seal api_key for model %q: %w", m.ModelName, err)
+		for _, key := range keys {
+			if *key == "" || strings.HasPrefix(*key, "enc://") || strings.HasPrefix(*key, "file://") {
+				continue
+			}
+			encrypted, err := credential.Encrypt(passphrase, "", *key)
+			if err != nil {
+				return nil, fmt.Errorf("cannot seal api_key for model %q: %w", m.ModelName, err)
+			}
+			*key = encrypted
+			changed = true
 		}
-		m.APIKey = encrypted
-		changed = true
 	}
 	if !changed {
 		return nil, nil
@@ -1287,6 +1341,24 @@ func (c *Config) migrateChannelConfigs() {
 }
 
 func SaveConfig(path string, cfg *Config) error {
+	return saveConfig(path, cfg, true)
+}
+
+// PrepareConfig writes a standalone v3 snapshot without editing the source or
+// any shared security sidecar. Callers choose a separate, new output path.
+func PrepareConfig(source, output string) error {
+	cfg, err := LoadConfig(source)
+	if err != nil {
+		return err
+	}
+	return saveConfig(output, cfg, false)
+}
+
+func saveConfig(path string, cfg *Config, syncSidecar bool) error {
+	copyCfg := *cfg
+	copyCfg.ModelList = cfg.modelsForSave()
+	copyCfg.runtimeModelBaseline = nil
+	cfg = &copyCfg
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
 		sealed, err := encryptPlaintextAPIKeys(cfg.ModelList, passphrase)
 		if err != nil {
@@ -1303,7 +1375,31 @@ func SaveConfig(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	if syncSidecar {
+		if err := saveExistingSecurityConfig(path, cfg); err != nil {
+			return err
+		}
+	}
 	return fileutil.WriteFileAtomic(path, data, 0o600)
+}
+
+func cloneModels(models []ModelConfig) []ModelConfig {
+	data, _ := json.Marshal(models)
+	var cloned []ModelConfig
+	_ = json.Unmarshal(data, &cloned)
+	return cloned
+}
+
+// Keep configured multi-key entries on disk; expanded fallback entries are a
+// runtime concern. An edited runtime list remains an explicit operator change.
+func (c *Config) modelsForSave() []ModelConfig {
+	if c.runtimeModelBaseline != nil {
+		data, err := json.Marshal(c.ModelList)
+		if err == nil && bytes.Equal(data, c.runtimeModelBaseline) {
+			return c.configuredModels
+		}
+	}
+	return c.ModelList
 }
 
 func (c *Config) WorkspacePath() string {

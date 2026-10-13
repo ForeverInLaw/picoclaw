@@ -45,15 +45,29 @@ type Service struct {
 	cfg                config.MemoryIndexConfig
 	now                func() time.Time
 	backfillRetryDelay time.Duration
+	namedChannels      map[string]bool
 }
 
-func New(index *memoryindex.Index, cfg config.MemoryIndexConfig, embedder *Embedder) *Service {
+func New(
+	index *memoryindex.Index,
+	cfg config.MemoryIndexConfig,
+	embedder *Embedder,
+	channels ...config.ChannelList,
+) *Service {
 	service := &Service{
 		index:              index,
 		embedder:           embedder,
 		cfg:                cfg,
 		now:                time.Now,
 		backfillRetryDelay: 30 * time.Second,
+	}
+	service.namedChannels = make(map[string]bool)
+	if len(channels) > 0 {
+		for name, ch := range channels[0] {
+			if ch != nil && name != ch.Type {
+				service.namedChannels[name] = true
+			}
+		}
 	}
 	if cfg.Embeddings.StartupBackfillEnabled {
 		service.startStartupBackfill()
@@ -327,6 +341,9 @@ func (s *Service) resolveScopes(
 	}
 	addScope(memoryindex.ChatScope{Channel: currentChannel, ChatID: currentChatID})
 	for _, entry := range accessible {
+		if !s.sameInstanceBoundary(currentChannel, entry.Channel) {
+			continue
+		}
 		addScope(memoryindex.ChatScope{
 			Channel:  entry.Channel,
 			ChatID:   entry.ChatID,
@@ -354,6 +371,9 @@ func (s *Service) resolveTarget(
 	var exact *memoryindex.ChatAccessEntry
 	partial := make([]memoryindex.ChatAccessEntry, 0)
 	for _, entry := range accessible {
+		if !s.sameInstanceBoundary(currentChannel, entry.Channel) {
+			continue
+		}
 		if normalizeLabel(entry.Alias) == normalized || normalizeLabel(entry.Label) == normalized {
 			e := entry
 			exact = &e
@@ -382,6 +402,13 @@ func (s *Service) resolveTarget(
 		}, nil
 	}
 	return memoryindex.ChatScope{}, fmt.Errorf("chat target %q is not accessible or is ambiguous", target)
+}
+
+// Existing default-named channels retain their archive permissions. A new
+// named instance creates an additional boundary without changing person IDs.
+func (s *Service) sameInstanceBoundary(current, target string) bool {
+	return current == target || !s.namedChannels[current] && !s.namedChannels[target] &&
+		config.IsRegisteredChannelType(current) && config.IsRegisteredChannelType(target)
 }
 
 func (s *Service) resolveWindow(sinceHours, untilHours int) memoryindex.TimeWindow {

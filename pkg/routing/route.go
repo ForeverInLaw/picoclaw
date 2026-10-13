@@ -48,6 +48,9 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	if dmScope == "" {
 		dmScope = DMScopeMain
 	}
+	if r.cfg.IsNamedChannel(channel) && (dmScope == DMScopeMain || dmScope == DMScopePerPeer) {
+		dmScope = DMScopePerChannelPeer
+	}
 	identityLinks := r.cfg.Session.IdentityLinks
 
 	bindings := r.filterBindings(channel, accountID)

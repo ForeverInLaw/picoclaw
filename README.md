@@ -744,6 +744,10 @@ Connect Picoclaw to the Agent Social Network simply by sending a single message 
 
 ## ⚙️ Configuration
 
+Saved configurations use v3 named `channel_list` entries. Existing files load
+without being rewritten. See [configuration migration and read-only mounts](docs/configuration-v3.md)
+for preparation, credentials, environment overrides, and conversation identities.
+
 Config file: `~/.picoclaw/config.json`
 
 ### Environment Variables

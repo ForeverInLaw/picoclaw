@@ -463,6 +463,10 @@ func (m *Manager) CallTool(
 	}
 	defer m.wg.Done()
 
+	// A typed nil map would serialize as null; MCP tool arguments are an object.
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
 	params := &mcp.CallToolParams{
 		Name:      toolName,
 		Arguments: arguments,

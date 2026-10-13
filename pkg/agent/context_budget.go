@@ -91,6 +91,13 @@ func findSafeBoundary(history []providers.Message, targetIndex int) int {
 // metadata, and Media items. Uses a heuristic of 2.5 characters per token.
 func estimateMessageTokens(msg providers.Message) int {
 	chars := utf8.RuneCountInString(msg.Content)
+	// Cache-aware adapters use SystemParts instead of Content. Count the
+	// larger representation, including block overhead, without counting both.
+	partsChars := 0
+	for _, part := range msg.SystemParts {
+		partsChars += utf8.RuneCountInString(part.Text) + 20
+	}
+	chars = max(chars, partsChars)
 
 	// ReasoningContent (extended thinking / chain-of-thought) can be
 	// substantial and is stored in session history via AddFullMessage.
@@ -164,13 +171,47 @@ func isOverContextBudget(
 	toolDefs []providers.ToolDefinition,
 	maxTokens int,
 ) bool {
+	return estimateRequestTokens(messages, toolDefs, maxTokens) > contextWindow
+}
+
+// estimateRequestTokens budgets the assembled input and the next answer using
+// the same heuristic for proactive, final-call and background checks.
+func estimateRequestTokens(messages []providers.Message, toolDefs []providers.ToolDefinition, maxTokens int) int {
 	msgTokens := 0
 	for _, m := range messages {
 		msgTokens += estimateMessageTokens(m)
 	}
 
 	toolTokens := estimateToolDefsTokens(toolDefs)
-	total := msgTokens + toolTokens + maxTokens
+	return msgTokens + toolTokens + max(0, maxTokens)
+}
 
-	return total > contextWindow
+// trimContextRequest removes only older complete turns from the prepared
+// request. System/contributor messages and the active turn at protectedStart
+// are retained. Session history is unchanged by this final request check.
+func trimContextRequest(
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	maxTokens, contextWindow, protectedStart int,
+) ([]providers.Message, int, bool) {
+	dropped := 0
+	for isOverContextBudget(contextWindow, messages, toolDefs, maxTokens) {
+		turns := parseTurnBoundaries(messages)
+		if len(turns) < 2 || turns[1] > protectedStart {
+			return messages, dropped, false
+		}
+		cut := turns[1]
+		trimmed := make([]providers.Message, 0, len(messages))
+		for _, message := range messages[:cut] {
+			if message.Role != "user" && message.Role != "assistant" && message.Role != "tool" {
+				trimmed = append(trimmed, message)
+			}
+		}
+		removed := cut - len(trimmed)
+		trimmed = append(trimmed, messages[cut:]...)
+		messages = trimmed
+		protectedStart -= removed
+		dropped += removed
+	}
+	return messages, dropped, true
 }

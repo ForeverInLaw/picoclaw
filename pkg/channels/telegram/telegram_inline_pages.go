@@ -35,7 +35,11 @@ type telegramInlinePages struct {
 const inlinePagesLifetime = 30 * 24 * time.Hour
 
 func (c *TelegramChannel) inlinePagesPath(inlineMessageID string) string {
-	botID := sha256.Sum256([]byte(strings.SplitN(c.config.Channels.Telegram.Token, ":", 2)[0]))
+	botIdentity := strings.SplitN(c.config.Channels.Telegram.Token, ":", 2)[0]
+	if c.Name() != "telegram" {
+		botIdentity = c.Name() + ":" + botIdentity
+	}
+	botID := sha256.Sum256([]byte(botIdentity))
 	messageID := sha256.Sum256([]byte(inlineMessageID))
 	return filepath.Join(
 		c.config.WorkspacePath(),

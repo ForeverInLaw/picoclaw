@@ -17,7 +17,7 @@ func (al *AgentLoop) toolProgressEnabled(ts *turnState) bool {
 	if ts.opts.DisableToolFeedback || ts.channel == "" || constants.IsInternalChannel(ts.channel) {
 		return false
 	}
-	if ts.channel == "telegram" {
+	if al.cfg.IsChannelType(ts.channel, "telegram") {
 		return !strings.HasPrefix(strings.TrimSpace(ts.chatID), "inline:")
 	}
 	if al.webActivityEnabled(ts) {
@@ -68,7 +68,7 @@ func (al *AgentLoop) publishProgress(
 		Content:          content,
 		Progress:         progress,
 	}
-	if ts.channel == "telegram" && progress.Kind == bus.ProgressTool && al.channelManager != nil {
+	if al.cfg.IsChannelType(ts.channel, "telegram") && progress.Kind == bus.ProgressTool && al.channelManager != nil {
 		// Complete activity delivery before the next answer starts streaming.
 		_ = al.channelManager.SendMessage(pubCtx, msg)
 		return
