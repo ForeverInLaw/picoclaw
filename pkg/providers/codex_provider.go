@@ -69,6 +69,14 @@ func (p *CodexProvider) ChatStream(
 	options map[string]any,
 	onUpdate func(content string),
 ) (*LLMResponse, error) {
+	return p.chat(ctx, messages, tools, model, options, func(update StreamContent) {
+		if onUpdate != nil && (update.Phase == ContentPhaseUnknown || update.Phase == ContentPhaseAnswer) {
+			onUpdate(update.Content)
+		}
+	})
+}
+
+func (p *CodexProvider) ChatStreamContent(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any, onUpdate func(StreamContent)) (*LLMResponse, error) {
 	return p.chat(ctx, messages, tools, model, options, onUpdate)
 }
 
@@ -78,7 +86,7 @@ func (p *CodexProvider) chat(
 	tools []ToolDefinition,
 	model string,
 	options map[string]any,
-	onUpdate func(content string),
+	onUpdate func(StreamContent),
 ) (*LLMResponse, error) {
 	var opts []option.RequestOption
 	accountID := p.accountID
@@ -126,14 +134,23 @@ func (p *CodexProvider) chat(
 	defer stream.Close()
 
 	var resp *responses.Response
-	var partial strings.Builder
+	partials := make(map[int64]*strings.Builder)
+	phases := make(map[int64]ContentPhase)
 	for stream.Next() {
 		evt := stream.Current()
+		if evt.Type == "response.output_item.added" || evt.Type == "response.output_item.done" {
+			phases[evt.OutputIndex] = codexMessagePhase(evt.Item)
+		}
 		if evt.Type == "response.output_text.delta" {
-			delta := evt.AsResponseOutputTextDelta().Delta
-			if delta != "" && onUpdate != nil {
-				partial.WriteString(delta)
-				onUpdate(partial.String())
+			deltaEvent := evt.AsResponseOutputTextDelta()
+			if deltaEvent.Delta != "" && onUpdate != nil {
+				partial := partials[deltaEvent.OutputIndex]
+				if partial == nil {
+					partial = &strings.Builder{}
+					partials[deltaEvent.OutputIndex] = partial
+				}
+				partial.WriteString(deltaEvent.Delta)
+				onUpdate(StreamContent{Content: partial.String(), Phase: phases[deltaEvent.OutputIndex]})
 			}
 		}
 		if evt.Type == "response.completed" || evt.Type == "response.failed" || evt.Type == "response.incomplete" {
@@ -270,6 +287,7 @@ func buildCodexParams(
 				})
 			}
 		case "assistant":
+			inputStart := len(inputItems)
 			if len(msg.ToolCalls) > 0 {
 				if msg.Content != "" {
 					inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
@@ -302,6 +320,13 @@ func buildCodexParams(
 						Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.Content)},
 					},
 				})
+			}
+			if msg.ContentPhase != "" {
+				for j := inputStart; j < len(inputItems); j++ {
+					if inputItems[j].OfMessage != nil {
+						inputItems[j].OfMessage.SetExtraFields(map[string]any{"phase": string(msg.ContentPhase)})
+					}
+				}
 			}
 		case "tool":
 			inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
@@ -401,10 +426,18 @@ func translateToolsForCodex(tools []ToolDefinition, enableWebSearch bool) []resp
 func parseCodexResponse(resp *responses.Response) *LLMResponse {
 	var content strings.Builder
 	var toolCalls []ToolCall
+	var contentPhase ContentPhase
 
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":
+			phase := codexMessagePhase(item)
+			if phase == ContentPhaseCommentary || phase == ContentPhaseReasoning {
+				continue
+			}
+			if phase != "" {
+				contentPhase = phase
+			}
 			for _, c := range item.Content {
 				if c.Type == "output_text" {
 					content.WriteString(c.Text)
@@ -442,6 +475,7 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 
 	return &LLMResponse{
 		Content:      content.String(),
+		ContentPhase: contentPhase,
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage:        usage,
@@ -475,4 +509,13 @@ func createCodexTokenSource() func() (string, string, error) {
 
 		return cred.AccessToken, cred.AccountID, nil
 	}
+}
+
+// The pinned SDK preserves newer message phase fields as JSON extras.
+func codexMessagePhase(item responses.ResponseOutputItemUnion) ContentPhase {
+	var value struct {
+		Phase ContentPhase `json:"phase"`
+	}
+	_ = json.Unmarshal([]byte(item.RawJSON()), &value)
+	return value.Phase
 }

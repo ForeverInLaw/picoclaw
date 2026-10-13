@@ -1777,10 +1777,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	activeProvider, activeCandidates, activeModel := al.selectCandidates(ts.agent, ts.userMessage, messages)
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
+	var finalContentPhase providers.ContentPhase
 	var lastToolResultForFallback string
 	var hadToolCalls bool
 	var terminalToolCompleted bool
 	streamProvider, providerCanStream := activeProvider.(providers.StreamingProvider)
+	phasedProvider, providerCanStreamPhases := activeProvider.(providers.PhasedStreamingProvider)
 
 turnLoop:
 	for ts.currentIteration() < ts.agent.MaxIterations || len(pendingMessages) > 0 || func() bool {
@@ -1988,7 +1990,7 @@ turnLoop:
 			})
 
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
-			providerCtx, providerCancel := context.WithCancel(turnCtx)
+			providerCtx, providerCancel := context.WithCancel(bus.WithStreamReplyTo(turnCtx, ts.opts.ReplyToMessageID))
 			ts.setProviderCancel(providerCancel)
 			defer func() {
 				providerCancel()
@@ -2000,8 +2002,7 @@ turnLoop:
 
 			var streamer bus.Streamer
 			var streamUpdater *partialReplyUpdater
-			streamingEnabled := providerCanStream &&
-				streamProvider != nil &&
+			streamingEnabled := (providerCanStream || providerCanStreamPhases) &&
 				len(activeCandidates) <= 1 &&
 				!ts.opts.NoHistory &&
 				!constants.IsInternalChannel(ts.channel)
@@ -2012,36 +2013,44 @@ turnLoop:
 			callProvider := func(ctx context.Context, model string) (*providers.LLMResponse, error) {
 				if streamingEnabled && (streamer != nil || streamUpdater != nil) {
 					var lastSnapshot string
-					response, err := streamProvider.ChatStream(
-						ctx,
-						messagesForCall,
-						toolDefsForCall,
-						model,
-						llmOpts,
-						func(accumulated string) {
-							contentDeltaLen := len(accumulated) - len(lastSnapshot)
-							if contentDeltaLen < 0 {
-								contentDeltaLen = len(accumulated)
-							}
-							lastSnapshot = accumulated
-							al.emitEvent(
-								EventKindLLMDelta,
-								ts.eventMeta("runTurn", "turn.llm.delta"),
-								LLMDeltaPayload{
-									ContentDeltaLen: contentDeltaLen,
-								},
-							)
+					var response *providers.LLMResponse
+					var err error
+					onUpdate := func(update providers.StreamContent) {
+						accumulated := update.Content
+						contentDeltaLen := len(accumulated) - len(lastSnapshot)
+						if contentDeltaLen < 0 {
+							contentDeltaLen = len(accumulated)
+						}
+						lastSnapshot = accumulated
+						al.emitEvent(
+							EventKindLLMDelta,
+							ts.eventMeta("runTurn", "turn.llm.delta"),
+							LLMDeltaPayload{
+								ContentDeltaLen: contentDeltaLen,
+							},
+						)
+						if update.Phase == providers.ContentPhaseAnswer {
 							offerStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, accumulated))
-						},
-					)
+						}
+					}
+					if providerCanStreamPhases {
+						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, toolDefsForCall, model, llmOpts, onUpdate)
+					} else {
+						response, err = streamProvider.ChatStream(ctx, messagesForCall, toolDefsForCall, model, llmOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
+					}
 					if err != nil {
 						cancelStreamingContent(ctx, streamer)
 						return nil, err
 					}
-					if len(response.ToolCalls) > 0 {
+					if response == nil {
+						cancelStreamingContent(ctx, streamer)
+						return nil, errEmptyAnswer
+					}
+					if len(response.ToolCalls) > 0 || !isAnswerContent(response) {
 						cancelStreamingContent(ctx, streamer)
 					}
-					if len(response.ToolCalls) == 0 && response.Content != "" {
+					if len(response.ToolCalls) == 0 && isAnswerContent(response) {
+						offerStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, response.Content))
 						if err := finalizeStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, response.Content)); err != nil {
 							logger.WarnCF("agent", "Stream finalize failed", map[string]any{
 								"error": err.Error(),
@@ -2080,9 +2089,19 @@ turnLoop:
 		var response *providers.LLMResponse
 		var err error
 		maxRetries := 2
+		emptyRecoveryUsed := false
 		for retry := 0; retry <= maxRetries; retry++ {
 			response, err = callLLM(callMessages, providerToolDefs)
-			if err == nil {
+			if err == nil || errors.Is(err, errEmptyAnswer) {
+				if hasModelOutcome(response) {
+					break
+				}
+				err = errEmptyAnswer
+				if !emptyRecoveryUsed && retry < maxRetries {
+					emptyRecoveryUsed = true
+					al.emitEvent(EventKindLLMRetry, ts.eventMeta("runTurn", "turn.llm.retry"), LLMRetryPayload{Attempt: retry + 1, MaxRetries: maxRetries, Reason: "empty_answer", Error: err.Error()})
+					continue
+				}
 				break
 			}
 			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
@@ -2274,9 +2293,6 @@ turnLoop:
 
 		if len(response.ToolCalls) == 0 || gracefulTerminal {
 			responseContent := response.Content
-			if responseContent == "" && response.ReasoningContent != "" {
-				responseContent = response.ReasoningContent
-			}
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 				logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
 					map[string]any{
@@ -2288,6 +2304,7 @@ turnLoop:
 				continue
 			}
 			finalContent = formatInlineResponse(ts.opts.ResponseQuote, responseContent)
+			finalContentPhase = response.ContentPhase
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 				map[string]any{
 					"agent_id":      ts.agent.ID,
@@ -2317,6 +2334,7 @@ turnLoop:
 		assistantMsg := providers.Message{
 			Role:             "assistant",
 			Content:          response.Content,
+			ContentPhase:     response.ContentPhase,
 			ReasoningContent: response.ReasoningContent,
 		}
 		hadToolCalls = true
@@ -2813,8 +2831,8 @@ turnLoop:
 			ts.agent.Tools.DeliveredInRound(),
 		)
 		if !deliveredSaved {
-			finalMsg := providers.Message{Role: "assistant", Content: finalContent}
-			ts.agent.Sessions.AddMessage(ts.sessionKey, finalMsg.Role, finalMsg.Content)
+			finalMsg := providers.Message{Role: "assistant", Content: finalContent, ContentPhase: finalContentPhase}
+			ts.agent.Sessions.AddFullMessage(ts.sessionKey, finalMsg)
 			ts.recordPersistedMessage(finalMsg)
 			recordMemoryObservation(ctx, ts.agent, ts.sessionKey, ts.channel, ts.chatID, ts.opts.PeerKind, ts.opts.ChatLabel, "assistant", "", finalContent)
 		}

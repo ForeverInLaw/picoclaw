@@ -8,6 +8,8 @@ import (
 )
 
 type (
+	ContentPhase           = protocoltypes.ContentPhase
+	StreamContent          = protocoltypes.StreamContent
 	ToolCall               = protocoltypes.ToolCall
 	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
@@ -122,4 +124,17 @@ func (e *FailoverError) IsRetriable() bool {
 type ModelConfig struct {
 	Primary   string
 	Fallbacks []string
+}
+
+const (
+	ContentPhaseUnknown    = protocoltypes.ContentPhaseUnknown
+	ContentPhaseAnswer     = protocoltypes.ContentPhaseAnswer
+	ContentPhaseCommentary = protocoltypes.ContentPhaseCommentary
+	ContentPhaseReasoning  = protocoltypes.ContentPhaseReasoning
+)
+
+// PhasedStreamingProvider only marks text as an answer when the upstream API does.
+// Unclassified content must be held until the complete response is known.
+type PhasedStreamingProvider interface {
+	ChatStreamContent(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any, onUpdate func(StreamContent)) (*LLMResponse, error)
 }
