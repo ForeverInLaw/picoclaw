@@ -8,6 +8,10 @@ rollback cannot refill a conversation that was reset. A successful reset also
 cancels that turn. Storage failures produce a failed reset reply and leave the
 active generation unchanged.
 
+Reset commands are handled immediately while a request is active, including
+`/clear_inline` sent from a private chat during an inline request. Queued steering
+for the reset conversation is cleared, and the command receives its own reply.
+
 After reset, automatic archive retrieval and shared daily notes are excluded.
 Unclassified content in `memory/MEMORY.md` is also excluded: writing to that
 file alone does not establish that its content is intentionally retained.
@@ -34,6 +38,12 @@ queries never enter session storage. Each conversation uses the current agent
 and Telegram user UID as its identity; an inline message ID is only a delivery
 destination. Selected questions and replies therefore continue across chats
 and bot restarts, while different users and agents remain separate.
+
+Each selected result retains its own publication destination. Selections received
+during another request wait in arrival order and start separate turns, including
+two publications for the same Inline conversation. They never become steering
+text inside a private or group request; the inline tool allowlist applies to each
+turn.
 
 Inline model context includes its own transcript and summary, agent
 instructions, and skills. It excludes direct/group transcripts, automatic

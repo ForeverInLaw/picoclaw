@@ -633,7 +633,8 @@ func outboundChunks(ch Channel, msg bus.OutboundMessage) []string {
 	if splitter, ok := ch.(MessageSplittingCapable); ok && splitter.HandlesMessageSplitting() {
 		return []string{msg.Content}
 	}
-	if limit, ok := ch.(MessageLengthProvider); ok && limit.MaxMessageLength() > 0 {
+	if limit, ok := ch.(MessageLengthProvider); ok && limit.MaxMessageLength() > 0 &&
+		len([]rune(msg.Content)) > limit.MaxMessageLength() {
 		return SplitMessage(msg.Content, limit.MaxMessageLength())
 	}
 	return []string{msg.Content}
