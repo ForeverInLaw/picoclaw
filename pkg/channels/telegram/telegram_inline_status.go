@@ -64,10 +64,11 @@ func inlineStatusMarkup(markup *telego.InlineKeyboardMarkup, status string) *tel
 func (c *TelegramChannel) sendInlineRetryStatus(ctx context.Context, inlineID string, msg bus.OutboundMessage) error {
 	c.inlineMu.Lock()
 	defer c.inlineMu.Unlock()
-	state := c.inlineReplyLocked(inlineID)
-	if state.finalized {
+	state := c.inlineReplies[inlineID]
+	if state == nil || state.finalized {
 		return nil
 	}
+	state.updatedAt = time.Now()
 	retryID := msg.Progress.RequestID + ":" + msg.Progress.ActionID
 	text := ""
 	if msg.Progress.State == bus.ProgressStarted {

@@ -178,6 +178,10 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 		return fmt.Errorf("persist selected inline result identity: %w", err)
 	}
 
+	c.inlineMu.Lock()
+	c.inlineReplyLocked(result.InlineMessageID)
+	c.inlineMu.Unlock()
+
 	if err := c.clearInlineReplyMarkup(ctx, result.InlineMessageID); err != nil && !isTelegramMessageNotModified(err) {
 		logger.DebugCF("telegram", "Immediate inline button removal failed", map[string]any{
 			"error": err.Error(),

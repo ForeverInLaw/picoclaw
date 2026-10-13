@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -84,6 +85,11 @@ func TestInlineRetryStatusFailureLeavesFinalErrorDeliveryAvailable(t *testing.T)
 		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
 	}}
 	channel := newTestChannel(t, caller)
+	channel.config.Channels.Telegram.Streaming.Enabled = true
+	stream, err := channel.BeginStream(t.Context(), "inline:result")
+	require.NoError(t, err)
+	require.NoError(t, stream.Update(t.Context(), "Partial answer"))
+	caller.calls = nil
 	progress := bus.OutboundMessage{
 		ChatID:  "inline:result",
 		Content: "Retrying…",
@@ -167,4 +173,26 @@ func TestInlineRetryClearsWithoutReplacingFinalPageNavigation(t *testing.T) {
 	require.Equal(t, "Next →", final.Markup.InlineKeyboard[0][0].Text)
 	require.Nil(t, final.Markup.InlineKeyboard[0][0].Disabled)
 	require.Contains(t, final.Markup.InlineKeyboard[0][0].CallbackData, telegramInlinePagePrefix)
+}
+
+func TestInlineRetryIgnoresFinalizedAnswersAfterGuardEviction(t *testing.T) {
+	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
+	}}
+	channel := newTestChannel(t, caller)
+	channel.config.Channels.Telegram.Inline.Enabled = true
+	channel.config.Agents.Defaults.Workspace = t.TempDir()
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, bus.NewMessageBus(), nil)
+	channel.SetRunning(true)
+	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), telego.ChosenInlineResult{InlineMessageID: "selected", ResultID: "generate", Query: "answer", From: telego.User{ID: 42}}))
+	progress := bus.OutboundMessage{ChatID: "inline:selected", Content: "Retrying…", Progress: &bus.ProgressMessage{RequestID: "request", ActionID: "retry", Kind: bus.ProgressRetry, State: bus.ProgressStarted}}
+	require.NoError(t, channel.SendProgress(t.Context(), progress))
+	require.Len(t, caller.calls, 2, "selected requests must show retry status before their first preview")
+	require.NoError(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: "inline:selected", Content: "Completed answer"}))
+	for n := 0; n < 2049; n++ {
+		require.NoError(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: fmt.Sprintf("inline:other-%d", n), Content: "Completed answer"}))
+	}
+	caller.calls = nil
+	require.NoError(t, channel.SendProgress(t.Context(), progress))
+	require.Empty(t, caller.calls, "an evicted final guard must not recreate an active result and replace its keyboard")
 }
