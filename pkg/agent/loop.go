@@ -2273,16 +2273,6 @@ turnLoop:
 			}
 
 			if isContextError && retry < maxRetries && modelAttempts < modelMaxAttempts && !ts.opts.NoHistory {
-				al.emitEvent(
-					EventKindLLMRetry,
-					ts.eventMeta("runTurn", "turn.llm.retry"),
-					LLMRetryPayload{
-						Attempt:    retry + 1,
-						MaxRetries: maxRetries,
-						Reason:     "context_limit",
-						Error:      err.Error(),
-					},
-				)
 				logger.WarnCF(
 					"agent",
 					"Context window error detected, attempting compression",
@@ -2293,7 +2283,7 @@ turnLoop:
 				)
 
 				retryAnnounced = true
-				al.publishProgress(turnCtx, ts, &bus.ProgressMessage{RequestID: ts.turnID, ActionID: fmt.Sprintf("model:%d", iteration), Kind: bus.ProgressRetry, State: bus.ProgressStarted}, "Context window exceeded. Compressing history and retrying...")
+				al.reportModelRetry(turnCtx, ts, modelAttempts, "context_limit", err, 0)
 
 				if compression, ok := al.forceCompression(ts.agent, ts.sessionKey); ok {
 					al.emitEvent(
