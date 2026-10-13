@@ -118,7 +118,7 @@ Add Parallel and Exa behind the existing web-search tool, with a configurable pr
 - Add Parallel and Exa adapters behind the existing SearchProvider contract and web_search tool. Reuse the current normalized search-result shape.
 - Make primary-provider selection configurable, defaulting to Parallel with Exa as the backup for transient failures when credentials are available. Permit Exa as the configured primary with Parallel as its backup.
 - Keep request schemas, authentication, extraction of excerpts, and provider-specific options inside their adapters. Use the existing credential/configuration mechanism; preserve existing providers and legacy configurations.
-- Maintain this specification and the domain documentation alongside the implementation. Work on a feature branch based on dev; implementation has not yet started.
+- Maintain this specification and the domain documentation alongside the implementation. The integration branch is `feat/ivo-80-telegram-experience`, based on dev and the existing specification branch.
 
 ## Testing Decisions
 
@@ -155,9 +155,17 @@ Add Parallel and Exa behind the existing web-search tool, with a configurable pr
 ## Further Notes
 
 - Publish this as one implementation specification in the Ivoxygen team's Picoclaw project, with the ready-for-agent label.
-- The agreed branch is feat/telegram-experience, based on dev. Domain decisions were recorded in commits ff5412a4 and 6b9f27c8. Documentation is complete; application code is unchanged.
+- The original specification branch is `feat/telegram-experience`; implementation lives on `feat/ivo-80-telegram-experience` and targets dev. Domain decisions were recorded in commits ff5412a4 and 6b9f27c8.
 - Current-state findings are evidence for the work, not proof of the deployed configuration: inline history is disabled; reset clears history/summary without excluding other context; reasoning is used when the final answer is empty; tool progress can interfere with the answer placeholder; ordinary direct/group processing suppresses some user-facing tool results.
 - Archive retrieval is disabled by default. Investigate the deployed configuration before attributing the reported reset symptom specifically to archive retrieval. Workspace memory and recent notes are additional context sources.
 - Existing retries differ by layer: timeout retries are shared by direct/inline agent processing, some provider SDKs add retries, model fallback handles classified failures, and some streaming-edit errors disable updates. Consolidation must preserve useful recovery while bounding total attempts.
 - Deliver working increments in this order: reasoning/retries; Telegram upgrade and rich formulas; tool activity delivery; persistent reset boundaries; isolated inline history/reset; Parallel and Exa adapters.
 - Official references: [Telegram rich messages](https://core.telegram.org/bots/api#rich-messages), [rich drafts](https://core.telegram.org/bots/api#sendrichmessagedraft), [Telego releases](https://github.com/mymmrac/telego/releases), [Parallel search](https://docs.parallel.ai/search/search-quickstart), [Exa search](https://exa.ai/docs/reference/search).
+
+## Implementation notes
+
+- [Telegram delivery](../channels/telegram/README.md) documents native Rich Markdown, formulas, direct drafts, group/inline edits, activity updates, and long-answer pagination. Published inline pages retain the complete result for up to 30 days, bounded by 256 results and 64 MiB; expired navigation reports its status explicitly.
+- [Conversation memory](../conversation-memory.md) documents persistent reset generations, Saved-fact classification, isolated selected inline history, and `/clear_inline`. Existing unclassified memory remains stored; an explicit Saved facts heading or `SAVED_FACTS.md` distinguishes intentionally retained content from temporary notes.
+- [Model recovery](../providers.md) documents the common three-attempt model-operation budget, bounded Retry-After waiting, empty-answer recovery, and preservation of completed tools.
+- [Web search](../tools/web-search.md) documents configurable Parallel/Exa primary and transient fallback. Parallel uses the current GA `/v1/search` contract, checked with Context7 and official documentation during implementation.
+- Deterministic acceptance tests substitute model/Telegram APIs and use temporary persistence and HTTP servers on ephemeral ports. Native formula appearance and paid-provider live checks remain separate checks requiring dedicated test credentials. Production containers, ports, configuration, and deployments are unchanged.
