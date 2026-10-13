@@ -95,3 +95,54 @@ func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*conf
 
 	return &clone, nil
 }
+
+// candidateProviderResolver keeps one resolved credential/endpoint per turn,
+// including request-local retries, while preserving the injected primary client.
+func candidateProviderResolver(cfg *config.Config, workspace string, primary providers.LLMProvider, candidates []providers.FallbackCandidate) func(string, string) (providers.LLMProvider, error) {
+	clients := make(map[string]providers.LLMProvider)
+	primaryProvider := ""
+	if len(candidates) > 0 {
+		primaryProvider = candidates[0].Provider
+		clients[providers.ModelKey(primaryProvider, candidates[0].Model)] = primary
+	}
+	return func(provider, model string) (providers.LLMProvider, error) {
+		key := providers.ModelKey(provider, model)
+		if client := clients[key]; client != nil {
+			return client, nil
+		}
+		name := ""
+		for _, candidate := range candidates {
+			if candidate.Provider == provider && candidate.Model == model {
+				name = candidate.ConfigName
+				break
+			}
+		}
+		if name == "" && cfg != nil {
+			for _, mc := range cfg.ModelList {
+				protocol, id := providers.ExtractProtocol(mc.Model)
+				if protocol == provider && id == model {
+					name = mc.ModelName
+					break
+				}
+			}
+		}
+		if name == "" {
+			// Programmatically supplied candidates may share an injected client.
+			if provider == primaryProvider {
+				clients[key] = primary
+				return primary, nil
+			}
+			return nil, fmt.Errorf("no model configuration for fallback %s/%s", provider, model)
+		}
+		mc, err := resolvedModelConfig(cfg, name, workspace)
+		if err != nil {
+			return nil, err
+		}
+		client, _, err := providers.CreateProviderFromConfig(mc)
+		if err != nil {
+			return nil, err
+		}
+		clients[key] = client
+		return client, nil
+	}
+}

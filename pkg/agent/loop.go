@@ -1913,6 +1913,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 
 	activeProvider, activeCandidates, activeModel := al.selectCandidates(ts.agent, ts.userMessage, messages)
+	resolveCandidateProvider := candidateProviderResolver(al.cfg, ts.agent.Workspace, activeProvider, activeCandidates)
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
 	var finalContentPhase providers.ContentPhase
@@ -2155,7 +2156,7 @@ turnLoop:
 				streamer, streamUpdater = selectStreamingTargets(providerCtx, al.bus, al.channelManager, ts.channel, ts.chatID)
 			}
 
-			callProvider := func(ctx context.Context, model string) (reply *providers.LLMResponse, requestErr error) {
+			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
 				defer func() {
 					if requestErr != nil {
 						lastProviderError = requestErr
@@ -2220,7 +2221,7 @@ turnLoop:
 					}
 					return response, nil
 				}
-				return activeProvider.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
+				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
 			}
 
 			if len(activeCandidates) > 1 && al.fallback != nil {
@@ -2230,7 +2231,11 @@ turnLoop:
 						retryAnnounced = true
 						al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
 					}
-					response, err := callProvider(ctx, model)
+					client, err := resolveCandidateProvider(provider, model)
+					if err != nil {
+						return nil, err
+					}
+					response, err := callProvider(ctx, client, model)
 					lastCandidateFailure = providers.ClassifyError(err, provider, model)
 					return response, err
 				}
@@ -2254,7 +2259,7 @@ turnLoop:
 				}
 				return fbResult.Response, nil
 			}
-			return callProvider(providerCtx, llmModel)
+			return callProvider(providerCtx, activeProvider, llmModel)
 		}
 
 		var response *providers.LLMResponse

@@ -2,8 +2,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -423,5 +427,58 @@ func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
 	_ = finalOutbound(t, mb)
 	if !strings.Contains(input, "RETRIEVED_MEMORY") || !strings.Contains(input, "FRESH_RETRIEVAL") || strings.Contains(input, "OLD_DIALOG") || strings.Contains(input, "OLD_LATE_WRITE") {
 		t.Fatalf("fresh conversation retrieval did not preserve its generation boundary across restart: %s", input)
+	}
+}
+
+func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
+	var primaryCalls, backupCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer primary-key" {
+			t.Error("primary credentials changed")
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := backupCalls.Add(1)
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Model != "claude-backup" || r.Header.Get("Authorization") != "Bearer backup-key" {
+			t.Errorf("fallback model/auth=%s/%s", body.Model, r.Header.Get("Authorization"))
+		}
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"cross-provider recovered"},"finish_reason":"stop"}]}`))
+	}))
+	defer backup.Close()
+	initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	initial.Close()
+	cfg.Agents.Defaults.Model = "primary-alias"
+	cfg.Agents.Defaults.ModelFallbacks = []string{"backup-alias"}
+	cfg.ModelList = []config.ModelConfig{{ModelName: "primary-alias", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL}, {ModelName: "backup-alias", Model: "anthropic/claude-backup", APIKey: "backup-key", APIBase: backup.URL}}
+	provider, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	al := NewAgentLoop(cfg, mb, provider)
+	defer al.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- al.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	publishIncoming(t, mb, directIngressMessage("recover through backup"))
+	out := finalOutbound(t, mb)
+	if primaryCalls.Load() != 1 || backupCalls.Load() != 2 || out.Content != "cross-provider recovered" {
+		t.Fatalf("fallback endpoint/attempts primary=%d backup=%d reply=%q", primaryCalls.Load(), backupCalls.Load(), out.Content)
 	}
 }

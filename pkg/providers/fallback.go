@@ -16,6 +16,8 @@ type FallbackChain struct {
 type FallbackCandidate struct {
 	Provider string
 	Model    string
+	// ConfigName retains the configured alias and its endpoint/credential selection.
+	ConfigName string
 }
 
 // FallbackResult contains the successful response and metadata about all attempts.
@@ -56,8 +58,10 @@ func ResolveCandidatesWithLookup(
 
 	addCandidate := func(raw string) {
 		candidateRaw := strings.TrimSpace(raw)
+		configName := ""
 		if lookup != nil {
 			if resolved, ok := lookup(candidateRaw); ok {
+				configName = candidateRaw
 				candidateRaw = resolved
 			}
 		}
@@ -72,8 +76,9 @@ func ResolveCandidatesWithLookup(
 		}
 		seen[key] = true
 		candidates = append(candidates, FallbackCandidate{
-			Provider: ref.Provider,
-			Model:    ref.Model,
+			Provider:   ref.Provider,
+			Model:      ref.Model,
+			ConfigName: configName,
 		})
 	}
 
