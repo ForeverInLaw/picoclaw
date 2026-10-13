@@ -27,11 +27,16 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: "http://localhost:18800",
-        changeOrigin: true,
+        changeOrigin: false,
       },
-      "/ws": {
+      "/pico/ws": {
         target: "ws://localhost:18800",
         ws: true,
+        changeOrigin: false,
+      },
+      "/media": {
+        target: "http://localhost:18800",
+        changeOrigin: false,
       },
     },
   },

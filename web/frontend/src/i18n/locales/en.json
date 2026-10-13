@@ -479,5 +479,24 @@
       "clear": "Clear logs",
       "empty": "Waiting for logs..."
     }
+  },
+  "dashboardAuth": {
+    "loginTitle": "Sign in to PicoClaw",
+    "setupTitle": "Set your dashboard password",
+    "changeTitle": "Change dashboard password",
+    "loginDescription": "Enter your dashboard password to continue.",
+    "setupDescription": "Use at least 8 characters. This password protects dashboard settings, chat, and files.",
+    "changeDescription": "Changing the password signs out all dashboard sessions.",
+    "password": "Password",
+    "confirm": "Confirm password",
+    "loginSubmit": "Sign in",
+    "setupSubmit": "Set password",
+    "changeSubmit": "Change password",
+    "loading": "Please wait…",
+    "mismatch": "Passwords do not match.",
+    "retry": "Try again",
+    "account": "Dashboard access",
+    "logout": "Sign out",
+    "logoutError": "Could not sign out. Try again."
   }
 }
