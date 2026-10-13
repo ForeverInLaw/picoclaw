@@ -19,9 +19,9 @@ const unavailableMsg = "Command unavailable in current context."
 
 var commandPrefixes = []string{"/", "!"}
 
-// parseCommandName accepts "/name", "!name", and Telegram's "/name@bot", then
+// ParseCommandName accepts "/name", "!name", and Telegram's "/name@bot", then
 // normalizes to lowercase command names.
-func parseCommandName(input string) (string, bool) {
+func ParseCommandName(input string) (string, bool) {
 	token := nthToken(input, 0)
 	if token == "" {
 		return "", false

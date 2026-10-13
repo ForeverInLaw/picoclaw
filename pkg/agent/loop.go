@@ -69,6 +69,7 @@ type AgentLoop struct {
 	activeRequests sync.WaitGroup
 
 	reloadFunc func() error
+	runCancel  context.CancelFunc
 }
 
 // processOptions configures how a message is processed
@@ -402,7 +403,19 @@ func registerSharedTools(
 }
 
 func (al *AgentLoop) Run(ctx context.Context) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	ctx = runCtx
+	al.mu.Lock()
+	al.runCancel = cancel
 	al.running.Store(true)
+	al.mu.Unlock()
+	defer func() {
+		cancel()
+		al.mu.Lock()
+		al.runCancel = nil
+		al.running.Store(false)
+		al.mu.Unlock()
+	}()
 
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return err
@@ -434,7 +447,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		}
 		// Start a goroutine that drains the bus while processMessage is
 		// running. Only messages that resolve to the active turn scope are
-		// redirected into steering; other inbound messages are requeued.
+		// redirected into steering; other requests retain their transport envelope.
 		drainCancel := func() {}
 		var drainDone <-chan []bus.InboundMessage
 		if activeScope, activeAgentID, ok := al.resolveSteeringTarget(msg); ok {
@@ -581,8 +594,13 @@ func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, active
 			msg = next
 		}
 
+		if al.handleActiveReset(ctx, msg) {
+			continue
+		}
+
 		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
-		if !scopeOK || msgScope != activeScope || isInlineMessage(msg) || strings.Contains(activeScope, ":telegram:inline:user:") {
+		if !scopeOK || msgScope != activeScope || isInlineMessage(msg) ||
+			strings.Contains(activeScope, ":telegram:inline:user:") {
 			queued = append(queued, msg)
 			continue
 		}
@@ -613,7 +631,13 @@ func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, active
 }
 
 func (al *AgentLoop) Stop() {
+	al.mu.Lock()
 	al.running.Store(false)
+	cancel := al.runCancel
+	al.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (al *AgentLoop) publishResponseIfNeeded(

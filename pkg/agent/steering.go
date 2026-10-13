@@ -153,6 +153,13 @@ func (sq *steeringQueue) lenScope(scope string) int {
 	return len(sq.queues[normalizeSteeringScope(scope)])
 }
 
+// clearScope discards pending input from the conversation being reset.
+func (sq *steeringQueue) clearScope(scope string) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	delete(sq.queues, normalizeSteeringScope(scope))
+}
+
 // setMode updates the steering mode.
 func (sq *steeringQueue) setMode(mode SteeringMode) {
 	sq.mu.Lock()
