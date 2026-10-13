@@ -249,6 +249,16 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 		}
 		content += message.Caption
 	}
+	if message.Location != nil {
+		if content != "" {
+			content += "\n"
+		}
+		content += fmt.Sprintf(
+			"[User location: lat=%.6f, lng=%.6f]",
+			message.Location.Latitude,
+			message.Location.Longitude,
+		)
+	}
 
 	if len(message.Photo) > 0 {
 		photo := message.Photo[len(message.Photo)-1]
