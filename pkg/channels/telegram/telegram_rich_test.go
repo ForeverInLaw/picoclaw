@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,25 @@ func TestRichRepliesPreserveFormattingFormulasAndTopicReply(t *testing.T) {
 		"# Results\n\n| Value | Formula |\n| --- | --- |\n| one | $x^2$ |\n\n- item\n\n```go\nfmt.Println(\"ok\")\n```\n\n$$E = mc^2$$",
 		payload.Rich.Markdown,
 	)
+}
+
+func TestIndependentIdenticalRichMessagesDoNotShareFailedDelivery(t *testing.T) {
+	calls := 0
+	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("unknown send outcome")
+		}
+		return successResponse(t), nil
+	}}
+	channel := newTestChannel(t, caller)
+	msg := bus.OutboundMessage{DeliveryID: "operation-a", ChatID: "42", Content: "identical notification"}
+	require.ErrorIs(t, channel.Send(t.Context(), msg), channels.ErrSendFailed)
+	require.ErrorIs(t, channel.Send(t.Context(), msg), channels.ErrSendFailed)
+	require.Equal(t, 1, calls, "an uncertain send must not be replayed for the same operation")
+	msg.DeliveryID = ""
+	require.NoError(t, channel.Send(t.Context(), msg))
+	require.Equal(t, 2, calls, "independent messages without a reply reference need separate delivery identities")
 }
 
 func TestRichReplyNormalizesMathOutsideActualCodeFences(t *testing.T) {

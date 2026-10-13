@@ -30,6 +30,7 @@ func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (chann
 	cfg := c.config.Channels.Telegram.Streaming
 	stream := &telegramStreamer{
 		channel:          c,
+		deliveryID:       bus.DeliveryID(bus.EnsureDeliveryID(ctx)),
 		replyTo:          bus.StreamReplyTo(ctx),
 		draftID:          cryptoRandInt(),
 		throttleInterval: time.Duration(cfg.ThrottleSeconds) * time.Second,
@@ -52,6 +53,7 @@ type telegramStreamer struct {
 	chatID           int64
 	threadID         int
 	replyTo          string
+	deliveryID       string
 	inlineMessageID  string
 	draftID          int
 	previewMessageID int
@@ -159,6 +161,7 @@ func (s *telegramStreamer) editPreview(ctx context.Context, messageID int, inlin
 }
 
 func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
+	ctx = bus.WithDeliveryID(ctx, s.deliveryID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {

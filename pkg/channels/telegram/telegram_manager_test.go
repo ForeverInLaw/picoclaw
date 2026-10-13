@@ -296,7 +296,7 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 			manager.RegisterChannel("telegram", outboundTelegram{channel})
 			require.NoError(t, manager.StartAll(t.Context()))
 			defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
-			ctx := bus.WithStreamReplyTo(t.Context(), "42")
+			ctx := bus.WithDeliveryID(bus.WithStreamReplyTo(t.Context(), "42"), "multipart-operation")
 			stream, ok := manager.GetStreamer(ctx, "telegram", "-123/7")
 			require.True(t, ok)
 			require.NoError(t, stream.Update(ctx, "PREVIEW_MARKER"))
@@ -307,7 +307,7 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 			source.WriteString("TAIL_MARKER")
 			content := source.String()
 			finalizeErr := stream.Finalize(ctx, content)
-			msg := bus.OutboundMessage{Channel: "telegram", ChatID: "-123/7", ReplyToMessageID: "42", Content: content}
+			msg := bus.OutboundMessage{DeliveryID: bus.DeliveryID(ctx), Channel: "telegram", ChatID: "-123/7", ReplyToMessageID: "42", Content: content}
 			deliveryErr := manager.SendMessage(ctx, msg)
 			if mode == "ambiguous_send" {
 				require.ErrorIs(t, deliveryErr, channels.ErrSendFailed)

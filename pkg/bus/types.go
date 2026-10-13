@@ -56,6 +56,8 @@ type ProgressMessage struct {
 }
 
 type OutboundMessage struct {
+	// DeliveryID identifies one logical send across retries and stream recovery.
+	DeliveryID       string           `json:"delivery_id,omitempty"`
 	Progress         *ProgressMessage `json:"progress,omitempty"`
 	Channel          string           `json:"channel"`
 	ChatID           string           `json:"chat_id"`

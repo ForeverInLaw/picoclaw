@@ -1,6 +1,27 @@
 package bus
 
-import "context"
+import (
+	"context"
+	"github.com/google/uuid"
+)
+
+type deliveryIDKey struct{}
+
+func WithDeliveryID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, deliveryIDKey{}, id)
+}
+
+func DeliveryID(ctx context.Context) string {
+	id, _ := ctx.Value(deliveryIDKey{}).(string)
+	return id
+}
+
+func EnsureDeliveryID(ctx context.Context) context.Context {
+	if DeliveryID(ctx) == "" {
+		return WithDeliveryID(ctx, uuid.NewString())
+	}
+	return ctx
+}
 
 type streamReplyToKey struct{}
 

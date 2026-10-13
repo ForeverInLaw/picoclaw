@@ -655,9 +655,15 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			if !ok {
 				return
 			}
-			for _, chunk := range outboundChunks(w.ch, msg) {
+			if msg.DeliveryID == "" {
+				msg.DeliveryID = bus.DeliveryID(bus.EnsureDeliveryID(ctx))
+			}
+			for n, chunk := range outboundChunks(w.ch, msg) {
 				chunkMsg := msg
 				chunkMsg.Content = chunk
+				if n > 0 {
+					chunkMsg.DeliveryID += fmt.Sprintf(":part:%d", n)
+				}
 				if err := m.sendWithRetry(ctx, name, w, chunkMsg); err != nil {
 					break
 				}
@@ -674,6 +680,9 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 //   - ErrRateLimit: fixed delay retry
 //   - ErrTemporary / unknown: exponential backoff retry
 func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWorker, msg bus.OutboundMessage) error {
+	if msg.DeliveryID != "" {
+		ctx = bus.WithDeliveryID(ctx, msg.DeliveryID)
+	}
 	// Rate limit: wait for token
 	if err := w.limiter.Wait(ctx); err != nil {
 		// ctx canceled, shutting down
@@ -1080,9 +1089,15 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 		return fmt.Errorf("channel %s has no active worker", msg.Channel)
 	}
 
-	for _, chunk := range outboundChunks(w.ch, msg) {
+	if msg.DeliveryID == "" {
+		msg.DeliveryID = bus.DeliveryID(bus.EnsureDeliveryID(ctx))
+	}
+	for n, chunk := range outboundChunks(w.ch, msg) {
 		chunkMsg := msg
 		chunkMsg.Content = chunk
+		if n > 0 {
+			chunkMsg.DeliveryID += fmt.Sprintf(":part:%d", n)
+		}
 		if err := m.sendWithRetry(ctx, msg.Channel, w, chunkMsg); err != nil {
 			return err
 		}
