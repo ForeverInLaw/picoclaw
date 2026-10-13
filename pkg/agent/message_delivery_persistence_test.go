@@ -261,7 +261,9 @@ func TestProcessMessage_DoesNotPublishDuplicateFinalResponseAfterMessageTool(t *
 	for {
 		select {
 		case msg := <-msgBus.OutboundChan():
-			outbound = append(outbound, msg)
+			if msg.Progress == nil {
+				outbound = append(outbound, msg)
+			}
 		default:
 			if len(outbound) != 1 {
 				t.Fatalf("expected exactly 1 outbound message, got %d: %+v", len(outbound), outbound)
@@ -304,7 +306,9 @@ func TestProcessMessage_StopsAfterTerminalPersonalTodoTool(t *testing.T) {
 	for {
 		select {
 		case msg := <-msgBus.OutboundChan():
-			outbound = append(outbound, msg)
+			if msg.Progress == nil {
+				outbound = append(outbound, msg)
+			}
 		default:
 			if len(outbound) != 1 {
 				t.Fatalf("expected exactly 1 outbound message, got %d: %+v", len(outbound), outbound)

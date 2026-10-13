@@ -613,7 +613,7 @@ func (al *AgentLoop) Stop() {
 	al.running.Store(false)
 }
 
-func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatID, response string) {
+func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatID, response string, replyIDs ...string) {
 	if response == "" {
 		return
 	}
@@ -637,10 +637,15 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatI
 		return
 	}
 
+	replyID := ""
+	if len(replyIDs) > 0 {
+		replyID = replyIDs[0]
+	}
 	al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-		Channel: channel,
-		ChatID:  chatID,
-		Content: response,
+		Channel:          channel,
+		ChatID:           chatID,
+		Content:          response,
+		ReplyToMessageID: replyID,
 	})
 	logger.InfoCF("agent", "Published outbound response",
 		map[string]any{
@@ -1579,7 +1584,7 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	if opts.SendResponse && result.finalContent != "" {
-		al.publishResponseIfNeeded(ctx, opts.Channel, opts.ChatID, result.finalContent)
+		al.publishResponseIfNeeded(ctx, opts.Channel, opts.ChatID, result.finalContent, opts.ReplyToMessageID)
 	}
 
 	if result.finalContent != "" {
@@ -2445,31 +2450,25 @@ turnLoop:
 				},
 			)
 
-			// Send tool feedback to chat channel if enabled (from HEAD)
-			if !ts.opts.DisableToolFeedback &&
-				al.cfg.Agents.Defaults.ShouldSendToolFeedback(ts.opts.PeerKind, ts.opts.SenderID) &&
-				ts.channel != "" {
-				feedbackPreview := utils.Truncate(
-					string(argsJSON),
-					al.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
-				)
-				feedbackMsg := fmt.Sprintf("\U0001f527 `%s`\n```\n%s\n```", tc.Name, feedbackPreview)
-				fbCtx, fbCancel := context.WithTimeout(turnCtx, 3*time.Second)
-				_ = al.bus.PublishOutbound(fbCtx, bus.OutboundMessage{
-					Channel: ts.channel,
-					ChatID:  ts.chatID,
-					Content: feedbackMsg,
-				})
-				fbCancel()
+			actionID := fmt.Sprintf("tool:%d:%d:%s", iteration, i, tc.ID)
+			progressEnabled := al.toolProgressEnabled(ts)
+			if progressEnabled {
+				al.publishToolProgress(turnCtx, ts, actionID, toolName, toolArgs, nil)
 			}
 
 			toolCallID := tc.ID
 			toolIteration := iteration
 			asyncToolName := toolName
 			asyncCallback := func(_ context.Context, result *tools.ToolResult) {
+				if result == nil {
+					return
+				}
+				if progressEnabled {
+					al.publishToolProgress(context.Background(), ts, actionID, asyncToolName, toolArgs, result)
+				}
 				// Send ForUser content directly to the user (immediate feedback),
 				// mirroring the synchronous tool execution path.
-				if !result.Silent && result.ForUser != "" {
+				if !progressEnabled && !result.Silent && result.ForUser != "" {
 					outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer outCancel()
 					_ = al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
@@ -2591,7 +2590,10 @@ turnLoop:
 				toolResult = tools.ErrorResult("hook returned nil tool result")
 			}
 
-			if !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
+			if progressEnabled && !toolResult.Async {
+				al.publishToolProgress(turnCtx, ts, actionID, toolName, toolArgs, toolResult)
+			}
+			if !progressEnabled && !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
 				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 					Channel: ts.channel,
 					ChatID:  ts.chatID,

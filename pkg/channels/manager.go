@@ -191,6 +191,9 @@ func (m *Manager) RecordReactionUndo(channel, chatID string, undo func()) {
 // preSend handles typing stop, reaction undo, and placeholder editing before sending a message.
 // Returns true if the message was already delivered (skip Send).
 func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMessage, ch Channel) bool {
+	if msg.Progress != nil {
+		return false
+	}
 	key := name + ":" + msg.ChatID
 
 	// 1. Stop typing
@@ -636,7 +639,7 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			if mlp, ok := w.ch.(MessageLengthProvider); ok {
 				maxLen = mlp.MaxMessageLength()
 			}
-			if maxLen > 0 && len([]rune(msg.Content)) > maxLen {
+			if msg.Progress == nil && maxLen > 0 && len([]rune(msg.Content)) > maxLen {
 				chunks := SplitMessage(msg.Content, maxLen)
 				for _, chunk := range chunks {
 					chunkMsg := msg
@@ -671,7 +674,11 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		lastErr = w.ch.Send(ctx, msg)
+		if progress, ok := w.ch.(ProgressCapable); ok && msg.Progress != nil {
+			lastErr = progress.SendProgress(ctx, msg)
+		} else {
+			lastErr = w.ch.Send(ctx, msg)
+		}
 		if lastErr == nil {
 			return
 		}
@@ -1059,7 +1066,7 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 	if mlp, ok := w.ch.(MessageLengthProvider); ok {
 		maxLen = mlp.MaxMessageLength()
 	}
-	if maxLen > 0 && len([]rune(msg.Content)) > maxLen {
+	if msg.Progress == nil && maxLen > 0 && len([]rune(msg.Content)) > maxLen {
 		for _, chunk := range SplitMessage(msg.Content, maxLen) {
 			chunkMsg := msg
 			chunkMsg.Content = chunk

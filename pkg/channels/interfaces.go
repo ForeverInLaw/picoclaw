@@ -68,3 +68,9 @@ type PlaceholderRecorder interface {
 type CommandRegistrarCapable interface {
 	RegisterCommands(ctx context.Context, defs []commands.Definition) error
 }
+
+// ProgressCapable delivers request-scoped activity without changing answer state.
+// Adapters own activity message identity, edits, formatting and length limits.
+type ProgressCapable interface {
+	SendProgress(ctx context.Context, msg bus.OutboundMessage) error
+}
