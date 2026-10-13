@@ -599,3 +599,43 @@ func TestService_StartupBackfill_SkipsShortRecentMessagesAndContinues(t *testing
 
 	t.Fatal("startup backfill did not reach older eligible observations")
 }
+
+func TestService_SearchReturnsEachObservationOnceAcrossLexicalAndSemanticResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+			return
+		}
+		data := make([]map[string]any, len(payload.Input))
+		for n := range data {
+			data[n] = map[string]any{"embedding": []float32{1, 0}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer server.Close()
+	idx, err := memoryindex.Open(filepath.Join(t.TempDir(), "index.sqlite"), memoryindex.Config{MaxSnippetChars: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	now := time.Now()
+	for _, sender := range []string{"alice", "bob"} {
+		err := idx.AddObservation(t.Context(), memoryindex.Observation{Channel: "telegram", ChatID: "-1", PeerKind: "group", SenderID: sender, Role: "user", Content: "bicycle " + strings.Repeat("long shared paragraph ", 20), CreatedAt: now.Add(-time.Minute)})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	embeddingCfg := config.MemoryEmbeddingConfig{Enabled: true, MinContentChars: 1, MaxBatch: 8}
+	embedder := NewEmbedder(&config.ModelConfig{ModelName: "embed", Model: "embed", APIKey: "test", APIBase: server.URL}, embeddingCfg)
+	service := New(idx, config.MemoryIndexConfig{Enabled: true, MaxResults: 5, Embeddings: embeddingCfg}, embedder)
+	hits, err := service.Search(t.Context(), SearchRequest{CurrentChannel: "telegram", CurrentChatID: "-1", CurrentPeer: "group", Query: "bicycle", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 || hits[0].SenderID == hits[1].SenderID {
+		t.Fatalf("same observation appeared twice or distinct observations were lost: %+v", hits)
+	}
+}

@@ -141,6 +141,7 @@ func (i *Index) LoadObservationEmbeddings(
 		); err != nil {
 			return nil, fmt.Errorf("memoryindex: scan observation embedding: %w", err)
 		}
+		row.Hit.ObservationID = row.ObservationID
 		row.Hit.CreatedAt = time.UnixMilli(createdAtMS)
 		if err := json.Unmarshal([]byte(vectorJSON), &row.Vector); err != nil {
 			return nil, fmt.Errorf("memoryindex: decode observation embedding: %w", err)

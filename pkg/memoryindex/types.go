@@ -41,15 +41,16 @@ type SearchRequest struct {
 }
 
 type Hit struct {
-	SessionKey string
-	Channel    string
-	ChatID     string
-	PeerKind   string
-	ChatLabel  string
-	Role       string
-	SenderID   string
-	Content    string
-	CreatedAt  time.Time
+	ObservationID int64
+	SessionKey    string
+	Channel       string
+	ChatID        string
+	PeerKind      string
+	ChatLabel     string
+	Role          string
+	SenderID      string
+	Content       string
+	CreatedAt     time.Time
 }
 
 type ChatCatalogEntry struct {

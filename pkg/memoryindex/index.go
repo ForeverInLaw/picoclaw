@@ -168,7 +168,7 @@ func (i *Index) searchFTS(ctx context.Context, req SearchRequest, limit int) ([]
 		return nil, nil
 	}
 
-	query := `SELECT o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
+	query := `SELECT o.id, o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
 		FROM observations_fts f
 		JOIN observations o ON o.id = f.rowid`
 	whereParts := []string{"observations_fts MATCH ?"}
@@ -200,7 +200,7 @@ func (i *Index) searchFTS(ctx context.Context, req SearchRequest, limit int) ([]
 
 func (i *Index) searchLike(ctx context.Context, req SearchRequest, limit int) ([]Hit, error) {
 	pattern := "%" + req.Query + "%"
-	query := `SELECT o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
+	query := `SELECT o.id, o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
 		FROM observations o`
 	whereParts := []string{"content LIKE ?"}
 	args := make([]any, 0, 5)
@@ -232,6 +232,7 @@ func scanHits(rows *sql.Rows, maxSnippetChars int) ([]Hit, error) {
 			createdAtMS int64
 		)
 		if err := rows.Scan(
+			&hit.ObservationID,
 			&hit.SessionKey,
 			&hit.Channel,
 			&hit.ChatID,

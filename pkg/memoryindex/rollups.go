@@ -151,7 +151,7 @@ func (i *Index) ListObservationsInWindow(
 		return nil, nil
 	}
 
-	query := `SELECT session_key, channel, chat_id, peer_kind, chat_label, role, sender_id, content, created_at_ms
+	query := `SELECT id, session_key, channel, chat_id, peer_kind, chat_label, role, sender_id, content, created_at_ms
 		FROM observations
 		WHERE channel = ? AND chat_id = ?`
 	args := []any{scope.Channel, scope.ChatID}

@@ -582,6 +582,9 @@ func truncateRunes(s string, limit int) string {
 }
 
 func hitKey(hit memoryindex.Hit) string {
+	if hit.ObservationID != 0 {
+		return fmt.Sprintf("observation:%d", hit.ObservationID)
+	}
 	return hit.Channel + "\x00" + hit.ChatID + "\x00" + hit.CreatedAt.UTC().
 		Format(time.RFC3339Nano) +
 		"\x00" + hit.Content
