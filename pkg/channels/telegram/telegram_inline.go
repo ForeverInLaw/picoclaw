@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mymmrac/telego"
@@ -109,6 +110,7 @@ func buildTelegramInlineInboundMessage(result telego.ChosenInlineResult, sender 
 		Metadata: map[string]string{
 			telegramInlineMetadataKey: "true",
 			telegramInlineQueryKey:    strings.TrimSpace(result.Query),
+			"telegram_user_id":        fmt.Sprintf("%d", result.From.ID),
 		},
 	}
 }
@@ -192,8 +194,19 @@ func renderTelegramInlineInitialContent(query, placeholder string, useMarkdownV2
 }
 
 func (c *TelegramChannel) handleInlineCallbackQuery(ctx *th.Context, query telego.CallbackQuery) error {
+	if strings.HasPrefix(query.Data, telegramInlinePagePrefix) {
+		page, err := strconv.Atoi(strings.TrimPrefix(query.Data, telegramInlinePagePrefix))
+		if err == nil && query.InlineMessageID != "" {
+			err = c.showInlinePage(ctx, query.InlineMessageID, page)
+		}
+		text := ""
+		if err != nil {
+			text = "Unable to load this answer page. Please try again."
+		}
+		return c.bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{CallbackQueryID: query.ID, Text: text})
+	}
 	if query.Data != telegramInlineCallbackData {
 		return nil
 	}
-	return ctx.Bot().AnswerCallbackQuery(ctx, tu.CallbackQuery(query.ID))
+	return c.bot.AnswerCallbackQuery(ctx, tu.CallbackQuery(query.ID))
 }

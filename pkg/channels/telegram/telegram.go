@@ -93,7 +93,7 @@ func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChann
 		telegramCfg,
 		bus,
 		telegramCfg.AllowFrom,
-		channels.WithMaxMessageLength(4000),
+		channels.WithMaxMessageLength(telegramRichMessageLimit),
 		channels.WithGroupTrigger(telegramCfg.GroupTrigger),
 		channels.WithReasoningChannelID(telegramCfg.ReasoningChannelID),
 	)
@@ -254,144 +254,15 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 		if err := c.editInlineMessageText(ctx, inlineMessageID, msg.Content); err != nil {
 			return fmt.Errorf("telegram inline send: %w", channels.ErrTemporary)
 		}
-		if err := c.clearInlineReplyMarkup(ctx, inlineMessageID); err != nil {
-			logger.WarnCF("telegram", "Failed to clear inline keyboard on final send", map[string]any{
-				"error": err.Error(),
-			})
-		}
 		return nil
 	}
-
-	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
 
 	chatID, threadID, err := parseTelegramChatID(msg.ChatID)
 	if err != nil {
 		return fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)
 	}
-
-	if msg.Content == "" {
-		return nil
-	}
-
-	// The Manager already splits messages to ≤4000 chars (WithMaxMessageLength),
-	// so msg.Content is guaranteed to be within that limit. We still need to
-	// check if HTML expansion pushes it beyond Telegram's 4096-char API limit.
-	replyToID := msg.ReplyToMessageID
-	queue := []string{msg.Content}
-	for len(queue) > 0 {
-		chunk := queue[0]
-		queue = queue[1:]
-
-		content := parseContent(chunk, useMarkdownV2)
-
-		if len([]rune(content)) > 4096 {
-			runeChunk := []rune(chunk)
-			ratio := float64(len(runeChunk)) / float64(len([]rune(content)))
-			smallerLen := int(float64(4096) * ratio * 0.95) // 5% safety margin
-
-			// Guarantee progress: if estimated length is >= chunk length, force it smaller
-			if smallerLen >= len(runeChunk) {
-				smallerLen = len(runeChunk) - 1
-			}
-
-			if smallerLen <= 0 {
-				if err := c.sendChunk(ctx, sendChunkParams{
-					chatID:        chatID,
-					threadID:      threadID,
-					content:       content,
-					replyToID:     replyToID,
-					mdFallback:    chunk,
-					useMarkdownV2: useMarkdownV2,
-				}); err != nil {
-					return err
-				}
-				replyToID = ""
-				continue
-			}
-
-			// Use the estimated smaller length as a guide for SplitMessage.
-			// SplitMessage will find natural break points (newlines/spaces) and respect code blocks.
-			subChunks := channels.SplitMessage(chunk, smallerLen)
-
-			// Safety fallback: If SplitMessage failed to shorten the chunk, force a manual hard split.
-			if len(subChunks) == 1 && subChunks[0] == chunk {
-				part1 := string(runeChunk[:smallerLen])
-				part2 := string(runeChunk[smallerLen:])
-				subChunks = []string{part1, part2}
-			}
-
-			// Filter out empty chunks to avoid sending empty messages to Telegram.
-			nonEmpty := make([]string, 0, len(subChunks))
-			for _, s := range subChunks {
-				if s != "" {
-					nonEmpty = append(nonEmpty, s)
-				}
-			}
-
-			// Push sub-chunks back to the front of the queue
-			queue = append(nonEmpty, queue...)
-			continue
-		}
-
-		if err := c.sendChunk(ctx, sendChunkParams{
-			chatID:        chatID,
-			threadID:      threadID,
-			content:       content,
-			replyToID:     replyToID,
-			mdFallback:    chunk,
-			useMarkdownV2: useMarkdownV2,
-		}); err != nil {
-			return err
-		}
-		// Only the first chunk should be a reply; subsequent chunks are normal messages.
-		replyToID = ""
-	}
-
-	return nil
-}
-
-type sendChunkParams struct {
-	chatID        int64
-	threadID      int
-	content       string
-	replyToID     string
-	mdFallback    string
-	useMarkdownV2 bool
-}
-
-// sendChunk sends a single HTML/MarkdownV2 message, falling back to the original
-// markdown as plain text on parse failure so users never see raw HTML/MarkdownV2 tags.
-func (c *TelegramChannel) sendChunk(
-	ctx context.Context,
-	params sendChunkParams,
-) error {
-	tgMsg := tu.Message(tu.ID(params.chatID), params.content)
-	tgMsg.MessageThreadID = params.threadID
-	if params.useMarkdownV2 {
-		tgMsg.WithParseMode(telego.ModeMarkdownV2)
-	} else {
-		tgMsg.WithParseMode(telego.ModeHTML)
-	}
-
-	if params.replyToID != "" {
-		if mid, parseErr := strconv.Atoi(params.replyToID); parseErr == nil {
-			tgMsg.ReplyParameters = &telego.ReplyParameters{
-				MessageID: mid,
-			}
-		}
-	}
-
-	if _, err := c.bot.SendMessage(ctx, tgMsg); err != nil {
-		logParseFailed(err, params.useMarkdownV2)
-
-		tgMsg.Text = params.mdFallback
-		tgMsg.ParseMode = ""
-		if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
-			return fmt.Errorf("telegram send: %w", channels.ErrTemporary)
-		}
-	}
-
-	return nil
+	_, err = c.sendRichReply(ctx, chatID, threadID, msg.ReplyToMessageID, msg.Content)
+	return err
 }
 
 // maxTypingDuration limits how long the typing indicator can run.
@@ -445,8 +316,7 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 		return c.editInlineMessageText(ctx, inlineMessageID, content)
 	}
 
-	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
-	cid, _, err := parseTelegramChatID(chatID)
+	cid, threadID, err := parseTelegramChatID(chatID)
 	if err != nil {
 		return err
 	}
@@ -454,26 +324,7 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 	if err != nil {
 		return err
 	}
-	parsedContent := parseContent(content, useMarkdownV2)
-	editMsg := tu.EditMessageText(tu.ID(cid), mid, parsedContent)
-	if useMarkdownV2 {
-		editMsg.WithParseMode(telego.ModeMarkdownV2)
-	} else {
-		editMsg.WithParseMode(telego.ModeHTML)
-	}
-	_, err = c.bot.EditMessageText(ctx, editMsg)
-	if isTelegramMessageNotModified(err) {
-		return nil
-	}
-	if err != nil {
-		logParseFailed(err, useMarkdownV2)
-		_, err = c.bot.EditMessageText(ctx, tu.EditMessageText(tu.ID(cid), mid, content))
-		if isTelegramMessageNotModified(err) {
-			return nil
-		}
-	}
-
-	return err
+	return c.editRichReply(ctx, cid, threadID, mid, content)
 }
 
 func isTelegramMessageNotModified(err error) bool {

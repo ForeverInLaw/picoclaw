@@ -41,32 +41,7 @@ func (c *TelegramChannel) clearInlineReplyMarkup(ctx context.Context, inlineMess
 }
 
 func (c *TelegramChannel) editInlineMessageText(ctx context.Context, inlineMessageID, content string) error {
-	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
-	clamped := clampTelegramInlineContent(content)
-	parsedContent := parseContent(clamped, useMarkdownV2)
-
-	params := &telego.EditMessageTextParams{
-		InlineMessageID: inlineMessageID,
-		Text:            parsedContent,
-	}
-	params.ParseMode = telegramParseMode(useMarkdownV2)
-
-	_, err := c.bot.EditMessageText(ctx, params)
-	if isTelegramMessageNotModified(err) {
-		return nil
-	}
-	if err != nil {
-		logParseFailed(err, useMarkdownV2)
-		_, err = c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-			InlineMessageID: inlineMessageID,
-			Text:            clamped,
-			ParseMode:       telegramParseMode(useMarkdownV2),
-		})
-		if isTelegramMessageNotModified(err) {
-			return nil
-		}
-	}
-	return err
+	return c.sendInlineAnswer(ctx, inlineMessageID, content)
 }
 
 func telegramParseMode(useMarkdownV2 bool) string {
@@ -126,15 +101,6 @@ func (s *telegramInlineStreamer) Finalize(ctx context.Context, content string) e
 
 	if err := s.channel.editInlineMessageText(ctx, s.inlineMessageID, content); err != nil {
 		return fmt.Errorf("telegram inline finalize: %w", err)
-	}
-	if !s.keyboardCleared {
-		if err := s.channel.clearInlineReplyMarkup(ctx, s.inlineMessageID); err != nil {
-			logger.WarnCF("telegram", "Failed to clear inline keyboard after finalize", map[string]any{
-				"error": err.Error(),
-			})
-		} else {
-			s.keyboardCleared = true
-		}
 	}
 	return nil
 }
