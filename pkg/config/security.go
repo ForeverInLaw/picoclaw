@@ -31,13 +31,19 @@ type SecurityConfig struct {
 	ModelList map[string]ModelSecurityEntry `yaml:"model_list,omitempty"`
 
 	// Channel tokens/secrets
-	Channels ChannelsSecurity `yaml:"channels,omitempty"`
+	Channels    ChannelsSecurity                `yaml:"channels,omitempty"`
+	ChannelList map[string]ChannelSecurityEntry `yaml:"channel_list,omitempty"`
 
-	Web    WebToolsSecurity `yaml:"web,omitempty"`
-	Skills SkillsSecurity   `yaml:"skills,omitempty"`
+	Web           WebToolsSecurity `yaml:"web,omitempty"`
+	Skills        SkillsSecurity   `yaml:"skills,omitempty"`
+	RuntimeValues []string         `yaml:"-"`
 
 	// cache for sensitive values and compiled regex (computed once)
 	sensitiveCache *SensitiveDataCache
+}
+
+type ChannelSecurityEntry struct {
+	Settings map[string]any `yaml:"settings"`
 }
 
 // ModelSecurityEntry stores security data for a model
@@ -62,6 +68,11 @@ type ChannelsSecurity struct {
 	WeComAIBot *WeComAIBotSecurity `yaml:"wecom_aibot,omitempty"`
 	Pico       *PicoSecurity       `yaml:"pico,omitempty"`
 	IRC        *IRCSecurity        `yaml:"irc,omitempty"`
+	Email      *EmailSecurity      `yaml:"email,omitempty"`
+}
+
+type EmailSecurity struct {
+	Password string `yaml:"password,omitempty" env:"PICOCLAW_CHANNELS_EMAIL_PASSWORD"`
 }
 
 type TelegramSecurity struct {
