@@ -15,6 +15,72 @@ import (
 	"github.com/sipeed/picoclaw/pkg/channels"
 )
 
+func TestToolFeedbackStreamsIntoNewMessageAfterActivity(t *testing.T) {
+	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	channel := newTestChannel(t, caller)
+	channel.config.Agents.Defaults.ToolFeedback.Enabled = true
+	channel.config.Channels.Telegram.Streaming.Enabled = true
+	channel.config.Channels.Telegram.Streaming.ThrottleSeconds = 0
+	ctx := bus.WithStreamReplyTo(t.Context(), "42")
+	require.NoError(t, channel.SendProgress(ctx, bus.OutboundMessage{
+		ChatID: "123/7", Progress: &bus.ProgressMessage{
+			RequestID: "request", ActionID: "tool", Tool: "web_search",
+			Kind: bus.ProgressTool, State: bus.ProgressCompleted, Result: "Found results",
+		},
+	}))
+	stream, err := channel.BeginStream(ctx, "123/7")
+	require.NoError(t, err)
+	require.NoError(t, stream.Update(ctx, "First answer tokens"))
+	require.NoError(t, stream.Update(ctx, "More answer tokens"))
+	require.NoError(t, stream.Finalize(ctx, "Complete answer"))
+	require.Len(t, caller.calls, 4)
+	require.Contains(t, caller.calls[0].URL, "/sendRichMessage")
+	require.Contains(t, caller.calls[1].URL, "/sendRichMessage")
+	require.Contains(t, caller.calls[2].URL, "/editMessageText")
+	require.Contains(t, caller.calls[3].URL, "/editMessageText")
+}
+
+func TestGuestMentionUsesIsolatedInlineConversation(t *testing.T) {
+	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+		if strings.HasSuffix(url, "/answerGuestQuery") {
+			return &ta.Response{Ok: true, Result: json.RawMessage(`{"inline_message_id":"guest-result"}`)}, nil
+		}
+		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
+	}}
+	channel := newTestChannel(t, caller)
+	channel.config.Agents.Defaults.Workspace = t.TempDir()
+	channel.config.Channels.Telegram.Inline.Enabled = true
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	channel.SetRunning(true)
+	ctx := (&th.Context{}).WithContext(t.Context())
+	require.NoError(t, channel.handleGuestMessage(ctx, telego.Message{
+		GuestQueryID: "guest-query", Text: "write a formula", From: &telego.User{ID: 42},
+	}))
+	select {
+	case msg := <-mb.InboundChan():
+		require.Equal(t, "inline:guest-result", msg.ChatID)
+		require.Equal(t, "write a formula", msg.Content)
+		require.Equal(t, "true", msg.Metadata[telegramInlineMetadataKey])
+		require.Equal(t, "42", msg.Metadata["telegram_user_id"])
+	default:
+		t.Fatal("guest mention was not admitted to the agent")
+	}
+	require.Contains(t, caller.calls[0].URL, "/answerGuestQuery")
+	// Repeated selection must not generate a second answer for this publication.
+	require.NoError(t, channel.handleChosenInlineResult(ctx, telego.ChosenInlineResult{
+		InlineMessageID: "guest-result", Query: "write a formula", From: telego.User{ID: 42},
+	}))
+	select {
+	case <-mb.InboundChan():
+		t.Fatal("guest publication was admitted twice")
+	default:
+	}
+}
+
 func TestRichDraftPersistsOneFinalReplyAfterPreviewFailureAndProgress(t *testing.T) {
 	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
 		if strings.HasSuffix(url, "/sendRichMessageDraft") {
@@ -23,6 +89,7 @@ func TestRichDraftPersistsOneFinalReplyAfterPreviewFailureAndProgress(t *testing
 		return successResponse(t), nil
 	}}
 	channel := newTestChannel(t, caller)
+	channel.config.Agents.Defaults.ToolFeedback.Enabled = false
 	channel.config.Channels.Telegram.Streaming.Enabled = true
 	channel.config.Channels.Telegram.Streaming.ThrottleSeconds = 0
 	ctx := bus.WithStreamReplyTo(context.Background(), "42")
@@ -69,6 +136,7 @@ func TestDraftGrowthCountsCharactersForNonASCIIAnswers(t *testing.T) {
 		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil },
 	}
 	channel := newTestChannel(t, caller)
+	channel.config.Agents.Defaults.ToolFeedback.Enabled = false
 	channel.config.Channels.Telegram.Streaming.Enabled = true
 	channel.config.Channels.Telegram.Streaming.ThrottleSeconds = 60
 	channel.config.Channels.Telegram.Streaming.MinGrowthChars = 4

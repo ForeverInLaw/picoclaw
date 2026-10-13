@@ -33,16 +33,19 @@ func (al *AgentLoop) publishProgress(
 	}
 	pubCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_ = al.bus.PublishOutbound(
-		pubCtx,
-		bus.OutboundMessage{
-			Channel:          ts.channel,
-			ChatID:           ts.chatID,
-			ReplyToMessageID: ts.opts.ReplyToMessageID,
-			Content:          content,
-			Progress:         progress,
-		},
-	)
+	msg := bus.OutboundMessage{
+		Channel:          ts.channel,
+		ChatID:           ts.chatID,
+		ReplyToMessageID: ts.opts.ReplyToMessageID,
+		Content:          content,
+		Progress:         progress,
+	}
+	if ts.channel == "telegram" && progress.Kind == bus.ProgressTool && al.channelManager != nil {
+		// Complete activity delivery before the next answer starts streaming.
+		_ = al.channelManager.SendMessage(pubCtx, msg)
+		return
+	}
+	_ = al.bus.PublishOutbound(pubCtx, msg)
 }
 
 func (al *AgentLoop) publishToolProgress(
@@ -52,6 +55,9 @@ func (al *AgentLoop) publishToolProgress(
 	args map[string]any,
 	result *tools.ToolResult,
 ) {
+	if tool == "message" {
+		return
+	}
 	progress := &bus.ProgressMessage{
 		RequestID: ts.turnID,
 		ActionID:  actionID,

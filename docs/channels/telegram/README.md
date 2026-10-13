@@ -36,6 +36,11 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 
 ## Rich replies
 
+Guest mentions such as `@bot question` are handled through Telegram's
+`guest_message` updates and `answerGuestQuery`. They use the same isolated
+conversation and retained answer storage as selected inline results. This is
+separate from BotFather's `/setinline` setting for the inline result picker.
+
 Replies in direct chats, groups, topics, and inline destinations use Telegram's
 native Rich Markdown: headings, lists, tables, code blocks, and LaTeX formulas.
 Inline math uses `$x^2$`; display math uses `$$E = mc^2$$` or a `math` code block.
@@ -62,7 +67,11 @@ and [Telegram Bot API 10.3](https://core.telegram.org/bots/api), checked on
 
 ## Tool activity
 
-Every executed tool in direct chats and groups gets a separate activity message,
+The `message` tool sends its content directly and does not create a duplicate
+activity message. With tool feedback enabled, the answer streams into a new
+message after tool activity; the earlier thinking placeholder is not reused.
+
+Executed tools other than `message` in direct chats and groups get a separate activity message,
 including shell commands, file operations, web search, and custom tools. It starts
 with the action preview and is edited with its result or error. Longer output is
 available in a collapsed details block; output beyond the activity limit is
@@ -72,8 +81,10 @@ inline destinations do not receive these activity messages.
 
 ## Answer streaming
 
-When `streaming.enabled` is true, private chats receive native rich drafts.
-Groups and inline destinations receive supported rich message edits. The final
+When `streaming.enabled` is true, private chats receive native rich drafts when
+tool feedback is disabled. With tool feedback enabled, a new answer message is
+sent after activity and edited as tokens arrive. Groups and inline destinations
+receive supported rich message edits. The final
 answer is persisted independently, with its original reply and topic reference.
 A failed preview disables further previews for that request while final delivery
 continues; final edits can be retried once without restarting generation or tools.

@@ -87,7 +87,7 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 	switch {
 	case s.inlineMessageID != "":
 		err = s.editPreview(ctx, 0, s.inlineMessageID, preview)
-	case s.chatID > 0:
+	case s.chatID > 0 && !s.channel.config.Agents.Defaults.IsToolFeedbackEnabled():
 		err = s.channel.bot.SendRichMessageDraft(
 			ctx,
 			&telego.SendRichMessageDraftParams{

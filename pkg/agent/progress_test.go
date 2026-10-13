@@ -17,6 +17,42 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
+func TestMessageToolSendsReplyWithoutActivity(t *testing.T) {
+	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	al.registry.GetDefaultAgent().Provider = &activityFileProvider{
+		tool: "message", arguments: map[string]any{"content": "Delivered reply"},
+	}
+	var sent []string
+	message := tools.NewMessageTool()
+	message.SetSendCallback(func(_ context.Context, _, _, content string) error {
+		sent = append(sent, content)
+		return nil
+	})
+	al.RegisterTool(message)
+	_, err := al.runAgentLoop(t.Context(), al.registry.GetDefaultAgent(), processOptions{
+		SessionKey: "message-activity", Channel: "telegram", ChatID: "123",
+		PeerKind: "direct", UserMessage: "send reply", SendResponse: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 1 || sent[0] != "Delivered reply" {
+		t.Fatalf("message delivery changed: %v", sent)
+	}
+	for {
+		select {
+		case msg := <-mb.OutboundChan():
+			if msg.Progress != nil {
+				t.Fatalf("message delivery created redundant activity: %+v", msg.Progress)
+			}
+		default:
+			return
+		}
+	}
+}
+
 func TestTelegramToolProgressAndFinalReplyAreIndependent(t *testing.T) {
 	for _, peer := range []string{"direct", "group"} {
 		t.Run(peer, func(t *testing.T) {

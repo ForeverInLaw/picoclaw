@@ -129,6 +129,9 @@ func (m *Manager) SendPlaceholder(ctx context.Context, channel, chatID string) b
 // channel/chat without consuming it, so the final outbound response can still
 // replace the same placeholder later in preSend.
 func (m *Manager) UpdatePlaceholder(ctx context.Context, channel, chatID, content string) bool {
+	if channel == "telegram" && m.config != nil && m.config.Agents.Defaults.IsToolFeedbackEnabled() {
+		return false
+	}
 	key := channel + ":" + chatID
 
 	m.mu.RLock()
@@ -228,6 +231,12 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	// 4. Try editing placeholder
 	if v, loaded := m.placeholders.LoadAndDelete(key); loaded {
 		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
+			if name == "telegram" && m.config != nil && m.config.Agents.Defaults.IsToolFeedbackEnabled() {
+				if deleter, ok := ch.(MessageDeleter); ok {
+					_ = deleter.DeleteMessage(ctx, msg.ChatID, entry.id)
+				}
+				return false
+			}
 			if editor, ok := ch.(ReplyEditor); ok {
 				if err := editor.EditReply(ctx, msg, entry.id); err == nil {
 					return true

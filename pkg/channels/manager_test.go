@@ -12,6 +12,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 // mockChannel is a test double that delegates Send to a configurable function.
@@ -441,6 +442,36 @@ type mockMessageEditor struct {
 
 func (m *mockMessageEditor) EditMessage(ctx context.Context, chatID, messageID, content string) error {
 	return m.editFn(ctx, chatID, messageID, content)
+}
+
+func TestTelegramToolFeedbackKeepsAnswerOutOfOldPlaceholder(t *testing.T) {
+	for _, feedback := range []bool{false, true} {
+		t.Run(fmt.Sprint(feedback), func(t *testing.T) {
+			m := newTestManager()
+			m.config = config.DefaultConfig()
+			m.config.Agents.Defaults.ToolFeedback.Enabled = feedback
+			ch := &mockChannel{sendFn: func(context.Context, bus.OutboundMessage) error { return nil }}
+			m.channels["telegram"] = ch
+			m.RecordPlaceholder("telegram", "123", "old-placeholder")
+			updated := m.UpdatePlaceholder(t.Context(), "telegram", "123", "partial answer")
+			if updated == feedback {
+				t.Fatalf("placeholder preview updated=%v with feedback=%v", updated, feedback)
+			}
+			ch.editedMessages = 0
+			err := m.sendWithRetry(t.Context(), "telegram", newChannelWorker("telegram", ch), bus.OutboundMessage{
+				Channel: "telegram", ChatID: "123", Content: "Final answer",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if feedback && (ch.editedMessages != 0 || len(ch.sentMessages) != 1) {
+				t.Fatal("answer must be sent as a new message after tool activity")
+			}
+			if !feedback && (ch.editedMessages != 1 || len(ch.sentMessages) != 0) {
+				t.Fatal("placeholder behavior changed without tool feedback")
+			}
+		})
+	}
 }
 
 func TestPreSend_PlaceholderEditSuccess(t *testing.T) {

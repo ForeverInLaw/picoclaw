@@ -124,6 +124,13 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 
 	updates, err := c.bot.UpdatesViaLongPolling(c.ctx, &telego.GetUpdatesParams{
 		Timeout: 30,
+		// Guest mentions require an explicit subscription, unlike ordinary messages.
+		AllowedUpdates: []string{
+			"message", "edited_message", "channel_post", "edited_channel_post",
+			"business_connection", "business_message", "edited_business_message", "deleted_business_messages",
+			"guest_message", "callback_query", "inline_query", "chosen_inline_result",
+			"shipping_query", "pre_checkout_query", "my_chat_member",
+		},
 	})
 	if err != nil {
 		c.cancel()
@@ -140,6 +147,9 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
+	bh.HandleGuestMessage(func(ctx *th.Context, message telego.Message) error {
+		return c.handleGuestMessage(ctx, message)
+	})
 	bh.HandleInlineQuery(func(ctx *th.Context, query telego.InlineQuery) error {
 		return c.handleInlineQuery(ctx, query)
 	})

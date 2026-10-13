@@ -120,6 +120,41 @@ func buildTelegramInlineInboundMessage(result telego.ChosenInlineResult, sender 
 	}
 }
 
+// Guest mentions publish directly into their destination and then use the same
+// isolated conversation and retained-answer lifecycle as selected inline results.
+func (c *TelegramChannel) handleGuestMessage(ctx *th.Context, msg telego.Message) error {
+	if !c.config.Channels.Telegram.Inline.Enabled || strings.TrimSpace(msg.GuestQueryID) == "" || msg.From == nil {
+		return nil
+	}
+	sender := c.telegramSenderInfo(msg.From)
+	if !c.IsAllowedSender(sender) {
+		return nil
+	}
+	query := strings.TrimSpace(msg.Text)
+	if query == "" {
+		query = strings.TrimSpace(msg.Caption)
+	}
+	if query == "" {
+		return nil
+	}
+	result := buildTelegramInlineQueryResult(c.config.Channels.Telegram.Inline, "", c.config.Channels.Telegram.UseMarkdownV2).(*telego.InlineQueryResultArticle)
+	result.ReplyMarkup = nil
+	answered, err := c.bot.AnswerGuestQuery(ctx, &telego.AnswerGuestQueryParams{
+		GuestQueryID: msg.GuestQueryID,
+		Result:       result,
+	})
+	if err != nil {
+		return fmt.Errorf("answer guest query: %w", err)
+	}
+	if answered == nil || strings.TrimSpace(answered.InlineMessageID) == "" {
+		return fmt.Errorf("answer guest query returned no inline message ID")
+	}
+	return c.handleChosenInlineResult(ctx, telego.ChosenInlineResult{
+		ResultID: result.ID, InlineMessageID: answered.InlineMessageID,
+		Query: query, From: *msg.From,
+	})
+}
+
 func (c *TelegramChannel) handleInlineQuery(ctx *th.Context, query telego.InlineQuery) error {
 	inlineCfg := c.config.Channels.Telegram.Inline
 	if !inlineCfg.Enabled {
