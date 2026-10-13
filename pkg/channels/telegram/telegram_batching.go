@@ -87,7 +87,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 
 	chatIDStr := fmt.Sprintf("%d", chatID)
 	messageIDStr := fmt.Sprintf("%d", message.MessageID)
-	scope := channels.BuildMediaScope("telegram", chatIDStr, messageIDStr)
+	scope := channels.BuildMediaScope(c.Name(), chatIDStr, messageIDStr)
 
 	storeMedia := func(localPath, filename string) string {
 		if store := c.GetMediaStore(); store != nil {

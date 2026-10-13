@@ -31,13 +31,24 @@ func inlineConversationKey(agentID, userID string) string {
 	return fmt.Sprintf("agent:%s:telegram:inline:user:%s", agentID, userID)
 }
 
+func inlineConversationKeyForChannel(agentID, userID, channel string) string {
+	if channel == "telegram" {
+		return inlineConversationKey(agentID, userID)
+	}
+	return fmt.Sprintf("agent:%s:%s:inline:user:%s", agentID, channel, userID)
+}
+
+func isTelegramMessage(msg bus.InboundMessage) bool {
+	return msg.Channel == "telegram" || msg.Sender.Platform == "telegram"
+}
+
 var inlineSafeTools = []string{"web_search", "web_fetch", "fact_check"}
 
 func isInlineMessage(msg bus.InboundMessage) bool {
 	if strings.EqualFold(msg.Metadata[telegramInlineMetadataKey], "true") {
 		return true
 	}
-	return msg.Channel == "telegram" && strings.HasPrefix(strings.TrimSpace(msg.ChatID), "inline:")
+	return isTelegramMessage(msg) && strings.HasPrefix(strings.TrimSpace(msg.ChatID), "inline:")
 }
 
 func inlineToolAllowlist() []string {

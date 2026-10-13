@@ -118,7 +118,7 @@ function isConfigured(
   channel: SupportedChannel,
   config: ChannelConfig,
 ): boolean {
-  switch (channel.name) {
+  switch (channel.type ?? channel.name) {
     case "telegram":
       return asString(config.token) !== ""
     case "discord":
@@ -323,7 +323,7 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
     const base = language.startsWith("zh")
       ? "https://docs.picoclaw.io/zh-Hans/docs/channels"
       : "https://docs.picoclaw.io/docs/channels"
-    return `${base}/${getChannelDocSlug(channel.name)}`
+    return `${base}/${getChannelDocSlug(channel.type ?? channel.name)}`
   }, [channel, i18n.language, i18n.resolvedLanguage])
 
   const channelDisplayName = useMemo(() => {
@@ -409,7 +409,7 @@ export function ChannelConfigPage({ channelName }: ChannelConfigPageProps) {
     if (!channel) return null
     const isEdit = configured
 
-    switch (channel.name) {
+    switch (channel.type ?? channel.name) {
       case "telegram":
         return (
           <TelegramForm

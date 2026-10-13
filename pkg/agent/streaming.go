@@ -43,7 +43,16 @@ type streamDelegateGetter interface {
 }
 
 func newPartialReplyUpdater(manager placeholderUpdater, channel, chatID string) *partialReplyUpdater {
-	if isNilPlaceholderUpdater(manager) || channel != "telegram" || chatID == "" ||
+	if isNilPlaceholderUpdater(manager) {
+		return nil
+	}
+	isTelegram := channel == "telegram"
+	if registry, ok := manager.(interface {
+		IsChannelType(name, channelType string) bool
+	}); ok {
+		isTelegram = registry.IsChannelType(channel, "telegram")
+	}
+	if !isTelegram || chatID == "" ||
 		constants.IsInternalChannel(channel) {
 		return nil
 	}
@@ -147,7 +156,7 @@ func selectStreamingTargets(
 		}
 	}
 	updater := newPartialReplyUpdater(manager, channel, chatID)
-	if channel == "telegram" && strings.HasPrefix(strings.TrimSpace(chatID), "inline:") {
+	if strings.HasPrefix(strings.TrimSpace(chatID), "inline:") {
 		updater = nil
 	}
 	return nil, updater

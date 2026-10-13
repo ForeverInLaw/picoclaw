@@ -87,6 +87,7 @@ type BaseChannel struct {
 	bus                 *bus.MessageBus
 	running             atomic.Bool
 	name                string
+	channelType         string
 	allowList           []string
 	maxMessageLength    int
 	groupTrigger        config.GroupTriggerConfig
@@ -104,10 +105,11 @@ func NewBaseChannel(
 	opts ...BaseChannelOption,
 ) *BaseChannel {
 	bc := &BaseChannel{
-		config:    config,
-		bus:       bus,
-		name:      name,
-		allowList: allowList,
+		config:      config,
+		bus:         bus,
+		name:        name,
+		channelType: name,
+		allowList:   allowList,
 	}
 	for _, opt := range opts {
 		opt(bc)
@@ -161,6 +163,10 @@ func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bo
 	return true, strings.TrimSpace(content)
 }
 
+func (c *BaseChannel) SetName(name string) { c.name = name }
+
+func (c *BaseChannel) Type() string { return c.channelType }
+
 func (c *BaseChannel) Name() string {
 	return c.name
 }
@@ -178,6 +184,7 @@ func (c *BaseChannel) PublishOutbound(ctx context.Context, msg bus.OutboundMessa
 }
 
 func (c *BaseChannel) PublishInbound(ctx context.Context, msg bus.InboundMessage) error {
+	msg.Channel = c.name
 	return c.bus.PublishInbound(ctx, msg)
 }
 
@@ -319,7 +326,7 @@ func (c *BaseChannel) HandleMessage(
 		}
 	}
 
-	if err := c.bus.PublishInbound(ctx, msg); err != nil {
+	if err := c.PublishInbound(ctx, msg); err != nil {
 		logger.ErrorCF("channels", "Failed to publish inbound message", map[string]any{
 			"channel": c.name,
 			"chat_id": chatID,

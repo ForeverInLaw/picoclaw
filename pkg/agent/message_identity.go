@@ -9,7 +9,7 @@ import (
 
 func buildConversationUserMessage(msg bus.InboundMessage) string {
 	content := strings.TrimSpace(msg.Content)
-	if msg.Channel != "telegram" || msg.Metadata == nil || msg.Metadata["is_group"] != "true" {
+	if !isTelegramMessage(msg) || msg.Metadata == nil || msg.Metadata["is_group"] != "true" {
 		return content
 	}
 

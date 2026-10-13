@@ -433,7 +433,7 @@ func initChatMemoryService(
 			log.Printf("chatmemory: embedding model %q not found: %v", defaults.MemoryIndex.Embeddings.ModelName, err)
 		}
 	}
-	return chatmemory.New(idx, defaults.MemoryIndex, embedder)
+	return chatmemory.New(idx, defaults.MemoryIndex, embedder, cfg.EffectiveChannelList())
 }
 
 func expandHome(path string) string {

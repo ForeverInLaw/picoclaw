@@ -1477,7 +1477,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	agent.Tools.ResetRoundDeliveries()
 
 	// Resolve session key from route, while preserving explicit agent-scoped keys.
-	sessionKey, keyErr := messageConversationKey(msg, route, agent)
+	sessionKey, keyErr := al.messageConversationKey(msg, route, agent)
 	if keyErr != nil {
 		return "", keyErr
 	}
@@ -1588,13 +1588,21 @@ func resolveScopeKey(route routing.ResolvedRoute, msgSessionKey string) string {
 	return route.SessionKey
 }
 
-func messageConversationKey(msg bus.InboundMessage, route routing.ResolvedRoute, agent *AgentInstance) (string, error) {
+func (al *AgentLoop) messageConversationKey(
+	msg bus.InboundMessage,
+	route routing.ResolvedRoute,
+	agent *AgentInstance,
+) (string, error) {
 	if isInlineMessage(msg) {
 		uid := telegramUserID(msg)
 		if uid == "" {
 			return "", fmt.Errorf("inline conversation requires a Telegram user identity")
 		}
-		return inlineConversationKey(agent.ID, uid), nil
+		return inlineConversationKeyForChannel(agent.ID, uid, msg.Channel), nil
+	}
+	if al.cfg.IsNamedChannel(msg.Channel) && msg.SessionKey != "" &&
+		!strings.HasPrefix(msg.SessionKey, "agent:"+agent.ID+":"+msg.Channel+":") {
+		return route.SessionKey, nil
 	}
 	return resolveScopeKey(route, msg.SessionKey), nil
 }
@@ -1609,7 +1617,7 @@ func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, stri
 		return "", "", false
 	}
 
-	key, err := messageConversationKey(msg, route, agent)
+	key, err := al.messageConversationKey(msg, route, agent)
 	return key, agent.ID, err == nil
 }
 
@@ -1708,7 +1716,7 @@ func (al *AgentLoop) runAgentLoop(
 	// Record last channel for heartbeat notifications (skip internal channels and cli)
 	if opts.Channel != "" && opts.ChatID != "" &&
 		!constants.IsInternalChannel(opts.Channel) &&
-		!(opts.Channel == "telegram" && strings.HasPrefix(strings.TrimSpace(opts.ChatID), "inline:")) {
+		!(al.cfg.IsChannelType(opts.Channel, "telegram") && strings.HasPrefix(strings.TrimSpace(opts.ChatID), "inline:")) {
 		channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
 		if recordErr := al.RecordLastChannel(channelKey); recordErr != nil {
 			logger.WarnCF(
@@ -3787,9 +3795,13 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 
 			return al.resetConversation(agent, opts.SessionKey)
 		}
-		if opts != nil && opts.Channel == "telegram" && opts.PeerKind == "direct" && opts.TelegramUserID != "" {
+		if opts != nil && al.cfg.IsChannelType(opts.Channel, "telegram") && opts.PeerKind == "direct" &&
+			opts.TelegramUserID != "" {
 			rt.ClearInlineHistory = func() error {
-				return al.resetConversation(agent, inlineConversationKey(agent.ID, opts.TelegramUserID))
+				return al.resetConversation(
+					agent,
+					inlineConversationKeyForChannel(agent.ID, opts.TelegramUserID, opts.Channel),
+				)
 			}
 		}
 	}

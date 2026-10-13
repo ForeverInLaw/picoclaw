@@ -38,7 +38,7 @@ func (al *AgentLoop) handleActiveReset(ctx context.Context, msg bus.InboundMessa
 	if err != nil {
 		return false
 	}
-	key, err := messageConversationKey(msg, route, agent)
+	key, err := al.messageConversationKey(msg, route, agent)
 	if err != nil {
 		return false
 	}

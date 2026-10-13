@@ -396,7 +396,7 @@ func buildExecEnv(ctx context.Context) []string {
 	if strings.TrimSpace(sender.Username) != "" {
 		env = append(env, "PICOCLAW_SENDER_USERNAME="+sender.Username)
 	}
-	if channel == "telegram" && chatID != "" {
+	if (channel == "telegram" || sender.Platform == "telegram") && chatID != "" {
 		env = append(env, "TELEGRAM_CHAT_ID="+chatID)
 	}
 

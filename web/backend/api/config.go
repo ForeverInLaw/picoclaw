@@ -125,6 +125,42 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Recursively merge patch into base
+	// Existing channel forms submit flat adapter fields; translate them at this
+	// boundary while the HTTP configuration document remains canonical v3.
+	if legacy, ok := patch["channels"].(map[string]any); ok {
+		converted := map[string]any{}
+		for name, value := range legacy {
+			if value == nil {
+				converted[name] = nil
+				continue
+			}
+			fields, ok := value.(map[string]any)
+			if !ok {
+				http.Error(w, "Channel patch must be an object", http.StatusBadRequest)
+				return
+			}
+			entry := map[string]any{}
+			settings := map[string]any{}
+			for key, value := range fields {
+				if _, common := config.BaseFieldNames[key]; common {
+					entry[key] = value
+				} else {
+					settings[key] = value
+				}
+			}
+			if cfg.EffectiveChannelList()[name] == nil {
+				entry["type"] = name
+			}
+			entry["settings"] = settings
+			converted[name] = entry
+		}
+		delete(patch, "channels")
+		if _, mixed := patch["channel_list"]; mixed {
+			http.Error(w, "Use only one channel patch schema", http.StatusBadRequest)
+			return
+		}
+		patch["channel_list"] = converted
+	}
 	mergeMap(base, patch)
 
 	// Convert merged map back to Config struct
@@ -163,6 +199,10 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 // Returns a list of human-readable error strings; empty means valid.
 func validateConfig(cfg *config.Config) []string {
 	var errs []string
+	if err := cfg.ValidateChannels(); err != nil {
+		errs = append(errs, err.Error())
+		return errs
+	}
 
 	// Validate model_list entries
 	if err := cfg.ValidateModelList(); err != nil {
@@ -174,19 +214,21 @@ func validateConfig(cfg *config.Config) []string {
 		errs = append(errs, fmt.Sprintf("gateway.port %d is out of valid range (1-65535)", cfg.Gateway.Port))
 	}
 
-	// Pico channel: token required when enabled
-	if cfg.Channels.Pico.Enabled && cfg.Channels.Pico.Token == "" {
-		errs = append(errs, "channels.pico.token is required when pico channel is enabled")
-	}
-
-	// Telegram: token required when enabled
-	if cfg.Channels.Telegram.Enabled && cfg.Channels.Telegram.Token == "" {
-		errs = append(errs, "channels.telegram.token is required when telegram channel is enabled")
-	}
-
-	// Discord: token required when enabled
-	if cfg.Channels.Discord.Enabled && cfg.Channels.Discord.Token == "" {
-		errs = append(errs, "channels.discord.token is required when discord channel is enabled")
+	for name, ch := range cfg.EffectiveChannelList() {
+		if !ch.Enabled {
+			continue
+		}
+		instance, err := cfg.ChannelConfig(name)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		missingToken := ch.Type == "pico" && instance.Channels.Pico.Token == "" ||
+			ch.Type == "telegram" && instance.Channels.Telegram.Token == "" ||
+			ch.Type == "discord" && instance.Channels.Discord.Token == ""
+		if missingToken {
+			errs = append(errs, fmt.Sprintf("channel_list.%s.settings.token is required when enabled", name))
+		}
 	}
 
 	if cfg.Tools.Exec.Enabled {
