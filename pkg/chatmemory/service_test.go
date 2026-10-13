@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,76 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
 )
+
+func TestService_SummarizeRefreshesPartialHoursWithoutDuplicatePersistedRollups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.sqlite")
+	idx, err := memoryindex.Open(path, memoryindex.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
+	hour := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for _, observation := range []memoryindex.Observation{
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "PREVIOUS_HOUR", CreatedAt: hour.Add(-50 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "EARLY_MARKER", CreatedAt: hour.Add(5 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "LATE_MARKER", CreatedAt: hour.Add(40 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "FUTURE_MARKER", CreatedAt: hour.Add(65 * time.Minute)},
+		{Channel: "telegram", ChatID: "private-neighbor", PeerKind: "direct", Role: "user", Content: "PRIVATE_MARKER", CreatedAt: hour.Add(10 * time.Minute)},
+	} {
+		if err := idx.AddObservation(t.Context(), observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := SummaryRequest{
+		RequesterID:    "telegram:42",
+		CurrentChannel: "telegram",
+		CurrentChatID:  "-1",
+		CurrentPeer:    "group",
+		SinceHours:     2,
+	}
+	settings := config.MemoryIndexConfig{
+		Enabled: true,
+		Rollups: config.MemoryRollupConfig{Enabled: true, HourlySampleSize: 6},
+	}
+	for _, minute := range []int{30, 31, 45, 30} {
+		service := New(idx, settings, nil)
+		now := hour.Add(time.Duration(minute) * time.Minute)
+		service.now = func() time.Time { return now }
+		summary, err := service.Summarize(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(summary, "EARLY_MARKER") != 1 || !strings.Contains(summary, "PREVIOUS_HOUR") ||
+			strings.Contains(
+				summary,
+				"LATE_MARKER",
+			) != (minute > 40) || strings.Contains(summary, "FUTURE_MARKER") || strings.Contains(summary, "PRIVATE_MARKER") {
+			t.Fatalf(
+				"summary at minute%d duplicated an hour or crossed the request's time/chat boundary: %s",
+				minute,
+				summary,
+			)
+		}
+		rows, err := idx.ListChatRollups(
+			t.Context(),
+			memoryindex.ChatScope{Channel: "telegram", ChatID: "-1"},
+			memoryindex.TimeWindow{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 2 || !rows[1].WindowEnd.Equal(now) {
+			t.Fatalf("persisted rollups at minute%d=%+v", minute, rows)
+		}
+		if err := idx.Close(); err != nil {
+			t.Fatal(err)
+		}
+		idx, err = memoryindex.Open(path, memoryindex.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestService_Summarize_ResolvesAccessibleGroupByLabel(t *testing.T) {
 	idx, err := memoryindex.Open(t.TempDir()+"\\index.sqlite", memoryindex.Config{
