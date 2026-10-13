@@ -115,6 +115,8 @@ The web-fetch guard blocks the benchmark range `198.18.0.0/15` alongside private
 
 The exec tool is used to execute shell commands.
 
+With workspace restriction enabled, network targets such as `example.com/path` and `wttr.in/Beijing?T` are recognized alongside URLs with a scheme. A domain-like prefix is exempt only when it does not exist as a local filesystem entry; real absolute paths, traversal, and `file:` URLs retain their workspace checks. Disabling workspace restriction keeps its existing behavior.
+
 | Config                 | Type  | Default | Description                                |
 |------------------------|-------|---------|--------------------------------------------|
 | `enabled`              | bool  | true    | Enable the exec tool                        |
