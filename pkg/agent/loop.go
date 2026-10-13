@@ -114,7 +114,6 @@ const (
 	metadataKeyTeamID         = "team_id"
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
-	requeueYieldDelay         = 10 * time.Millisecond
 )
 
 func NewAgentLoop(
@@ -412,187 +411,179 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		return err
 	}
 
+	var queued []bus.InboundMessage
 	for al.running.Load() {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return nil
-		case msg, ok := <-al.bus.InboundChan():
-			if !ok {
+		}
+		var msg bus.InboundMessage
+		if len(queued) > 0 {
+			msg = queued[0]
+			queued[0] = bus.InboundMessage{}
+			queued = queued[1:]
+		} else {
+			select {
+			case <-ctx.Done():
 				return nil
+			case next, ok := <-al.bus.InboundChan():
+				if !ok {
+					return nil
+				}
+				msg = next
 			}
+		}
+		// Start a goroutine that drains the bus while processMessage is
+		// running. Only messages that resolve to the active turn scope are
+		// redirected into steering; other inbound messages are requeued.
+		drainCancel := func() {}
+		var drainDone <-chan []bus.InboundMessage
+		if activeScope, activeAgentID, ok := al.resolveSteeringTarget(msg); ok {
+			drainCtx, cancel := context.WithCancel(ctx)
+			drainCancel = cancel
+			done := make(chan []bus.InboundMessage, 1)
+			drainDone = done
+			go func() { done <- al.drainBusToSteering(drainCtx, activeScope, activeAgentID) }()
+		}
 
-			// Start a goroutine that drains the bus while processMessage is
-			// running. Only messages that resolve to the active turn scope are
-			// redirected into steering; other inbound messages are requeued.
-			drainCancel := func() {}
-			if activeScope, activeAgentID, ok := al.resolveSteeringTarget(msg); ok {
-				drainCtx, cancel := context.WithCancel(ctx)
-				drainCancel = cancel
-				go al.drainBusToSteering(drainCtx, activeScope, activeAgentID)
-			}
-
-			// Process message
-			func() {
-				defer func() {
-					if al.channelManager != nil {
-						al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
-					}
-				}()
-				// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
-				// Currently disabled because files are deleted before the LLM can access their content.
-				// defer func() {
-				// 	if al.mediaStore != nil && msg.MediaScope != "" {
-				// 		if releaseErr := al.mediaStore.ReleaseAll(msg.MediaScope); releaseErr != nil {
-				// 			logger.WarnCF("agent", "Failed to release media", map[string]any{
-				// 				"scope": msg.MediaScope,
-				// 				"error": releaseErr.Error(),
-				// 			})
-				// 		}
-				// 	}
-				// }()
-
-				drainCanceled := false
-				cancelDrain := func() {
-					if drainCanceled {
-						return
-					}
-					drainCancel()
-					drainCanceled = true
-				}
-				defer cancelDrain()
-
-				response, err := al.processMessage(ctx, msg)
-				if err != nil {
-					response = fmt.Sprintf("Error processing message: %v", err)
-				}
-				finalResponse := response
-
-				target, targetErr := al.buildContinuationTarget(msg)
-				if targetErr != nil {
-					logger.WarnCF("agent", "Failed to build steering continuation target",
-						map[string]any{
-							"channel": msg.Channel,
-							"error":   targetErr.Error(),
-						})
-					return
-				}
-				if target == nil {
-					cancelDrain()
-					if finalResponse != "" {
-						al.publishResponseIfNeeded(ctx, msg.Channel, msg.ChatID, finalResponse)
-					}
-					return
-				}
-
-				for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
-					logger.InfoCF("agent", "Continuing queued steering after turn end",
-						map[string]any{
-							"channel":     target.Channel,
-							"chat_id":     target.ChatID,
-							"session_key": target.SessionKey,
-							"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
-						})
-
-					continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
-					if continueErr != nil {
-						logger.WarnCF("agent", "Failed to continue queued steering",
-							map[string]any{
-								"channel": target.Channel,
-								"chat_id": target.ChatID,
-								"error":   continueErr.Error(),
-							})
-						return
-					}
-					if continued == "" {
-						return
-					}
-
-					finalResponse = continued
-				}
-
-				cancelDrain()
-
-				for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
-					logger.InfoCF("agent", "Draining steering queued during turn shutdown",
-						map[string]any{
-							"channel":     target.Channel,
-							"chat_id":     target.ChatID,
-							"session_key": target.SessionKey,
-							"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
-						})
-
-					continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
-					if continueErr != nil {
-						logger.WarnCF("agent", "Failed to continue queued steering after shutdown drain",
-							map[string]any{
-								"channel": target.Channel,
-								"chat_id": target.ChatID,
-								"error":   continueErr.Error(),
-							})
-						return
-					}
-					if continued == "" {
-						break
-					}
-
-					finalResponse = continued
-				}
-
-				if finalResponse != "" {
-					al.publishResponseIfNeeded(ctx, target.Channel, target.ChatID, finalResponse)
+		// Process message
+		func() {
+			defer func() {
+				if al.channelManager != nil {
+					al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
 				}
 			}()
-		default:
-			time.Sleep(time.Microsecond * 200)
-		}
+			// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
+			// Currently disabled because files are deleted before the LLM can access their content.
+			// defer func() {
+			// 	if al.mediaStore != nil && msg.MediaScope != "" {
+			// 		if releaseErr := al.mediaStore.ReleaseAll(msg.MediaScope); releaseErr != nil {
+			// 			logger.WarnCF("agent", "Failed to release media", map[string]any{
+			// 				"scope": msg.MediaScope,
+			// 				"error": releaseErr.Error(),
+			// 			})
+			// 		}
+			// 	}
+			// }()
+
+			drainCanceled := false
+			cancelDrain := func() {
+				if drainCanceled {
+					return
+				}
+				drainCancel()
+				if drainDone != nil {
+					queued = append(queued, (<-drainDone)...)
+				}
+				drainCanceled = true
+			}
+			defer cancelDrain()
+
+			response, err := al.processMessage(ctx, msg)
+			if err != nil {
+				response = fmt.Sprintf("Error processing message: %v", err)
+			}
+			finalResponse := response
+
+			target, targetErr := al.buildContinuationTarget(msg)
+			if targetErr != nil {
+				logger.WarnCF("agent", "Failed to build steering continuation target",
+					map[string]any{
+						"channel": msg.Channel,
+						"error":   targetErr.Error(),
+					})
+				return
+			}
+			if target == nil {
+				cancelDrain()
+				if finalResponse != "" {
+					al.publishResponseIfNeeded(ctx, msg.Channel, msg.ChatID, finalResponse)
+				}
+				return
+			}
+
+			for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
+				logger.InfoCF("agent", "Continuing queued steering after turn end",
+					map[string]any{
+						"channel":     target.Channel,
+						"chat_id":     target.ChatID,
+						"session_key": target.SessionKey,
+						"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
+					})
+
+				continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
+				if continueErr != nil {
+					logger.WarnCF("agent", "Failed to continue queued steering",
+						map[string]any{
+							"channel": target.Channel,
+							"chat_id": target.ChatID,
+							"error":   continueErr.Error(),
+						})
+					return
+				}
+				if continued == "" {
+					return
+				}
+
+				finalResponse = continued
+			}
+
+			cancelDrain()
+
+			for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
+				logger.InfoCF("agent", "Draining steering queued during turn shutdown",
+					map[string]any{
+						"channel":     target.Channel,
+						"chat_id":     target.ChatID,
+						"session_key": target.SessionKey,
+						"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
+					})
+
+				continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
+				if continueErr != nil {
+					logger.WarnCF("agent", "Failed to continue queued steering after shutdown drain",
+						map[string]any{
+							"channel": target.Channel,
+							"chat_id": target.ChatID,
+							"error":   continueErr.Error(),
+						})
+					return
+				}
+				if continued == "" {
+					break
+				}
+
+				finalResponse = continued
+			}
+
+			if finalResponse != "" {
+				al.publishResponseIfNeeded(ctx, target.Channel, target.ChatID, finalResponse)
+			}
+		}()
 	}
 
 	return nil
 }
 
 // drainBusToSteering consumes inbound messages and redirects messages from the
-// active scope into the steering queue. Messages from other scopes are requeued
-// so they can be processed normally after the active turn. It drains all
-// immediately available messages, blocking for the first one until ctx is done.
-func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, activeAgentID string) {
-	blocking := true
+// active scope into the steering queue. Other requests retain their complete
+// transport envelope in FIFO order until the active turn completes.
+func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, activeAgentID string) []bus.InboundMessage {
+	var queued []bus.InboundMessage
 	for {
 		var msg bus.InboundMessage
-
-		if blocking {
-			// Block waiting for the first available message or ctx cancellation.
-			select {
-			case <-ctx.Done():
-				return
-			case m, ok := <-al.bus.InboundChan():
-				if !ok {
-					return
-				}
-				msg = m
+		select {
+		case <-ctx.Done():
+			return queued
+		case next, ok := <-al.bus.InboundChan():
+			if !ok {
+				return queued
 			}
-		} else {
-			// Non-blocking: drain any remaining queued messages, return when empty.
-			select {
-			case m, ok := <-al.bus.InboundChan():
-				if !ok {
-					return
-				}
-				msg = m
-			default:
-				return
-			}
+			msg = next
 		}
-		blocking = false
 
 		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
-		if !scopeOK || msgScope != activeScope {
-			if err := al.requeueInboundMessage(msg); err != nil {
-				logger.WarnCF("agent", "Failed to requeue non-steering inbound message", map[string]any{
-					"error":     err.Error(),
-					"channel":   msg.Channel,
-					"sender_id": msg.SenderID,
-				})
-			}
+		if !scopeOK || msgScope != activeScope || isInlineMessage(msg) || strings.Contains(activeScope, ":telegram:inline:user:") {
+			queued = append(queued, msg)
 			continue
 		}
 
@@ -1372,15 +1363,11 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	agent.Tools.ResetRoundDeliveries()
 
 	// Resolve session key from route, while preserving explicit agent-scoped keys.
-	scopeKey := resolveScopeKey(route, msg.SessionKey)
-	sessionKey := scopeKey
-	if inlineMode {
-		uid := telegramUserID(msg)
-		if uid == "" {
-			return "", fmt.Errorf("inline conversation requires a Telegram user identity")
-		}
-		sessionKey = inlineConversationKey(agent.ID, uid)
+	sessionKey, keyErr := messageConversationKey(msg, route, agent)
+	if keyErr != nil {
+		return "", keyErr
 	}
+	scopeKey := sessionKey
 
 	logger.InfoCF("agent", "Routed message",
 		map[string]any{
@@ -1482,6 +1469,17 @@ func resolveScopeKey(route routing.ResolvedRoute, msgSessionKey string) string {
 	return route.SessionKey
 }
 
+func messageConversationKey(msg bus.InboundMessage, route routing.ResolvedRoute, agent *AgentInstance) (string, error) {
+	if isInlineMessage(msg) {
+		uid := telegramUserID(msg)
+		if uid == "" {
+			return "", fmt.Errorf("inline conversation requires a Telegram user identity")
+		}
+		return inlineConversationKey(agent.ID, uid), nil
+	}
+	return resolveScopeKey(route, msg.SessionKey), nil
+}
+
 func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, string, bool) {
 	if msg.Channel == "system" {
 		return "", "", false
@@ -1492,26 +1490,8 @@ func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, stri
 		return "", "", false
 	}
 
-	return resolveScopeKey(route, msg.SessionKey), agent.ID, true
-}
-
-func (al *AgentLoop) requeueInboundMessage(msg bus.InboundMessage) error {
-	if al.bus == nil {
-		return nil
-	}
-	go func(requeued bus.InboundMessage) {
-		time.Sleep(requeueYieldDelay)
-		pubCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := al.bus.PublishInbound(pubCtx, requeued); err != nil {
-			logger.WarnCF("agent", "Failed to publish requeued inbound message", map[string]any{
-				"error":   err.Error(),
-				"channel": requeued.Channel,
-				"chat_id": requeued.ChatID,
-			})
-		}
-	}(msg)
-	return nil
+	key, err := messageConversationKey(msg, route, agent)
+	return key, agent.ID, err == nil
 }
 
 func (al *AgentLoop) processSystemMessage(
