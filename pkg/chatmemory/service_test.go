@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,130 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
 )
+
+func TestService_SummarizeRefreshesPartialHoursWithoutDuplicatePersistedRollups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.sqlite")
+	idx, err := memoryindex.Open(path, memoryindex.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
+	hour := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for _, observation := range []memoryindex.Observation{
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "PREVIOUS_HOUR", CreatedAt: hour.Add(-50 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "EARLY_MARKER", CreatedAt: hour.Add(5 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "LATE_MARKER", CreatedAt: hour.Add(40 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "FUTURE_MARKER", CreatedAt: hour.Add(65 * time.Minute)},
+		{Channel: "telegram", ChatID: "private-neighbor", PeerKind: "direct", Role: "user", Content: "PRIVATE_MARKER", CreatedAt: hour.Add(10 * time.Minute)},
+	} {
+		if err := idx.AddObservation(t.Context(), observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := SummaryRequest{
+		RequesterID:    "telegram:42",
+		CurrentChannel: "telegram",
+		CurrentChatID:  "-1",
+		CurrentPeer:    "group",
+		SinceHours:     2,
+	}
+	settings := config.MemoryIndexConfig{
+		Enabled: true,
+		Rollups: config.MemoryRollupConfig{Enabled: true, HourlySampleSize: 6},
+	}
+	for _, minute := range []int{30, 31, 45, 30} {
+		service := New(idx, settings, nil)
+		now := hour.Add(time.Duration(minute) * time.Minute)
+		service.now = func() time.Time { return now }
+		summary, err := service.Summarize(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(summary, "EARLY_MARKER") != 1 || !strings.Contains(summary, "PREVIOUS_HOUR") ||
+			strings.Contains(
+				summary,
+				"LATE_MARKER",
+			) != (minute > 40) || strings.Contains(summary, "FUTURE_MARKER") || strings.Contains(summary, "PRIVATE_MARKER") {
+			t.Fatalf(
+				"summary at minute%d duplicated an hour or crossed the request's time/chat boundary: %s",
+				minute,
+				summary,
+			)
+		}
+		rows, err := idx.ListChatRollups(
+			t.Context(),
+			memoryindex.ChatScope{Channel: "telegram", ChatID: "-1"},
+			memoryindex.TimeWindow{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 2 || !rows[1].WindowEnd.Equal(now) {
+			t.Fatalf("persisted rollups at minute%d=%+v", minute, rows)
+		}
+		if err = idx.Close(); err != nil {
+			t.Fatal(err)
+		}
+		idx, err = memoryindex.Open(path, memoryindex.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestService_SummarizeClipsPartialStartWithoutFragmentingPersistedHours(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.sqlite")
+	idx, err := memoryindex.Open(path, memoryindex.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
+	hour := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for _, obs := range []memoryindex.Observation{
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "OUTSIDE_START", CreatedAt: hour.Add(-55 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "INSIDE_START", CreatedAt: hour.Add(-20 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "CURRENT_HOUR", CreatedAt: hour.Add(5 * time.Minute)},
+		{Channel: "telegram", ChatID: "-2", PeerKind: "group", Role: "user", Content: "PRIVATE_NEIGHBOR", CreatedAt: hour.Add(-10 * time.Minute)},
+	} {
+		if err := idx.AddObservation(t.Context(), obs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := config.MemoryIndexConfig{Rollups: config.MemoryRollupConfig{Enabled: true, HourlySampleSize: 8}}
+	req := SummaryRequest{CurrentChannel: "telegram", CurrentChatID: "-1", CurrentPeer: "group", SinceHours: 1}
+	for _, minute := range []int{30, 31, 50, 30} {
+		s := New(idx, settings, nil)
+		now := hour.Add(time.Duration(minute) * time.Minute)
+		s.now = func() time.Time { return now }
+		text, err := s.Summarize(t.Context(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(text, "OUTSIDE_START") || strings.Contains(text, "PRIVATE_NEIGHBOR") ||
+			strings.Contains(text, "INSIDE_START") != (minute < 40) ||
+			!strings.Contains(text, "CURRENT_HOUR") {
+			t.Fatalf("summary crossed an exact time/chat boundary at minute%d: %s", minute, text)
+		}
+		rows, err := idx.ListChatRollups(
+			t.Context(),
+			memoryindex.ChatScope{Channel: "telegram", ChatID: "-1"},
+			memoryindex.TimeWindow{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 2 || !rows[0].WindowStart.Equal(hour.Add(-time.Hour)) {
+			t.Fatalf("request-local partial starts fragmented canonical hours: %+v", rows)
+		}
+		if err = idx.Close(); err != nil {
+			t.Fatal(err)
+		}
+		idx, err = memoryindex.Open(path, memoryindex.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestService_Summarize_ResolvesAccessibleGroupByLabel(t *testing.T) {
 	idx, err := memoryindex.Open(t.TempDir()+"\\index.sqlite", memoryindex.Config{
@@ -24,21 +149,21 @@ func TestService_Summarize_ResolvesAccessibleGroupByLabel(t *testing.T) {
 	}
 	defer idx.Close()
 
-	if err := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
+	if catalogErr := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		PeerKind: "group",
 		Label:    "Тестовая группа",
-	}); err != nil {
-		t.Fatalf("UpsertChatCatalog() error: %v", err)
+	}); catalogErr != nil {
+		t.Fatalf("UpsertChatCatalog() error: %v", catalogErr)
 	}
-	if err := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
+	if participantErr := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		SenderID: "telegram:42",
 		Label:    "Сер",
-	}); err != nil {
-		t.Fatalf("UpsertChatParticipant() error: %v", err)
+	}); participantErr != nil {
+		t.Fatalf("UpsertChatParticipant() error: %v", participantErr)
 	}
 
 	now := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
@@ -66,8 +191,8 @@ func TestService_Summarize_ResolvesAccessibleGroupByLabel(t *testing.T) {
 			CreatedAt:  now.Add(-90 * time.Minute),
 		},
 	} {
-		if err := idx.AddObservation(t.Context(), obs); err != nil {
-			t.Fatalf("AddObservation() error: %v", err)
+		if observationErr := idx.AddObservation(t.Context(), obs); observationErr != nil {
+			t.Fatalf("AddObservation() error: %v", observationErr)
 		}
 	}
 
@@ -110,31 +235,31 @@ func TestService_Summarize_ResolvesAccessibleGroupByAliasForParticipant(t *testi
 	}
 	defer idx.Close()
 
-	if err := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
+	if catalogErr := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		PeerKind: "group",
 		Label:    "Тестовая группа",
-	}); err != nil {
-		t.Fatalf("UpsertChatCatalog() error: %v", err)
+	}); catalogErr != nil {
+		t.Fatalf("UpsertChatCatalog() error: %v", catalogErr)
 	}
-	if err := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
+	if participantErr := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		SenderID: "telegram:42",
 		Label:    "Сер",
-	}); err != nil {
-		t.Fatalf("UpsertChatParticipant() error: %v", err)
+	}); participantErr != nil {
+		t.Fatalf("UpsertChatParticipant() error: %v", participantErr)
 	}
-	if err := idx.SyncChatAliases(t.Context(), []memoryindex.ChatAliasRecord{{
+	if aliasErr := idx.SyncChatAliases(t.Context(), []memoryindex.ChatAliasRecord{{
 		Alias:   "test-group",
 		Channel: "telegram",
 		ChatID:  "-1001",
 		Label:   "Тестовая группа",
-	}}); err != nil {
-		t.Fatalf("SyncChatAliases() error: %v", err)
+	}}); aliasErr != nil {
+		t.Fatalf("SyncChatAliases() error: %v", aliasErr)
 	}
-	if err := idx.AddObservation(t.Context(), memoryindex.Observation{
+	if observationErr := idx.AddObservation(t.Context(), memoryindex.Observation{
 		SessionKey: "agent:main:telegram:group:-1001",
 		Channel:    "telegram",
 		ChatID:     "-1001",
@@ -144,8 +269,8 @@ func TestService_Summarize_ResolvesAccessibleGroupByAliasForParticipant(t *testi
 		SenderID:   "telegram:42",
 		Content:    "[telegram_group_message]\nsender_label: Сер\n\nОбсуждали alias resolution",
 		CreatedAt:  time.Now().UTC().Add(-30 * time.Minute),
-	}); err != nil {
-		t.Fatalf("AddObservation() error: %v", err)
+	}); observationErr != nil {
+		t.Fatalf("AddObservation() error: %v", observationErr)
 	}
 
 	service := New(idx, config.MemoryIndexConfig{
@@ -203,21 +328,21 @@ func TestService_Search_EmbeddingPathRespectsUntilWindow(t *testing.T) {
 	defer idx.Close()
 
 	now := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
-	if err := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
+	if catalogErr := idx.UpsertChatCatalog(t.Context(), memoryindex.ChatCatalogEntry{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		PeerKind: "group",
 		Label:    "Тестовая группа",
-	}); err != nil {
-		t.Fatalf("UpsertChatCatalog() error: %v", err)
+	}); catalogErr != nil {
+		t.Fatalf("UpsertChatCatalog() error: %v", catalogErr)
 	}
-	if err := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
+	if participantErr := idx.UpsertChatParticipant(t.Context(), memoryindex.ChatParticipantRecord{
 		Channel:  "telegram",
 		ChatID:   "-1001",
 		SenderID: "telegram:42",
 		Label:    "Сер",
-	}); err != nil {
-		t.Fatalf("UpsertChatParticipant() error: %v", err)
+	}); participantErr != nil {
+		t.Fatalf("UpsertChatParticipant() error: %v", participantErr)
 	}
 	for _, obs := range []memoryindex.Observation{
 		{
@@ -243,8 +368,8 @@ func TestService_Search_EmbeddingPathRespectsUntilWindow(t *testing.T) {
 			CreatedAt:  now.Add(-30 * time.Minute),
 		},
 	} {
-		if err := idx.AddObservation(t.Context(), obs); err != nil {
-			t.Fatalf("AddObservation() error: %v", err)
+		if observationErr := idx.AddObservation(t.Context(), obs); observationErr != nil {
+			t.Fatalf("AddObservation() error: %v", observationErr)
 		}
 	}
 
@@ -371,12 +496,24 @@ func TestService_StartupBackfill_PopulatesMissingEmbeddingsInBackground(t *testi
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		missing, err := idx.ListObservationsMissingEmbeddings(t.Context(), embedder.ModelName(), 8, embedder.MinContentChars())
+		missing, err := idx.ListObservationsMissingEmbeddings(
+			t.Context(),
+			embedder.ModelName(),
+			8,
+			embedder.MinContentChars(),
+		)
 		if err != nil {
 			t.Fatalf("ListObservationsMissingEmbeddings() error: %v", err)
 		}
 		if len(missing) == 0 {
-			rows, err := idx.LoadObservationEmbeddings(t.Context(), []memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}}, embedder.ModelName(), time.Time{}, time.Time{}, 8)
+			rows, err := idx.LoadObservationEmbeddings(
+				t.Context(),
+				[]memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}},
+				embedder.ModelName(),
+				time.Time{},
+				time.Time{},
+				8,
+			)
 			if err != nil {
 				t.Fatalf("LoadObservationEmbeddings() error: %v", err)
 			}
@@ -494,7 +631,14 @@ func TestService_StartupBackfill_SkipsShortRecentMessagesAndContinues(t *testing
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		rows, err := idx.LoadObservationEmbeddings(t.Context(), []memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}}, embedder.ModelName(), time.Time{}, time.Time{}, 8)
+		rows, err := idx.LoadObservationEmbeddings(
+			t.Context(),
+			[]memoryindex.ChatScope{{Channel: "telegram", ChatID: "-1001"}},
+			embedder.ModelName(),
+			time.Time{},
+			time.Time{},
+			8,
+		)
 		if err != nil {
 			t.Fatalf("LoadObservationEmbeddings() error: %v", err)
 		}
@@ -508,4 +652,97 @@ func TestService_StartupBackfill_SkipsShortRecentMessagesAndContinues(t *testing
 	}
 
 	t.Fatal("startup backfill did not reach older eligible observations")
+}
+
+func TestService_SearchReturnsEachObservationOnceAcrossLexicalAndSemanticResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+			return
+		}
+		data := make([]map[string]any, len(payload.Input))
+		for n := range data {
+			data[n] = map[string]any{"embedding": []float32{1, 0}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer server.Close()
+	idx, err := memoryindex.Open(filepath.Join(t.TempDir(), "index.sqlite"), memoryindex.Config{MaxSnippetChars: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	now := time.Now()
+	for _, sender := range []string{"alice", "bob"} {
+		err = idx.AddObservation(
+			t.Context(),
+			memoryindex.Observation{
+				SessionKey: "generation:" + sender,
+				Channel:    "telegram",
+				ChatID:     "-1",
+				PeerKind:   "group",
+				SenderID:   sender,
+				Role:       "user",
+				Content:    "bicycle " + strings.Repeat("long shared paragraph ", 20),
+				CreatedAt:  now.Add(-time.Minute),
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	embeddingCfg := config.MemoryEmbeddingConfig{Enabled: true, MinContentChars: 1, MaxBatch: 8}
+	embedder := NewEmbedder(
+		&config.ModelConfig{ModelName: "embed", Model: "embed", APIKey: "test", APIBase: server.URL},
+		embeddingCfg,
+	)
+	service := New(idx, config.MemoryIndexConfig{Enabled: true, MaxResults: 5, Embeddings: embeddingCfg}, embedder)
+	hits, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel: "telegram",
+			CurrentChatID:  "-1",
+			CurrentPeer:    "group",
+			Query:          "bicycle",
+			Limit:          5,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 || hits[0].SenderID == hits[1].SenderID {
+		t.Fatalf("same observation appeared twice or distinct observations were lost: %+v", hits)
+	}
+	fresh, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel:  "telegram",
+			CurrentChatID:   "-1",
+			CurrentPeer:     "group",
+			ExactSessionKey: "generation:bob",
+			Query:           "bicycle",
+			Limit:           5,
+		},
+	)
+	if err != nil || len(fresh) != 1 || fresh[0].SenderID != "bob" {
+		t.Fatalf("generation restriction leaked lexical or semantic sources: %+v, %v", fresh, err)
+	}
+	future, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel:  "telegram",
+			CurrentChatID:   "-1",
+			CurrentPeer:     "group",
+			ExactSessionKey: "generation:bob",
+			Since:           now,
+			Query:           "bicycle",
+			Limit:           5,
+		},
+	)
+	if err != nil || len(future) != 0 {
+		t.Fatalf("time restriction leaked lexical or semantic sources: %+v, %v", future, err)
+	}
 }

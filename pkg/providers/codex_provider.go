@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -32,6 +33,7 @@ const defaultCodexInstructions = "You are Codex, a coding assistant."
 func NewCodexProvider(token, accountID string) *CodexProvider {
 	opts := []option.RequestOption{
 		option.WithBaseURL("https://chatgpt.com/backend-api/codex"),
+		option.WithMaxRetries(0),
 		option.WithAPIKey(token),
 		option.WithHeader("originator", "codex_cli_rs"),
 		option.WithHeader("OpenAI-Beta", "responses=experimental"),
@@ -69,6 +71,21 @@ func (p *CodexProvider) ChatStream(
 	options map[string]any,
 	onUpdate func(content string),
 ) (*LLMResponse, error) {
+	return p.chat(ctx, messages, tools, model, options, func(update StreamContent) {
+		if onUpdate != nil && (update.Phase == ContentPhaseUnknown || update.Phase == ContentPhaseAnswer) {
+			onUpdate(update.Content)
+		}
+	})
+}
+
+func (p *CodexProvider) ChatStreamContent(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onUpdate func(StreamContent),
+) (*LLMResponse, error) {
 	return p.chat(ctx, messages, tools, model, options, onUpdate)
 }
 
@@ -78,9 +95,9 @@ func (p *CodexProvider) chat(
 	tools []ToolDefinition,
 	model string,
 	options map[string]any,
-	onUpdate func(content string),
+	onUpdate func(StreamContent),
 ) (*LLMResponse, error) {
-	var opts []option.RequestOption
+	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	accountID := p.accountID
 	resolvedModel, fallbackReason := resolveCodexModel(model)
 	if fallbackReason != "" {
@@ -126,14 +143,45 @@ func (p *CodexProvider) chat(
 	defer stream.Close()
 
 	var resp *responses.Response
-	var partial strings.Builder
+	type contentPosition struct{ output, content int64 }
+	partials := make(map[contentPosition]*strings.Builder)
+	phases := make(map[int64]ContentPhase)
 	for stream.Next() {
 		evt := stream.Current()
+		if evt.Type == "response.output_item.added" || evt.Type == "response.output_item.done" {
+			phases[evt.OutputIndex] = codexMessagePhase(evt.Item)
+		}
 		if evt.Type == "response.output_text.delta" {
-			delta := evt.AsResponseOutputTextDelta().Delta
-			if delta != "" && onUpdate != nil {
-				partial.WriteString(delta)
-				onUpdate(partial.String())
+			deltaEvent := evt.AsResponseOutputTextDelta()
+			if deltaEvent.Delta != "" && onUpdate != nil {
+				position := contentPosition{deltaEvent.OutputIndex, deltaEvent.ContentIndex}
+				partial := partials[position]
+				if partial == nil {
+					partial = &strings.Builder{}
+					partials[position] = partial
+				}
+				partial.WriteString(deltaEvent.Delta)
+				phase := phases[deltaEvent.OutputIndex]
+				positions := make([]contentPosition, 0, len(partials))
+				for pos := range partials {
+					if phases[pos.output] == phase {
+						positions = append(positions, pos)
+					}
+				}
+				slices.SortFunc(positions, func(a, b contentPosition) int {
+					if a.output < b.output || (a.output == b.output && a.content < b.content) {
+						return -1
+					}
+					if a == b {
+						return 0
+					}
+					return 1
+				})
+				var snapshot strings.Builder
+				for _, pos := range positions {
+					snapshot.WriteString(partials[pos].String())
+				}
+				onUpdate(StreamContent{Content: snapshot.String(), Phase: phase})
 			}
 		}
 		if evt.Type == "response.completed" || evt.Type == "response.failed" || evt.Type == "response.incomplete" {
@@ -165,7 +213,7 @@ func (p *CodexProvider) chat(
 				fields["hint"] = "verify account id header and model compatibility for codex backend"
 			}
 			if apiErr.Response != nil {
-				fields["request_id"] = apiErr.Response.Header.Get("x-request-id")
+				fields["request_id"] = apiErr.Response.Header.Get("X-Request-ID")
 			}
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
@@ -270,6 +318,7 @@ func buildCodexParams(
 				})
 			}
 		case "assistant":
+			inputStart := len(inputItems)
 			if len(msg.ToolCalls) > 0 {
 				if msg.Content != "" {
 					inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
@@ -302,6 +351,13 @@ func buildCodexParams(
 						Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.Content)},
 					},
 				})
+			}
+			if msg.ContentPhase != "" {
+				for j := inputStart; j < len(inputItems); j++ {
+					if inputItems[j].OfMessage != nil {
+						inputItems[j].OfMessage.SetExtraFields(map[string]any{"phase": string(msg.ContentPhase)})
+					}
+				}
 			}
 		case "tool":
 			inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
@@ -401,10 +457,18 @@ func translateToolsForCodex(tools []ToolDefinition, enableWebSearch bool) []resp
 func parseCodexResponse(resp *responses.Response) *LLMResponse {
 	var content strings.Builder
 	var toolCalls []ToolCall
+	var contentPhase ContentPhase
 
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":
+			phase := codexMessagePhase(item)
+			if phase != ContentPhaseUnknown && phase != ContentPhaseAnswer {
+				continue
+			}
+			if phase != "" {
+				contentPhase = phase
+			}
 			for _, c := range item.Content {
 				if c.Type == "output_text" {
 					content.WriteString(c.Text)
@@ -442,6 +506,7 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 
 	return &LLMResponse{
 		Content:      content.String(),
+		ContentPhase: contentPhase,
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage:        usage,
@@ -475,4 +540,13 @@ func createCodexTokenSource() func() (string, string, error) {
 
 		return cred.AccessToken, cred.AccountID, nil
 	}
+}
+
+// The pinned SDK preserves newer message phase fields as JSON extras.
+func codexMessagePhase(item responses.ResponseOutputItemUnion) ContentPhase {
+	var value struct {
+		Phase ContentPhase `json:"phase"`
+	}
+	_ = json.Unmarshal([]byte(item.RawJSON()), &value)
+	return value.Phase
 }

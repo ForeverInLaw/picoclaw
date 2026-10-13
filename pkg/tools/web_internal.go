@@ -21,6 +21,9 @@ var reTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
 func NewWebSearchProvider(opts WebSearchToolOptions) (SearchProvider, int, error) {
 	maxResults := 5
+	if provider, count, err := newPreferredSearchProvider(opts); provider != nil || err != nil {
+		return provider, count, err
+	}
 	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
 		client, err := utils.CreateHTTPClient(opts.Proxy, perplexityTimeout)
 		if err != nil {
@@ -122,11 +125,17 @@ func renderWebSearchResults(query string, provider SearchProvider, hits []websou
 	var lines []string
 	header := fmt.Sprintf("Results for: %s", query)
 	if providerName := strings.TrimSpace(provider.ProviderName()); providerName != "" {
+		if len(hits) > 0 && hits[0].Provider != "" {
+			providerName = hits[0].Provider
+		}
 		header = fmt.Sprintf("%s (via %s)", header, providerName)
 	}
 	lines = append(lines, header)
 	for i, hit := range hits {
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, strings.TrimSpace(hit.Title), strings.TrimSpace(hit.URL)))
+		lines = append(
+			lines,
+			fmt.Sprintf("%d. %s\n   %s", i+1, strings.TrimSpace(hit.Title), strings.TrimSpace(hit.URL)),
+		)
 		if snippet := strings.TrimSpace(hit.Snippet); snippet != "" {
 			lines = append(lines, fmt.Sprintf("   %s", snippet))
 		}
@@ -213,14 +222,13 @@ func extractFetchedText(t *WebFetchTool, mediaType string, body []byte, bodyStr 
 	switch {
 	case mediaType == "application/json":
 		var jsonData any
-		if err := json.Unmarshal(body, &jsonData); err != nil {
-			return bodyStr, "raw", nil
+		if err := json.Unmarshal(body, &jsonData); err == nil {
+			if formatted, formatErr := json.MarshalIndent(jsonData, "", "  "); formatErr == nil {
+				return string(formatted), "json", nil
+			}
 		}
-		formatted, err := json.MarshalIndent(jsonData, "", "  ")
-		if err != nil {
-			return bodyStr, "raw", nil
-		}
-		return string(formatted), "json", nil
+		// Invalid JSON still has a usable raw response body.
+		return bodyStr, "raw", nil
 	case mediaType == "text/html" || looksLikeHTML(bodyStr):
 		if strings.EqualFold(t.format, "markdown") {
 			text, err := utils.HtmlToMarkdown(bodyStr)

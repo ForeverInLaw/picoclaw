@@ -60,7 +60,10 @@ func (i *Index) init(ctx context.Context) error {
 	}
 	i.schemaStatus = status
 
-	if _, err := i.db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(content, content='observations', content_rowid='id', tokenize='unicode61');`); err == nil {
+	if _, err := i.db.ExecContext(
+		ctx,
+		`CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(content, content='observations', content_rowid='id', tokenize='unicode61');`,
+	); err == nil {
 		i.hasFTS = true
 		triggers := []string{
 			`CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
@@ -165,11 +168,12 @@ func (i *Index) searchFTS(ctx context.Context, req SearchRequest, limit int) ([]
 		return nil, nil
 	}
 
-	query := `SELECT o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
+	query := `SELECT o.id, o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
 		FROM observations_fts f
 		JOIN observations o ON o.id = f.rowid`
 	whereParts := []string{"observations_fts MATCH ?"}
-	args := []any{matchQuery}
+	args := make([]any, 0, 5)
+	args = append(args, matchQuery)
 	whereParts, args = appendSearchFilters(whereParts, args, req)
 	query += " WHERE " + strings.Join(whereParts, " AND ")
 	query += `
@@ -196,10 +200,11 @@ func (i *Index) searchFTS(ctx context.Context, req SearchRequest, limit int) ([]
 
 func (i *Index) searchLike(ctx context.Context, req SearchRequest, limit int) ([]Hit, error) {
 	pattern := "%" + req.Query + "%"
-	query := `SELECT o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
+	query := `SELECT o.id, o.session_key, o.channel, o.chat_id, o.peer_kind, o.chat_label, o.role, o.sender_id, o.content, o.created_at_ms
 		FROM observations o`
 	whereParts := []string{"content LIKE ?"}
-	args := []any{pattern}
+	args := make([]any, 0, 5)
+	args = append(args, pattern)
 	whereParts, args = appendSearchFilters(whereParts, args, req)
 	query += " WHERE " + strings.Join(whereParts, " AND ")
 	query += `
@@ -227,6 +232,7 @@ func scanHits(rows *sql.Rows, maxSnippetChars int) ([]Hit, error) {
 			createdAtMS int64
 		)
 		if err := rows.Scan(
+			&hit.ObservationID,
 			&hit.SessionKey,
 			&hit.Channel,
 			&hit.ChatID,
@@ -250,6 +256,10 @@ func scanHits(rows *sql.Rows, maxSnippetChars int) ([]Hit, error) {
 }
 
 func appendSearchFilters(whereParts []string, args []any, req SearchRequest) ([]string, []any) {
+	if req.ExactSessionKey != "" {
+		whereParts = append(whereParts, "o.session_key = ?")
+		args = append(args, req.ExactSessionKey)
+	}
 	scopes := compactScopes(req)
 	if len(scopes) > 0 {
 		clauses := make([]string, 0, len(scopes))
@@ -297,15 +307,15 @@ func buildFTSQuery(query string) string {
 	return strings.Join(filtered, " OR ")
 }
 
-func truncateRunes(s string, max int) string {
-	if max <= 0 {
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
 		return s
 	}
 	runes := []rune(s)
-	if len(runes) <= max {
+	if len(runes) <= limit {
 		return s
 	}
-	return string(runes[:max]) + "..."
+	return string(runes[:limit]) + "..."
 }
 
 func (i *Index) IsBootstrapped(ctx context.Context) (bool, error) {
@@ -329,7 +339,12 @@ func (i *Index) metaBool(ctx context.Context, key string) (bool, error) {
 }
 
 func (i *Index) setMeta(ctx context.Context, key, value string) error {
-	_, err := i.db.ExecContext(ctx, `INSERT INTO memory_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	_, err := i.db.ExecContext(
+		ctx,
+		`INSERT INTO memory_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		key,
+		value,
+	)
 	if err != nil {
 		return fmt.Errorf("memoryindex: set meta: %w", err)
 	}
@@ -348,7 +363,11 @@ func (i *Index) metaString(ctx context.Context, key string) (string, error) {
 	return value, nil
 }
 
-func (i *Index) ReplaceSourceObservations(ctx context.Context, sourceKind, sourceKey string, observations []Observation) error {
+func (i *Index) ReplaceSourceObservations(
+	ctx context.Context,
+	sourceKind, sourceKey string,
+	observations []Observation,
+) error {
 	if i == nil || i.db == nil {
 		return nil
 	}
@@ -364,7 +383,12 @@ func (i *Index) ReplaceSourceObservations(ctx context.Context, sourceKind, sourc
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM observations WHERE source_kind = ? AND source_key = ?`, sourceKind, sourceKey); err != nil {
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM observations WHERE source_kind = ? AND source_key = ?`,
+		sourceKind,
+		sourceKey,
+	); err != nil {
 		return fmt.Errorf("memoryindex: delete source observations: %w", err)
 	}
 

@@ -308,7 +308,11 @@ func (c *BaseChannel) HandleMessage(
 		// "Thinking…" only once the voice has been processed.
 		if !audioAnnotationRe.MatchString(content) {
 			if pc, ok := c.owner.(PlaceholderCapable); ok {
-				if phID, err := pc.SendPlaceholder(ctx, chatID); err == nil && phID != "" {
+				if phID, err := pc.SendPlaceholder(
+					bus.WithStreamReplyTo(ctx, messageID),
+					chatID,
+				); err == nil &&
+					phID != "" {
 					c.placeholderRecorder.RecordPlaceholder(c.name, chatID, phID)
 				}
 			}

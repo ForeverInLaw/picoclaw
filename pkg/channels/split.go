@@ -11,16 +11,37 @@ import (
 // Call SplitMessage with the full text content and the maximum allowed length of a single message;
 // it returns a slice of message chunks that each respect maxLen and avoid splitting fenced code blocks.
 func SplitMessage(content string, maxLen int) []string {
+	chunks := SplitMessageWithOffsets(content, maxLen)
+	if chunks == nil {
+		return nil
+	}
+	messages := make([]string, len(chunks))
+	for n, chunk := range chunks {
+		messages[n] = chunk.Content
+	}
+	return messages
+}
+
+// MessageChunk retains its position in the original source, measured in runes.
+// Synthetic fences added at page boundaries do not advance the source offset.
+type MessageChunk struct {
+	Content      string
+	SourceOffset int
+}
+
+// SplitMessageWithOffsets uses the same chunking rules while preserving source
+// positions for transports that switch pagination limits after format rejection.
+func SplitMessageWithOffsets(content string, maxLen int) []MessageChunk {
 	if maxLen <= 0 {
 		if content == "" {
 			return nil
 		}
-		return []string{content}
+		return []MessageChunk{{Content: content}}
 	}
 
 	runes := []rune(content)
 	totalLen := len(runes)
-	var messages []string
+	var messages []MessageChunk
 
 	// Dynamic buffer: 10% of maxLen, but at least 50 chars if possible
 	codeBlockBuffer := max(maxLen/10, 50)
@@ -28,11 +49,18 @@ func SplitMessage(content string, maxLen int) []string {
 		codeBlockBuffer = maxLen / 2
 	}
 
+	sourceBase, prefixLen := 0, 0
 	start := 0
 	for start < totalLen {
 		remaining := totalLen - start
 		if remaining <= maxLen {
-			messages = append(messages, string(runes[start:totalLen]))
+			messages = append(
+				messages,
+				MessageChunk{
+					Content:      string(runes[start:totalLen]),
+					SourceOffset: sourceBase + max(start-prefixLen, 0),
+				},
+			)
 			break
 		}
 
@@ -89,9 +117,14 @@ func SplitMessage(content string, maxLen int) []string {
 							msgEnd = innerLimit
 						}
 						chunk := strings.TrimRight(string(runes[start:msgEnd]), " \t\n\r") + "\n```"
-						messages = append(messages, chunk)
+						messages = append(
+							messages,
+							MessageChunk{Content: chunk, SourceOffset: sourceBase + max(start-prefixLen, 0)},
+						)
 						remaining := strings.TrimSpace(header + "\n" + string(runes[msgEnd:totalLen]))
-						// Replace the tail of runes with the reconstructed remaining
+						// Replace the tail of runes with the reconstructed remaining.
+						sourceBase += max(msgEnd-prefixLen, 0)
+						prefixLen = len([]rune(header)) + 1
 						runes = []rune(remaining)
 						totalLen = len(runes)
 						start = 0
@@ -112,8 +145,13 @@ func SplitMessage(content string, maxLen int) []string {
 						} else {
 							splitAt := min(start+maxLen-5, totalLen)
 							chunk := strings.TrimRight(string(runes[start:splitAt]), " \t\n\r") + "\n```"
-							messages = append(messages, chunk)
+							messages = append(
+								messages,
+								MessageChunk{Content: chunk, SourceOffset: sourceBase + max(start-prefixLen, 0)},
+							)
 							remaining := strings.TrimSpace(header + "\n" + string(runes[splitAt:totalLen]))
+							sourceBase += max(splitAt-prefixLen, 0)
+							prefixLen = len([]rune(header)) + 1
 							runes = []rune(remaining)
 							totalLen = len(runes)
 							start = 0
@@ -128,7 +166,10 @@ func SplitMessage(content string, maxLen int) []string {
 			msgEnd = start + effectiveLimit
 		}
 
-		messages = append(messages, string(runes[start:msgEnd]))
+		messages = append(
+			messages,
+			MessageChunk{Content: string(runes[start:msgEnd]), SourceOffset: sourceBase + max(start-prefixLen, 0)},
+		)
 		// Advance start, skipping leading whitespace of next chunk
 		start = msgEnd
 		for start < totalLen && (runes[start] == ' ' || runes[start] == '\t' || runes[start] == '\n' || runes[start] == '\r') {

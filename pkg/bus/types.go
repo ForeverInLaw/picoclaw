@@ -29,11 +29,40 @@ type InboundMessage struct {
 	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
+type ProgressKind string
+
+type ProgressState string
+
+const (
+	ProgressTool       ProgressKind  = "tool"
+	ProgressRetry      ProgressKind  = "retry"
+	ProgressCommentary ProgressKind  = "commentary"
+	ProgressStarted    ProgressState = "started"
+	ProgressCompleted  ProgressState = "completed"
+	ProgressFailed     ProgressState = "failed"
+)
+
+// ProgressMessage identifies an independently updated activity within one request.
+// It never replaces an answer or consumes its delivery state.
+type ProgressMessage struct {
+	RequestID string         `json:"request_id"`
+	ActionID  string         `json:"action_id"`
+	Kind      ProgressKind   `json:"kind"`
+	State     ProgressState  `json:"state"`
+	Tool      string         `json:"tool,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+	Result    string         `json:"result,omitempty"`
+	Error     string         `json:"error,omitempty"`
+}
+
 type OutboundMessage struct {
-	Channel          string `json:"channel"`
-	ChatID           string `json:"chat_id"`
-	Content          string `json:"content"`
-	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	// DeliveryID identifies one logical send across retries and stream recovery.
+	DeliveryID       string           `json:"delivery_id,omitempty"`
+	Progress         *ProgressMessage `json:"progress,omitempty"`
+	Channel          string           `json:"channel"`
+	ChatID           string           `json:"chat_id"`
+	Content          string           `json:"content"`
+	ReplyToMessageID string           `json:"reply_to_message_id,omitempty"`
 }
 
 // MediaPart describes a single media attachment to send.

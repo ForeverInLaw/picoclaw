@@ -340,7 +340,7 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 	}
 }
 
-func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
+func TestDrainBusToSteering_RetainsDifferentScopeMessage(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -404,14 +404,16 @@ func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	done := make(chan struct{})
+	done := make(chan []bus.InboundMessage, 1)
 	go func() {
-		al.drainBusToSteering(ctx, activeScope, activeAgentID)
-		close(done)
+		done <- al.drainBusToSteering(ctx, activeScope, activeAgentID)
 	}()
 
+	awaitInboundDrain(t, msgBus)
+	cancel()
+	var queued []bus.InboundMessage
 	select {
-	case <-done:
+	case queued = <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for drainBusToSteering to stop")
 	}
@@ -426,18 +428,12 @@ func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	select {
-	case <-ctx.Done():
-		t.Fatalf("timeout waiting for requeued message on inbound bus")
-	case requeued := <-msgBus.InboundChan():
-		if requeued.Channel != otherMsg.Channel || requeued.ChatID != otherMsg.ChatID ||
-			requeued.Content != otherMsg.Content {
-			t.Fatalf("requeued message mismatch: got %+v want %+v", requeued, otherMsg)
-		}
+	if len(queued) != 1 || queued[0].Channel != otherMsg.Channel || queued[0].ChatID != otherMsg.ChatID ||
+		queued[0].Content != otherMsg.Content {
+		t.Fatalf("deferred request lost: %+v", queued)
 	}
 }
 
-// slowTool simulates a tool that takes some time to execute.
 type slowTool struct {
 	name     string
 	duration time.Duration
@@ -597,7 +593,6 @@ func (p *blockingDirectProvider) Chat(
 	finalResp := p.finalResp
 	if call == 1 && p.firstStarted != nil {
 		close(p.firstStarted)
-		p.firstStarted = nil
 	}
 	p.mu.Unlock()
 
@@ -847,10 +842,11 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}()
 
 	first := bus.InboundMessage{
-		Channel:  "test",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "first message",
+		MessageID: "original-request",
+		Channel:   "test",
+		SenderID:  "user1",
+		ChatID:    "chat1",
+		Content:   "first message",
 		Peer: bus.Peer{
 			Kind: "direct",
 			ID:   "user1",
@@ -896,6 +892,9 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}
 	if out1.Content != "continued response" {
 		t.Fatalf("expected continued response, got %q", out1.Content)
+	}
+	if out1.ReplyToMessageID != first.MessageID {
+		t.Fatalf("continued response reply = %q, want %q", out1.ReplyToMessageID, first.MessageID)
 	}
 
 	noExtraCtx, cancelNoExtra := context.WithTimeout(context.Background(), 200*time.Millisecond)

@@ -33,7 +33,7 @@ func NewExecutor(reg *Registry, rt *Runtime) *Executor {
 // 1) handled: execute command immediately;
 // 2) passthrough: not a command or intentionally deferred to agent logic.
 func (e *Executor) Execute(ctx context.Context, req Request) ExecuteResult {
-	cmdName, ok := parseCommandName(req.Text)
+	cmdName, ok := ParseCommandName(req.Text)
 	if !ok {
 		return ExecuteResult{Outcome: OutcomePassthrough}
 	}

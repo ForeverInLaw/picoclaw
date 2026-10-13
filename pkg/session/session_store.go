@@ -30,3 +30,15 @@ type SessionStore interface {
 	// Close releases resources held by the store.
 	Close() error
 }
+
+// ConversationTurn is a captured session view whose lifetime can be revoked by
+// a conversation reset. Callers check it after registering cancellation support.
+type ConversationTurn interface {
+	SessionStore
+	IsCurrent() (bool, error)
+	// CommitIfCurrent linearizes a nonblocking side effect with reset. Callers
+	// must wait for capacity outside this gate, then retry the complete commit.
+	CommitIfCurrent(operation func() error) (bool, error)
+	// ConversationKey identifies observations captured by this turn generation.
+	ConversationKey(key string) string
+}

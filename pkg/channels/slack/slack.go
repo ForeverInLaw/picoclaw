@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -187,9 +188,15 @@ func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 			title = filename
 		}
 
-		_, err = c.api.UploadFileV2Context(ctx, slack.UploadFileV2Parameters{
+		fileInfo, err := os.Stat(localPath)
+		if err != nil {
+			return fmt.Errorf("slack stat media: %w", channels.ErrTemporary)
+		}
+
+		_, err = c.api.UploadFileContext(ctx, slack.UploadFileParameters{
 			Channel:  channelID,
 			File:     localPath,
+			FileSize: int(fileInfo.Size()),
 			Filename: filename,
 			Title:    title,
 		})

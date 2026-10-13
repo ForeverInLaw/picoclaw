@@ -1297,7 +1297,7 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 	}
 }
 
-func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
+func TestAgentLoop_EmptyModelResponseReportsClearFailure(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -1320,11 +1320,8 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "empty-response", "test", "chat1")
-	if err != nil {
-		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
-	}
-	if response != defaultResponse {
-		t.Fatalf("response = %q, want %q", response, defaultResponse)
+	if response != "" || err == nil || !strings.Contains(err.Error(), "no answer or tool call") {
+		t.Fatalf("answer=%q error=%v; expected an explicit no-answer failure", response, err)
 	}
 }
 
@@ -1350,13 +1347,14 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	provider := &toolLimitOnlyProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
 	al.RegisterTool(&toolLimitTestTool{})
+	want := "The model exhausted its tool-step budget and did not produce a final response.\n\nLast tool result:\ntool limit test result"
 
 	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "tool-limit", "test", "chat1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
-	if response != toolLimitResponse {
-		t.Fatalf("response = %q, want %q", response, toolLimitResponse)
+	if response != want {
+		t.Fatalf("response = %q, want %q", response, want)
 	}
 
 	defaultAgent := al.registry.GetDefaultAgent()
@@ -1375,8 +1373,8 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		t.Fatalf("history len = %d, want 4", len(history))
 	}
 	assertRoles(t, history, "user", "assistant", "tool", "assistant")
-	if history[3].Content != toolLimitResponse {
-		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+	if history[3].Content != want {
+		t.Fatalf("final assistant content = %q, want %q", history[3].Content, want)
 	}
 }
 

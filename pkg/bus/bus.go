@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
@@ -37,7 +38,8 @@ type MessageBus struct {
 
 	closeOnce      sync.Once
 	done           chan struct{}
-	closed         atomic.Bool
+	publishMu      sync.Mutex // Registration and shutdown share a gate before wg.Wait.
+	closed         bool
 	wg             sync.WaitGroup
 	streamDelegate atomic.Value // stores StreamDelegate
 }
@@ -52,21 +54,17 @@ func NewMessageBus() *MessageBus {
 }
 
 func publish[T any](ctx context.Context, mb *MessageBus, ch chan T, msg T) error {
-	// check bus closed before acquiring wg, to avoid unnecessary wg.Add and potential deadlock
-	if mb.closed.Load() {
+	mb.publishMu.Lock()
+	if mb.closed {
+		mb.publishMu.Unlock()
 		return ErrBusClosed
 	}
-
-	// check again,before sending message, to avoid sending to closed channel
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-mb.done:
-		return ErrBusClosed
-	default:
+	if err := ctx.Err(); err != nil {
+		mb.publishMu.Unlock()
+		return err
 	}
-
 	mb.wg.Add(1)
+	mb.publishMu.Unlock()
 	defer mb.wg.Done()
 
 	select {
@@ -89,6 +87,46 @@ func (mb *MessageBus) InboundChan() <-chan InboundMessage {
 
 func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) error {
 	return publish(ctx, mb, mb.outbound, msg)
+}
+
+// PublishOutboundGuarded commits one enqueue through a lifetime gate. The gate
+// holds its lock only for a nonblocking attempt; backpressure waits outside it.
+// A revoked gate returns false without publishing. Shutdown shares publishMu.
+func (mb *MessageBus) PublishOutboundGuarded(
+	ctx context.Context, msg OutboundMessage, commit func(func() error) (bool, error),
+) (bool, error) {
+	full := errors.New("outbound queue full")
+	for {
+		current, err := commit(func() error {
+			mb.publishMu.Lock()
+			defer mb.publishMu.Unlock()
+			if mb.closed {
+				return ErrBusClosed
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			select {
+			case mb.outbound <- msg:
+				return nil
+			default:
+				return full
+			}
+		})
+		if !errors.Is(err, full) {
+			return current && err == nil, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, ctx.Err()
+		case <-mb.done:
+			timer.Stop()
+			return false, ErrBusClosed
+		case <-timer.C:
+		}
+	}
 }
 
 func (mb *MessageBus) OutboundChan() <-chan OutboundMessage {
@@ -118,12 +156,12 @@ func (mb *MessageBus) GetStreamer(ctx context.Context, channel, chatID string) (
 
 func (mb *MessageBus) Close() {
 	mb.closeOnce.Do(func() {
-		// notify all blocked publishers to exit
+		// Stop registration before waiting; a publisher that passed an atomic
+		// flag check alone could otherwise call Add after Wait reached zero.
+		mb.publishMu.Lock()
+		mb.closed = true
 		close(mb.done)
-
-		// because every publisher will check mb.closed before acquiring wg
-		// so we can be sure that new publishers will not be added new messages after this point
-		mb.closed.Store(true)
+		mb.publishMu.Unlock()
 
 		// wait for all ongoing Publish calls to finish, ensuring all messages have been sent to channels or exited
 		mb.wg.Wait()

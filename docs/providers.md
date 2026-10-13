@@ -412,6 +412,16 @@ picoclaw agent -m "Hello"
 
 </details>
 
+## Model request recovery
+
+Direct and Telegram inline turns use the same model recovery policy: at most three provider calls for each model operation, including fallback candidates, context recovery, and the single allowed empty-answer recovery. Completed tool actions remain in context and are not executed again when a later model call is retried.
+
+Fallback candidates already in cooldown are skipped. If this operation exhausts its available candidates with a transient failure and still has an attempt remaining, it retries the last attempted candidate after the required delay. That request-local retry preserves global cooldowns for other requests and candidates; its success or failure updates the retried candidate's health normally.
+
+Transient network failures, timeouts, HTTP 429 rate limits, and HTTP 5xx errors can be retried. The default retry delays are one and two seconds. A server's `Retry-After` delay (seconds or HTTP date) takes precedence; total retry waiting is limited to 30 seconds, and requests requiring a longer delay fail instead of retrying too early. Cancellation stops waiting immediately. Authentication, invalid requests, and exhausted quota are not retried against the same provider; existing configured model/credential fallback remains available within the shared attempt limit.
+
+OpenAI and Anthropic SDK retries are disabled so hidden SDK attempts do not multiply this budget. Retry statuses are independent progress messages, separate from the answer. Reasoning never substitutes for an answer. Providers that expose `final_answer`/`commentary` phases preserve those phases; unclassified streamed text waits until the complete response is known to be an answer.
+
 ---
 
 ## 📝 API Key Comparison

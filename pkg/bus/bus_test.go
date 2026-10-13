@@ -205,6 +205,53 @@ func TestConcurrentPublishClose(t *testing.T) {
 	}
 }
 
+func TestCloseUnblocksPublishersAcrossMessageStreams(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		publish func(context.Context, *MessageBus) error
+	}{
+		{name: "inbound", publish: func(ctx context.Context, mb *MessageBus) error {
+			return mb.PublishInbound(ctx, InboundMessage{Content: "message"})
+		}},
+		{name: "outbound", publish: func(ctx context.Context, mb *MessageBus) error {
+			return mb.PublishOutbound(ctx, OutboundMessage{Content: "message"})
+		}},
+		{name: "media", publish: func(ctx context.Context, mb *MessageBus) error {
+			return mb.PublishOutboundMedia(ctx, OutboundMediaMessage{ChatID: "42"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mb := NewMessageBus()
+			defer mb.Close()
+			for range defaultBusBufferSize {
+				if err := tc.publish(t.Context(), mb); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result := make(chan error, 1)
+			go func() { result <- tc.publish(t.Context(), mb) }()
+			closed := make(chan struct{})
+			go func() { mb.Close(); close(closed) }()
+			select {
+			case <-closed:
+			case <-time.After(time.Second):
+				t.Fatal("shutdown did not unblock publishers")
+			}
+			select {
+			case err := <-result:
+				if err != ErrBusClosed {
+					t.Fatalf("blocked publish = %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("publisher leaked after shutdown")
+			}
+			if err := tc.publish(t.Context(), mb); err != ErrBusClosed {
+				t.Fatalf("publish after shutdown = %v", err)
+			}
+		})
+	}
+}
+
 func TestPublishInbound_FullBuffer(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()

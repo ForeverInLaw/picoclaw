@@ -625,6 +625,15 @@ type WebSearchTool struct {
 }
 
 type WebSearchToolOptions struct {
+	PrimaryProvider      string
+	ParallelAPIKeys      []string
+	ParallelBaseURL      string
+	ParallelMaxResults   int
+	ParallelEnabled      bool
+	ExaAPIKeys           []string
+	ExaBaseURL           string
+	ExaMaxResults        int
+	ExaEnabled           bool
 	BraveAPIKeys         []string
 	BraveMaxResults      int
 	BraveEnabled         bool
@@ -698,7 +707,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	hits, err := t.provider.Search(ctx, query, count)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("search failed: %v", err))
+		return ErrorResult(fmt.Sprintf("search failed: %v", err)).WithActivity(fmt.Sprintf("Search failed: %v", err))
 	}
 	rendered := renderWebSearchResults(query, t.provider, hits)
 

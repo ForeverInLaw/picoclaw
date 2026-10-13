@@ -25,15 +25,18 @@ type SummaryRequest struct {
 }
 
 type SearchRequest struct {
-	RequesterID    string
-	CurrentChannel string
-	CurrentChatID  string
-	CurrentPeer    string
-	Target         string
-	Query          string
-	SinceHours     int
-	UntilHours     int
-	Limit          int
+	// Automatic recall may restrict sources to the captured conversation generation.
+	ExactSessionKey string
+	Since           time.Time
+	RequesterID     string
+	CurrentChannel  string
+	CurrentChatID   string
+	CurrentPeer     string
+	Target          string
+	Query           string
+	SinceHours      int
+	UntilHours      int
+	Limit           int
 }
 
 type Service struct {
@@ -63,20 +66,31 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		return nil, nil
 	}
 
-	scopes, err := s.resolveScopes(ctx, req.RequesterID, req.CurrentChannel, req.CurrentChatID, req.CurrentPeer, req.Target)
+	scopes, err := s.resolveScopes(
+		ctx,
+		req.RequesterID,
+		req.CurrentChannel,
+		req.CurrentChatID,
+		req.CurrentPeer,
+		req.Target,
+	)
 	if err != nil {
 		return nil, err
 	}
 	window := s.resolveWindow(req.SinceHours, req.UntilHours)
+	if req.Since.After(window.Start) {
+		window.Start = req.Since
+	}
 	limit := resolveSearchLimit(req.Limit, s.cfg.MaxResults)
 	lexicalHits, err := s.index.Search(ctx, memoryindex.SearchRequest{
-		Query:      req.Query,
-		Channel:    req.CurrentChannel,
-		ChatID:     req.CurrentChatID,
-		ChatScopes: scopes,
-		Since:      window.Start,
-		Until:      window.End,
-		Limit:      limit,
+		ExactSessionKey: req.ExactSessionKey,
+		Query:           req.Query,
+		Channel:         req.CurrentChannel,
+		ChatID:          req.CurrentChatID,
+		ChatScopes:      scopes,
+		Since:           window.Start,
+		Until:           window.End,
+		Limit:           limit,
 	})
 	if err != nil {
 		return nil, err
@@ -87,12 +101,26 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 
 	_ = s.ensureEmbeddings(ctx)
 	queryVec, err := s.embedder.EmbedQuery(ctx, req.Query)
-	if err != nil || len(queryVec) == 0 {
+	if err != nil {
+		queryVec = nil
+	}
+	if len(queryVec) == 0 {
 		return lexicalHits, nil
 	}
 
-	embeddingRows, err := s.index.LoadObservationEmbeddings(ctx, scopes, s.embedder.ModelName(), window.Start, window.End, 512)
-	if err != nil || len(embeddingRows) == 0 {
+	embeddingRows, err := s.index.LoadObservationEmbeddings(
+		ctx,
+		scopes,
+		s.embedder.ModelName(),
+		window.Start,
+		window.End,
+		512,
+		req.ExactSessionKey,
+	)
+	if err != nil {
+		embeddingRows = nil
+	}
+	if len(embeddingRows) == 0 {
 		return lexicalHits, nil
 	}
 
@@ -159,19 +187,47 @@ func (s *Service) Summarize(ctx context.Context, req SummaryRequest) (string, er
 		return "", nil
 	}
 
-	scope, err := s.resolveTarget(ctx, req.RequesterID, req.CurrentChannel, req.CurrentChatID, req.CurrentPeer, req.Target)
+	scope, err := s.resolveTarget(
+		ctx,
+		req.RequesterID,
+		req.CurrentChannel,
+		req.CurrentChatID,
+		req.CurrentPeer,
+		req.Target,
+	)
 	if err != nil {
 		return "", err
 	}
 	window := s.resolveWindow(req.SinceHours, req.UntilHours)
-	if err := s.ensureRollups(ctx, scope, window); err != nil {
-		return "", err
+	if rollupErr := s.ensureRollups(ctx, scope, window); rollupErr != nil {
+		return "", rollupErr
 	}
 
 	rollups, err := s.index.ListChatRollups(ctx, scope, window)
 	if err != nil {
 		return "", err
 	}
+	// Cached hours have stable starts. Only boundary summaries are rebuilt for
+	// this request, so exact windows neither leak older excerpts nor add cache keys.
+	clipped := rollups[:0]
+	for _, rollup := range rollups {
+		if rollup.WindowStart.Before(window.Start) || rollup.WindowEnd.After(window.End) {
+			rollup.WindowStart = maxTime(rollup.WindowStart, window.Start)
+			rollup.WindowEnd = minTime(rollup.WindowEnd, window.End)
+			hits, readErr := s.index.ListObservationsInWindow(ctx, scope, memoryindex.TimeWindow{
+				Start: rollup.WindowStart, End: rollup.WindowEnd,
+			}, 0)
+			if readErr != nil {
+				return "", readErr
+			}
+			if len(hits) == 0 {
+				continue
+			}
+			rollup.Summary = buildRollupSummary(hits, s.cfg.Rollups.HourlySampleSize)
+		}
+		clipped = append(clipped, rollup)
+	}
+	rollups = clipped
 	participants, _ := s.index.ListChatParticipants(ctx, scope)
 
 	var searchHits []memoryindex.Hit
@@ -209,7 +265,13 @@ func (s *Service) Summarize(ctx context.Context, req SummaryRequest) (string, er
 
 	sb.WriteString("\nHourly rollups:\n")
 	for _, rollup := range rollups {
-		fmt.Fprintf(&sb, "- [%s .. %s] %s\n", formatTime(rollup.WindowStart), formatTime(rollup.WindowEnd), strings.TrimSpace(rollup.Summary))
+		fmt.Fprintf(
+			&sb,
+			"- [%s .. %s] %s\n",
+			formatTime(rollup.WindowStart),
+			formatTime(rollup.WindowEnd),
+			strings.TrimSpace(rollup.Summary),
+		)
 	}
 	if len(searchHits) > 0 {
 		sb.WriteString("\nRelevant excerpts:\n")
@@ -218,6 +280,20 @@ func (s *Service) Summarize(ctx context.Context, req SummaryRequest) (string, er
 		}
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 func (s *Service) resolveScopes(
@@ -283,7 +359,8 @@ func (s *Service) resolveTarget(
 			exact = &e
 			break
 		}
-		if strings.Contains(normalizeLabel(entry.Label), normalized) || strings.Contains(normalizeLabel(entry.Alias), normalized) {
+		if strings.Contains(normalizeLabel(entry.Label), normalized) ||
+			strings.Contains(normalizeLabel(entry.Alias), normalized) {
 			partial = append(partial, entry)
 		}
 	}
@@ -536,24 +613,22 @@ func formatTime(ts time.Time) string {
 	return ts.UTC().Format(time.RFC3339)
 }
 
-func truncateRunes(s string, max int) string {
-	if max <= 0 {
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
 		return s
 	}
 	runes := []rune(s)
-	if len(runes) <= max {
+	if len(runes) <= limit {
 		return s
 	}
-	return string(runes[:max]) + "..."
+	return string(runes[:limit]) + "..."
 }
 
 func hitKey(hit memoryindex.Hit) string {
-	return hit.Channel + "\x00" + hit.ChatID + "\x00" + hit.CreatedAt.UTC().Format(time.RFC3339Nano) + "\x00" + hit.Content
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
+	if hit.ObservationID != 0 {
+		return fmt.Sprintf("observation:%d", hit.ObservationID)
 	}
-	return b
+	return hit.Channel + "\x00" + hit.ChatID + "\x00" + hit.CreatedAt.UTC().
+		Format(time.RFC3339Nano) +
+		"\x00" + hit.Content
 }

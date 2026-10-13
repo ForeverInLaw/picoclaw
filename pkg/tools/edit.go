@@ -80,7 +80,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if err := editFile(t.fs, path, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
 	}
-	return SilentResult(fmt.Sprintf("File edited: %s", path))
+	return SilentResult(fmt.Sprintf("File edited: %s", path)).WithActivity(fmt.Sprintf("File edited: %s", path))
 }
 
 func stringArgAlias(args map[string]any, primary, alias string) (string, bool) {
@@ -144,7 +144,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if err := appendFile(t.fs, path, content); err != nil {
 		return ErrorResult(err.Error())
 	}
-	return SilentResult(fmt.Sprintf("Appended to %s", path))
+	return SilentResult(fmt.Sprintf("Appended to %s", path)).WithActivity(fmt.Sprintf("Appended to %s", path))
 }
 
 // editFile reads the file via sysFs, performs the replacement, and writes back.

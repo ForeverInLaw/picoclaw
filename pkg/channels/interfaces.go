@@ -20,6 +20,12 @@ type MessageEditor interface {
 	EditMessage(ctx context.Context, chatID string, messageID string, content string) error
 }
 
+// ReplyEditor preserves the final outbound envelope when editing a placeholder,
+// so multipart recovery remains associated with its originating request.
+type ReplyEditor interface {
+	EditReply(ctx context.Context, msg bus.OutboundMessage, messageID string) error
+}
+
 // MessageDeleter — channels that can delete a message by ID.
 type MessageDeleter interface {
 	DeleteMessage(ctx context.Context, chatID string, messageID string) error
@@ -67,4 +73,16 @@ type PlaceholderRecorder interface {
 // Channels that do not support platform-level command menus can ignore it.
 type CommandRegistrarCapable interface {
 	RegisterCommands(ctx context.Context, defs []commands.Definition) error
+}
+
+// ProgressCapable delivers request-scoped activity without changing answer state.
+// Adapters own activity message identity, edits, formatting and length limits.
+type ProgressCapable interface {
+	SendProgress(ctx context.Context, msg bus.OutboundMessage) error
+}
+
+// MessageSplittingCapable adapters handle complete answers themselves, including
+// formatting-specific limits and transport-specific pagination.
+type MessageSplittingCapable interface {
+	HandlesMessageSplitting() bool
 }

@@ -77,12 +77,12 @@ func extractBodyText(raw []byte) (string, error) {
 	var plainParts []string
 	var htmlParts []string
 	for {
-		part, err := reader.NextPart()
-		if err == io.EOF {
+		part, partErr := reader.NextPart()
+		if partErr == io.EOF {
 			break
 		}
-		if err != nil {
-			return "", err
+		if partErr != nil {
+			return "", partErr
 		}
 
 		inline, ok := part.Header.(*msgmail.InlineHeader)
@@ -90,9 +90,9 @@ func extractBodyText(raw []byte) (string, error) {
 			continue
 		}
 		mediaType, _, _ := inline.ContentType()
-		body, err := io.ReadAll(part.Body)
-		if err != nil {
-			return "", err
+		body, partErr := io.ReadAll(part.Body)
+		if partErr != nil {
+			return "", partErr
 		}
 		switch strings.ToLower(mediaType) {
 		case "text/plain":
@@ -195,15 +195,15 @@ func (c *EmailChannel) sendSMTP(to string, raw []byte) error {
 	defer client.Close()
 
 	if ok, _ := client.Extension("AUTH"); ok {
-		if err := client.Auth(auth); err != nil {
-			return fmt.Errorf("smtp auth failed: %w", err)
+		if authErr := client.Auth(auth); authErr != nil {
+			return fmt.Errorf("smtp auth failed: %w", authErr)
 		}
 	}
-	if err := client.Mail(c.config.Address); err != nil {
-		return fmt.Errorf("smtp MAIL FROM failed: %w", err)
+	if mailErr := client.Mail(c.config.Address); mailErr != nil {
+		return fmt.Errorf("smtp MAIL FROM failed: %w", mailErr)
 	}
-	if err := client.Rcpt(to); err != nil {
-		return fmt.Errorf("smtp RCPT TO failed: %w", err)
+	if recipientErr := client.Rcpt(to); recipientErr != nil {
+		return fmt.Errorf("smtp RCPT TO failed: %w", recipientErr)
 	}
 
 	writer, err := client.Data()

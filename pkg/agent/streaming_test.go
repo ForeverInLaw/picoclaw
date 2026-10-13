@@ -136,7 +136,7 @@ func TestOfferStreamingContent_PrefersStreamerOverPlaceholder(t *testing.T) {
 	}
 }
 
-func TestSelectStreamingTargets_PrefersPlaceholderUpdaterForTelegram(t *testing.T) {
+func TestSelectStreamingTargets_PrefersNativeStreamerForTelegram(t *testing.T) {
 	streamer := &fakeStreamingSink{}
 	selectedStreamer, updater := selectStreamingTargets(
 		context.Background(),
@@ -146,11 +146,11 @@ func TestSelectStreamingTargets_PrefersPlaceholderUpdaterForTelegram(t *testing.
 		"123",
 	)
 
-	if selectedStreamer != nil {
-		t.Fatal("expected telegram to prefer placeholder updater over channel streamer")
+	if selectedStreamer != streamer {
+		t.Fatal("expected telegram to use its native streamer")
 	}
-	if updater == nil {
-		t.Fatal("expected placeholder updater for telegram")
+	if updater != nil {
+		t.Fatal("expected native streamer to own previews")
 	}
 }
 

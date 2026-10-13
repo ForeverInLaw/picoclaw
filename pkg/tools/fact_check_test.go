@@ -14,7 +14,11 @@ type factCheckSearcher struct{}
 func (factCheckSearcher) Search(_ context.Context, _ string, _ int) ([]websource.SearchHit, error) {
 	return []websource.SearchHit{
 		{Title: "Official post", URL: "https://example.com/post", Snippet: "ExampleCorp confirmed the launch."},
-		{Title: "Coverage", URL: "https://news.example.net/post", Snippet: "Independent coverage confirmed the launch."},
+		{
+			Title:   "Coverage",
+			URL:     "https://news.example.net/post",
+			Snippet: "Independent coverage confirmed the launch.",
+		},
 	}, nil
 }
 
@@ -23,9 +27,15 @@ type factCheckFetcher struct{}
 func (factCheckFetcher) Fetch(_ context.Context, rawURL string, _ int) (*websource.Document, error) {
 	switch rawURL {
 	case "https://example.com/post":
-		return &websource.Document{Title: "Official post", Text: "ExampleCorp launched the product and officially confirmed the launch."}, nil
+		return &websource.Document{
+			Title: "Official post",
+			Text:  "ExampleCorp launched the product and officially confirmed the launch.",
+		}, nil
 	case "https://news.example.net/post":
-		return &websource.Document{Title: "Coverage", Text: "Coverage reported ExampleCorp launched the product and confirmed the release."}, nil
+		return &websource.Document{
+			Title: "Coverage",
+			Text:  "Coverage reported ExampleCorp launched the product and confirmed the release.",
+		}, nil
 	default:
 		return &websource.Document{Title: rawURL, Text: ""}, nil
 	}

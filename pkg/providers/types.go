@@ -3,11 +3,14 @@ package providers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 type (
+	ContentPhase           = protocoltypes.ContentPhase
+	StreamContent          = protocoltypes.StreamContent
 	ToolCall               = protocoltypes.ToolCall
 	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
@@ -51,19 +54,8 @@ type StatefulProvider interface {
 	Close()
 }
 
-// StreamingProvider is an optional interface for providers that support token streaming.
-// onChunk receives the accumulated text so far (not individual deltas).
-// The returned LLMResponse is the same complete response for compatibility with tool-call handling.
-type StreamingProvider interface {
-	ChatStream(
-		ctx context.Context,
-		messages []Message,
-		tools []ToolDefinition,
-		model string,
-		options map[string]any,
-		onChunk func(accumulated string),
-	) (*LLMResponse, error)
-}
+// StreamingProvider is the compatibility name for StreamingLLMProvider.
+type StreamingProvider = StreamingLLMProvider
 
 // ThinkingCapable is an optional interface for providers that support
 // extended thinking (e.g. Anthropic). Used by the agent loop to warn
@@ -92,15 +84,17 @@ const (
 	FailoverFormat     FailoverReason = "format"
 	FailoverOverloaded FailoverReason = "overloaded"
 	FailoverUnknown    FailoverReason = "unknown"
+	FailoverNetwork    FailoverReason = "network"
 )
 
 // FailoverError wraps an LLM provider error with classification metadata.
 type FailoverError struct {
-	Reason   FailoverReason
-	Provider string
-	Model    string
-	Status   int
-	Wrapped  error
+	Reason     FailoverReason
+	Provider   string
+	Model      string
+	Status     int
+	RetryAfter time.Duration
+	Wrapped    error
 }
 
 func (e *FailoverError) Error() string {
@@ -122,4 +116,30 @@ func (e *FailoverError) IsRetriable() bool {
 type ModelConfig struct {
 	Primary   string
 	Fallbacks []string
+}
+
+const (
+	ContentPhaseUnknown    = protocoltypes.ContentPhaseUnknown
+	ContentPhaseAnswer     = protocoltypes.ContentPhaseAnswer
+	ContentPhaseCommentary = protocoltypes.ContentPhaseCommentary
+	ContentPhaseReasoning  = protocoltypes.ContentPhaseReasoning
+)
+
+// PhasedStreamingProvider only marks text as an answer when the upstream API does.
+// Unclassified content must be held until the complete response is known.
+type PhasedStreamingProvider interface {
+	ChatStreamContent(
+		ctx context.Context,
+		messages []Message,
+		tools []ToolDefinition,
+		model string,
+		options map[string]any,
+		onUpdate func(StreamContent),
+	) (*LLMResponse, error)
+}
+
+// IsTransient identifies failures that can recover by retrying the same request.
+func (e *FailoverError) IsTransient() bool {
+	return e.Reason == FailoverTimeout || e.Reason == FailoverNetwork || e.Reason == FailoverRateLimit ||
+		e.Reason == FailoverOverloaded
 }

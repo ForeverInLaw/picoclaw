@@ -87,6 +87,7 @@ func TestHandleMessage_GroupMentionOnly_BotCommandEntity(t *testing.T) {
 			text:          "/new@otherbot",
 			wantForwarded: false,
 		},
+		{name: "foreign reset command", text: "/clear@otherbot", wantForwarded: false},
 	}
 
 	for _, tc := range tests {
@@ -133,6 +134,7 @@ func TestHandleMessage_GroupMentionOnly_BotCommandEntity(t *testing.T) {
 					}
 					return
 				}
+				t.Fatalf("foreign command must not enter the inbound bus, even as an observation: %+v", inbound)
 			}
 		})
 	}

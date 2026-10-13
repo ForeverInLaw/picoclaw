@@ -74,7 +74,14 @@ func renderFactCheckResult(result factcheck.Result) string {
 	if len(result.Sources) > 0 {
 		b.WriteString("sources:\n")
 		for i, source := range result.Sources {
-			fmt.Fprintf(&b, "%d. [%s] %s\n   %s\n", i+1, source.SourceType, strings.TrimSpace(source.Title), strings.TrimSpace(source.URL))
+			fmt.Fprintf(
+				&b,
+				"%d. [%s] %s\n   %s\n",
+				i+1,
+				source.SourceType,
+				strings.TrimSpace(source.Title),
+				strings.TrimSpace(source.URL),
+			)
 		}
 	}
 	return strings.TrimSpace(b.String())

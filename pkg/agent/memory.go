@@ -58,6 +58,39 @@ func (ms *MemoryStore) ReadLongTerm() string {
 	return ""
 }
 
+// ReadSavedFacts includes only information explicitly marked for retention.
+// Unclassified legacy MEMORY.md content remains stored but is not treated as a
+// Saved fact merely because it was written to the workspace memory file.
+func (ms *MemoryStore) ReadSavedFacts() string {
+	var facts []string
+	if data, err := os.ReadFile(filepath.Join(ms.memoryDir, "SAVED_FACTS.md")); err == nil {
+		facts = append(facts, strings.TrimSpace(string(data)))
+	}
+	var section strings.Builder
+	level := 0
+	for _, line := range strings.Split(ms.ReadLongTerm(), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			heading := strings.TrimLeft(trimmed, "#")
+			headingLevel := len(trimmed) - len(heading)
+			if strings.EqualFold(strings.TrimSpace(heading), "Saved facts") {
+				level = headingLevel
+				continue
+			}
+			if level > 0 && headingLevel <= level {
+				level = 0
+			}
+		}
+		if level > 0 {
+			section.WriteString(line + "\n")
+		}
+	}
+	if saved := strings.TrimSpace(section.String()); saved != "" {
+		facts = append(facts, saved)
+	}
+	return strings.TrimSpace(strings.Join(facts, "\n\n"))
+}
+
 // WriteLongTerm writes content to the long-term memory file (MEMORY.md).
 func (ms *MemoryStore) WriteLongTerm(content string) error {
 	// Use unified atomic write utility with explicit sync for flash storage reliability.

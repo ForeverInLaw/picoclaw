@@ -105,11 +105,8 @@ func TestSingleSystemMessage(t *testing.T) {
 			if !strings.Contains(sys, "picoclaw") {
 				t.Error("system message missing identity")
 			}
-			if !strings.Contains(sys, ".learnings/") {
-				t.Error("system message missing learnings workspace path")
-			}
-			if !strings.Contains(sys, "Tools Notes:") {
-				t.Error("system message missing tools notes workspace path")
+			if !strings.Contains(sys, "memory/MEMORY.md") {
+				t.Error("system message missing memory workspace path")
 			}
 			if !strings.Contains(sys, "Current Time") {
 				t.Error("system message missing dynamic time context")
@@ -174,7 +171,18 @@ func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msgs := cb.BuildMessages(nil, "", "", "hello", nil, "discord", "chat1", "", tt.senderID, tt.senderDisplayName)
+			msgs := cb.BuildMessages(
+				nil,
+				"",
+				"",
+				"hello",
+				nil,
+				"discord",
+				"chat1",
+				"",
+				tt.senderID,
+				tt.senderDisplayName,
+			)
 			sys := msgs[0].Content
 
 			if tt.wantSection {
@@ -265,11 +273,11 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 			checkField: "User likes Rust",
 		},
 		{
-			name:       "tools file change",
-			file:       "TOOLS.md",
-			contentV1:  "# Tools\nUse rg first.",
-			contentV2:  "# Tools\nUse rg first.\nLog durable tool gotchas here.",
-			checkField: "Log durable tool gotchas here",
+			name:       "user profile change",
+			file:       "USER.md",
+			contentV1:  "# User\nPrefers Go.",
+			contentV2:  "# User\nPrefers Rust.",
+			checkField: "Prefers Rust",
 		},
 	}
 
@@ -411,10 +419,10 @@ func TestNewFileCreationInvalidatesCache(t *testing.T) {
 			checkField: "User prefers dark mode",
 		},
 		{
-			name:       "new tools file",
-			file:       "TOOLS.md",
-			content:    "# Tools\nDocument environment gotchas here.",
-			checkField: "Document environment gotchas here",
+			name:       "new user profile",
+			file:       "USER.md",
+			content:    "# User\nPrefers dark mode.",
+			checkField: "Prefers dark mode",
 		},
 	}
 

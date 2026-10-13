@@ -2,6 +2,8 @@ package telegram
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/mymmrac/telego"
@@ -53,7 +55,11 @@ func (c *TelegramChannel) telegramSenderInfo(user *telego.User) bus.SenderInfo {
 	}
 }
 
-func buildTelegramInlineQueryResult(cfg config.TelegramInlineConfig, query string, useMarkdownV2 bool) telego.InlineQueryResult {
+func buildTelegramInlineQueryResult(
+	cfg config.TelegramInlineConfig,
+	query string,
+	useMarkdownV2 bool,
+) telego.InlineQueryResult {
 	title := strings.TrimSpace(cfg.ResultTitle)
 	if title == "" {
 		title = "Сгенерировать ответ"
@@ -109,6 +115,7 @@ func buildTelegramInlineInboundMessage(result telego.ChosenInlineResult, sender 
 		Metadata: map[string]string{
 			telegramInlineMetadataKey: "true",
 			telegramInlineQueryKey:    strings.TrimSpace(result.Query),
+			"telegram_user_id":        fmt.Sprintf("%d", result.From.ID),
 		},
 	}
 }
@@ -136,7 +143,10 @@ func (c *TelegramChannel) handleInlineQuery(ctx *th.Context, query telego.Inline
 	trimmedQuery := strings.TrimSpace(query.Query)
 	results := []telego.InlineQueryResult{}
 	if trimmedQuery != "" {
-		results = append(results, buildTelegramInlineQueryResult(inlineCfg, trimmedQuery, c.config.Channels.Telegram.UseMarkdownV2))
+		results = append(
+			results,
+			buildTelegramInlineQueryResult(inlineCfg, trimmedQuery, c.config.Channels.Telegram.UseMarkdownV2),
+		)
 	}
 
 	params := &telego.AnswerInlineQueryParams{
@@ -153,7 +163,7 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 	if !inlineCfg.Enabled {
 		return nil
 	}
-	if strings.TrimSpace(result.InlineMessageID) == "" || strings.TrimSpace(result.Query) == "" {
+	if strings.TrimSpace(result.InlineMessageID) == "" || strings.TrimSpace(result.Query) == "" || result.From.ID <= 0 {
 		return nil
 	}
 
@@ -165,13 +175,52 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 		return nil
 	}
 
+	c.inlineMu.Lock()
+	previous, readErr := c.loadInlinePages(result.InlineMessageID)
+	if readErr == nil {
+		if previous.OwnerID != result.From.ID {
+			c.inlineMu.Unlock()
+			return fmt.Errorf("inline result belongs to another user")
+		}
+		if previous.Content != "" {
+			if !previous.Published {
+				err := c.publishInlinePages(ctx, result.InlineMessageID, previous, true)
+				c.inlineMu.Unlock()
+				return err
+			}
+			c.inlineMu.Unlock()
+			return nil
+		}
+	} else if !os.IsNotExist(readErr) {
+		c.inlineMu.Unlock()
+		return fmt.Errorf("read selected inline result identity: %w", readErr)
+	}
+	state := c.inlineReplyLocked(result.InlineMessageID)
+	if state.admitted {
+		c.inlineMu.Unlock()
+		return nil
+	}
+	if err := c.saveInlinePages(result.InlineMessageID, telegramInlinePages{OwnerID: result.From.ID}); err != nil {
+		c.inlineMu.Unlock()
+		return fmt.Errorf("persist selected inline result identity: %w", err)
+	}
+
+	state.admitted = true
+	c.inlineMu.Unlock()
+
 	if err := c.clearInlineReplyMarkup(ctx, result.InlineMessageID); err != nil && !isTelegramMessageNotModified(err) {
 		logger.DebugCF("telegram", "Immediate inline button removal failed", map[string]any{
 			"error": err.Error(),
 		})
 	}
 
-	return c.PublishInbound(ctx, buildTelegramInlineInboundMessage(result, sender))
+	err := c.PublishInbound(ctx, buildTelegramInlineInboundMessage(result, sender))
+	if err != nil {
+		c.inlineMu.Lock()
+		state.admitted = false
+		c.inlineMu.Unlock()
+	}
+	return err
 }
 
 func renderTelegramInlineInitialContent(query, placeholder string, useMarkdownV2 bool) string {
@@ -179,7 +228,9 @@ func renderTelegramInlineInitialContent(query, placeholder string, useMarkdownV2
 		return utils.FormatQuotedMessage(query, placeholder)
 	}
 
-	escapedQuery := escapeHTML(strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(query, "\r\n", "\n"), "\r", "\n")))
+	escapedQuery := escapeHTML(
+		strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(query, "\r\n", "\n"), "\r", "\n")),
+	)
 	escapedQuery = strings.ReplaceAll(escapedQuery, "\n", "<br>")
 	escapedPlaceholder := escapeHTML(strings.TrimSpace(placeholder))
 	if escapedQuery == "" {
@@ -192,8 +243,19 @@ func renderTelegramInlineInitialContent(query, placeholder string, useMarkdownV2
 }
 
 func (c *TelegramChannel) handleInlineCallbackQuery(ctx *th.Context, query telego.CallbackQuery) error {
+	if strings.HasPrefix(query.Data, telegramInlinePagePrefix) {
+		page, err := strconv.Atoi(strings.TrimPrefix(query.Data, telegramInlinePagePrefix))
+		if err == nil && query.InlineMessageID != "" {
+			err = c.showInlinePage(ctx, query.InlineMessageID, query.From.ID, page)
+		}
+		text := ""
+		if err != nil {
+			text = "Unable to load this answer page. Please try again."
+		}
+		return c.bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{CallbackQueryID: query.ID, Text: text})
+	}
 	if query.Data != telegramInlineCallbackData {
 		return nil
 	}
-	return ctx.Bot().AnswerCallbackQuery(ctx, tu.CallbackQuery(query.ID))
+	return c.bot.AnswerCallbackQuery(ctx, tu.CallbackQuery(query.ID))
 }

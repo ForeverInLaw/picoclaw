@@ -280,7 +280,7 @@ func TestSend_LongMessage_SingleCall(t *testing.T) {
 	assert.Len(t, caller.calls, 1, "pre-split message within limit should result in one SendMessage call")
 }
 
-func TestSend_HTMLFallback_PerChunk(t *testing.T) {
+func TestSend_RichFormattingFallback(t *testing.T) {
 	callCount := 0
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
@@ -304,7 +304,7 @@ func TestSend_HTMLFallback_PerChunk(t *testing.T) {
 	assert.Equal(t, 2, len(caller.calls), "should have HTML attempt + plain text fallback")
 }
 
-func TestSend_HTMLFallback_BothFail(t *testing.T) {
+func TestSend_AmbiguousTransportErrorDoesNotRetry(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			return nil, errors.New("send failed")
@@ -318,13 +318,12 @@ func TestSend_HTMLFallback_BothFail(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, channels.ErrTemporary), "error should wrap ErrTemporary")
-	assert.Equal(t, 2, len(caller.calls), "should have HTML attempt + plain text attempt")
+	assert.ErrorIs(t, err, channels.ErrSendFailed, "an unacknowledged new send must stop automatic retries")
+	assert.Len(t, caller.calls, 1, "transport errors must not create a duplicate plain answer")
 }
 
-func TestSend_LongMessage_HTMLFallback_StopsOnError(t *testing.T) {
-	// With a long message that gets split into 2 chunks, if both HTML and
-	// plain text fail on the first chunk, Send should return early.
+func TestSend_TransientErrorStopsBeforeRemainingChunks(t *testing.T) {
+	// A transport failure on the first chunk stops delivery before the rest.
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			return nil, errors.New("send failed")
@@ -332,7 +331,7 @@ func TestSend_LongMessage_HTMLFallback_StopsOnError(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	longContent := strings.Repeat("x", 4001)
+	longContent := strings.Repeat("x", 40001)
 
 	err := ch.Send(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
@@ -340,89 +339,8 @@ func TestSend_LongMessage_HTMLFallback_StopsOnError(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	// Should fail on the first chunk (2 calls: HTML + fallback), never reaching the second chunk.
-	assert.Equal(t, 2, len(caller.calls), "should stop after first chunk fails both HTML and plain text")
-}
-
-func TestSend_MarkdownShortButHTMLLong_MultipleCalls(t *testing.T) {
-	caller := &stubCaller{
-		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
-			return successResponse(t), nil
-		},
-	}
-	ch := newTestChannel(t, caller)
-
-	// Create markdown whose length is <= 4000 but whose HTML expansion is much longer.
-	// "**a** " (6 chars) becomes "<b>a</b> " (9 chars) in HTML, so repeating it many times
-	// yields HTML that exceeds Telegram's limit while markdown stays within it.
-	markdownContent := strings.Repeat("**a** ", 600) // 3600 chars markdown, HTML ~5400+ chars
-	assert.LessOrEqual(t, len([]rune(markdownContent)), 4000, "markdown content must not exceed chunk size")
-
-	htmlExpanded := markdownToTelegramHTML(markdownContent)
-	assert.Greater(
-		t, len([]rune(htmlExpanded)), 4096,
-		"HTML expansion must exceed Telegram limit for this test to be meaningful",
-	)
-
-	err := ch.Send(context.Background(), bus.OutboundMessage{
-		ChatID:  "12345",
-		Content: markdownContent,
-	})
-
-	assert.NoError(t, err)
-	assert.Greater(
-		t, len(caller.calls), 1,
-		"markdown-short but HTML-long message should be split into multiple SendMessage calls",
-	)
-}
-
-func TestSend_HTMLOverflow_WordBoundary(t *testing.T) {
-	caller := &stubCaller{
-		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
-			return successResponse(t), nil
-		},
-	}
-	ch := newTestChannel(t, caller)
-
-	// We want to force a split near index ~2600 while keeping markdown length <= 4000.
-	// Prefix of 430 bold units (6 chars each) = 2580 chars.
-	// Expansion per unit is +3 chars when converted to HTML, so 2580 + 430*3 = 3870.
-	prefix := strings.Repeat("**a** ", 430)
-	targetWord := "TARGETWORDTHATSTAYSTOGETHER"
-	// Suffix of 230 bold units (6 chars each) = 1380 chars.
-	// Total markdown length: 2580 (prefix) + 27 (target word) + 1380 (suffix) = 3987 <= 4000.
-	// HTML expansion adds ~3 chars per bold unit: (430 + 230)*3 = 1980 extra chars,
-	// so total HTML length comfortably exceeds 4096.
-	suffix := strings.Repeat(" **b**", 230)
-	content := prefix + targetWord + suffix
-
-	// Ensure the test content matches the intended boundary conditions.
-	assert.LessOrEqual(t, len([]rune(content)), 4000, "markdown content must not exceed chunk size for this test")
-
-	err := ch.Send(context.Background(), bus.OutboundMessage{
-		ChatID:  "123456",
-		Content: content,
-	})
-
-	assert.NoError(t, err)
-
-	foundFullWord := false
-	for i, call := range caller.calls {
-		var params map[string]any
-		err := json.Unmarshal(call.Data.BodyRaw, &params)
-		require.NoError(t, err)
-		text, _ := params["text"].(string)
-
-		hasWord := strings.Contains(text, targetWord)
-		t.Logf("Chunk %d length: %d, contains target word: %v", i, len(text), hasWord)
-
-		if hasWord {
-			foundFullWord = true
-			break
-		}
-	}
-
-	assert.True(t, foundFullWord, "The target word should not be split between chunks")
+	// An unknown send outcome must not trigger a plain fallback or another chunk.
+	assert.Len(t, caller.calls, 1, "stop delivery after a transport failure")
 }
 
 func TestSend_NotRunning(t *testing.T) {

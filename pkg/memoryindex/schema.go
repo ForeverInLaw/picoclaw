@@ -123,16 +123,19 @@ func (i *Index) ensureSchema(ctx context.Context) (string, error) {
 			value TEXT NOT NULL
 		);`,
 	} {
-		if _, err := i.db.ExecContext(ctx, stmt); err != nil {
-			return "", fmt.Errorf("memoryindex: init schema: %w", err)
+		if _, execErr := i.db.ExecContext(ctx, stmt); execErr != nil {
+			return "", fmt.Errorf("memoryindex: init schema: %w", execErr)
 		}
 	}
 
-	if err := i.ensureObservationColumns(ctx); err != nil {
-		return "", err
+	if columnsErr := i.ensureObservationColumns(ctx); columnsErr != nil {
+		return "", columnsErr
 	}
-	if _, err := i.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source_kind, source_key);`); err != nil {
-		return "", fmt.Errorf("memoryindex: init schema: %w", err)
+	if _, execErr := i.db.ExecContext(
+		ctx,
+		`CREATE INDEX IF NOT EXISTS idx_observations_source ON observations(source_kind, source_key);`,
+	); execErr != nil {
+		return "", fmt.Errorf("memoryindex: init schema: %w", execErr)
 	}
 
 	missingAfter, err := i.missingRequiredSchema(ctx)

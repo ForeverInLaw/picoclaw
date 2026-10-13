@@ -62,6 +62,15 @@ func (c *TelegramChannel) buildInboundCandidate(
 	if user == nil {
 		return nil, fmt.Errorf("message sender (user) is nil")
 	}
+	leadingText := message.Text
+	if strings.TrimSpace(leadingText) == "" {
+		leadingText = message.Caption
+	}
+	if words := strings.Fields(leadingText); len(words) > 0 &&
+		strings.HasPrefix(words[0], "/") && strings.Contains(words[0], "@") &&
+		!isBotCommandEntityForThisBot(words[0], c.bot.Username()) {
+		return nil, nil
+	}
 
 	platformID := fmt.Sprintf("%d", user.ID)
 	sender := c.telegramSenderInfo(user)
@@ -469,11 +478,14 @@ func (c *TelegramChannel) publishAggregatedBatch(ctx context.Context, batch *tel
 	metadata["batch_ended_at"] = batch.endedAt.UTC().Format(time.RFC3339Nano)
 
 	c.publishInboundCandidate(ctx, telegramInboundCandidate{
-		peer:             batch.peer,
-		messageID:        batch.messageID,
-		senderID:         batch.senderID,
-		chatID:           batch.chatID,
-		content:          strings.Join(normalizeTelegramBatchContents(batch.contents, batch.mediaGroupID != ""), "\n\n"),
+		peer:      batch.peer,
+		messageID: batch.messageID,
+		senderID:  batch.senderID,
+		chatID:    batch.chatID,
+		content: strings.Join(
+			normalizeTelegramBatchContents(batch.contents, batch.mediaGroupID != ""),
+			"\n\n",
+		),
 		media:            append([]string(nil), batch.media...),
 		metadata:         metadata,
 		sender:           batch.sender,

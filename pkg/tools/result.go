@@ -19,7 +19,12 @@ type ToolResult struct {
 	// Silent=true overrides this field.
 	ForUser string `json:"for_user,omitempty"`
 
-	// Silent suppresses sending any message to the user.
+	// ForActivity is explicitly public detail for the tool activity surface.
+	// Unlike ForUser, it does not create a standalone channel message.
+	ForActivity string `json:"for_activity,omitempty"`
+
+	// Silent suppresses standalone ForUser feedback. Explicit ForActivity
+	// detail remains visible on the tool activity surface.
 	// When true, ForUser is ignored even if set.
 	Silent bool `json:"silent"`
 
@@ -62,8 +67,9 @@ func NewToolResult(forLLM string) *ToolResult {
 	}
 }
 
-// SilentResult creates a ToolResult that is silent (no user message).
-// The content is only sent to the LLM for context.
+// SilentResult creates a ToolResult without standalone user feedback.
+// The content is only sent to the LLM unless WithActivity explicitly opts in
+// to public tool activity detail.
 //
 // Use this for operations that should not spam the user, such as:
 // - File reads/writes
@@ -176,5 +182,12 @@ func (tr *ToolResult) WithError(err error) *ToolResult {
 // WithTerminal marks the tool result as a terminal turn outcome.
 func (tr *ToolResult) WithTerminal() *ToolResult {
 	tr.Terminal = true
+	return tr
+}
+
+// WithActivity marks detail intended for the public tool activity message.
+// LLM-only context remains private unless the tool opts into this contract.
+func (tr *ToolResult) WithActivity(content string) *ToolResult {
+	tr.ForActivity = content
 	return tr
 }

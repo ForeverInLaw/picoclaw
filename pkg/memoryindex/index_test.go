@@ -61,13 +61,21 @@ func TestIndex_BootstrapSessionsImportsExistingHistory(t *testing.T) {
 	}
 
 	meta := `{"key":"agent:main:telegram:direct:42"}`
-	if err := os.WriteFile(filepath.Join(sessionsDir, "agent_main_telegram_direct_42.meta.json"), []byte(meta), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(sessionsDir, "agent_main_telegram_direct_42.meta.json"),
+		[]byte(meta),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile(meta) error: %v", err)
 	}
 
 	jsonl := `{"role":"user","content":"мы уже обсуждали векторную память"}` + "\n" +
 		`{"role":"assistant","content":"да, лучше начать с sqlite fts"}` + "\n"
-	if err := os.WriteFile(filepath.Join(sessionsDir, "agent_main_telegram_direct_42.jsonl"), []byte(jsonl), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(sessionsDir, "agent_main_telegram_direct_42.jsonl"),
+		[]byte(jsonl),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile(jsonl) error: %v", err)
 	}
 
@@ -81,8 +89,8 @@ func TestIndex_BootstrapSessionsImportsExistingHistory(t *testing.T) {
 	}
 	defer idx.Close()
 
-	if err := idx.BootstrapSessions(context.Background(), sessionsDir); err != nil {
-		t.Fatalf("BootstrapSessions() error: %v", err)
+	if bootstrapErr := idx.BootstrapSessions(context.Background(), sessionsDir); bootstrapErr != nil {
+		t.Fatalf("BootstrapSessions() error: %v", bootstrapErr)
 	}
 
 	hits, err := idx.Search(context.Background(), SearchRequest{
@@ -115,7 +123,11 @@ func TestIndex_BootstrapWorkspaceFilesImportsDurableMemory(t *testing.T) {
 	}
 
 	learningDoc := "# Learnings\n\n## [LRN-20260318-001] insight\n\n### Summary\nHybrid search can wait until lexical retrieval is insufficient.\n\n### Details\nStart with SQLite FTS5 because it is simpler to operate locally.\n"
-	if err := os.WriteFile(filepath.Join(workspace, ".learnings", "LEARNINGS.md"), []byte(learningDoc), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(workspace, ".learnings", "LEARNINGS.md"),
+		[]byte(learningDoc),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile(LEARNINGS.md) error: %v", err)
 	}
 
@@ -129,8 +141,8 @@ func TestIndex_BootstrapWorkspaceFilesImportsDurableMemory(t *testing.T) {
 	}
 	defer idx.Close()
 
-	if err := idx.BootstrapWorkspaceFiles(context.Background(), workspace); err != nil {
-		t.Fatalf("BootstrapWorkspaceFiles() error: %v", err)
+	if bootstrapErr := idx.BootstrapWorkspaceFiles(context.Background(), workspace); bootstrapErr != nil {
+		t.Fatalf("BootstrapWorkspaceFiles() error: %v", bootstrapErr)
 	}
 
 	hits, err := idx.Search(context.Background(), SearchRequest{Query: "SQLite-first infrastructure decisions"})
@@ -173,17 +185,17 @@ func TestIndex_SyncWorkspaceFiles_ReplacesUpdatedDocumentContent(t *testing.T) {
 	}
 	defer idx.Close()
 
-	if err := idx.SyncWorkspaceFiles(context.Background(), workspace); err != nil {
-		t.Fatalf("SyncWorkspaceFiles(initial) error: %v", err)
+	if syncErr := idx.SyncWorkspaceFiles(context.Background(), workspace); syncErr != nil {
+		t.Fatalf("SyncWorkspaceFiles(initial) error: %v", syncErr)
 	}
 
 	updated := "# Long-term Memory\n\n## Preferences\n\nOMEGA-TRACE-27.\n"
-	if err := os.WriteFile(docPath, []byte(updated), 0o644); err != nil {
-		t.Fatalf("WriteFile(updated) error: %v", err)
+	if writeErr := os.WriteFile(docPath, []byte(updated), 0o644); writeErr != nil {
+		t.Fatalf("WriteFile(updated) error: %v", writeErr)
 	}
 
-	if err := idx.SyncWorkspaceFiles(context.Background(), workspace); err != nil {
-		t.Fatalf("SyncWorkspaceFiles(updated) error: %v", err)
+	if syncErr := idx.SyncWorkspaceFiles(context.Background(), workspace); syncErr != nil {
+		t.Fatalf("SyncWorkspaceFiles(updated) error: %v", syncErr)
 	}
 
 	oldHits, err := idx.Search(context.Background(), SearchRequest{Query: "ALPHA-SHARD-91"})
@@ -230,8 +242,8 @@ func TestIndex_Open_RepairsLegacySchema(t *testing.T) {
 		`INSERT INTO observations(session_key, channel, chat_id, role, sender_id, content, created_at_ms)
 		 VALUES ('agent:main:telegram:group:-1001', 'telegram', '-1001', 'user', 'telegram:42', 'legacy row', 1234567890);`,
 	} {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("legacy schema setup failed for %q: %v", stmt, err)
+		if _, execErr := db.Exec(stmt); execErr != nil {
+			t.Fatalf("legacy schema setup failed for %q: %v", stmt, execErr)
 		}
 	}
 	_ = db.Close()
@@ -257,6 +269,7 @@ func TestIndex_Open_RepairsLegacySchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PRAGMA table_info(observations) error: %v", err)
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var (
 			cid      int
@@ -271,7 +284,9 @@ func TestIndex_Open_RepairsLegacySchema(t *testing.T) {
 		}
 		columnNames[name] = true
 	}
-	rows.Close()
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("Iterate(table_info) error: %v", rowsErr)
+	}
 
 	for _, column := range []string{"peer_kind", "chat_label", "source_kind", "source_key"} {
 		if !columnNames[column] {
@@ -281,7 +296,8 @@ func TestIndex_Open_RepairsLegacySchema(t *testing.T) {
 
 	for _, table := range []string{"chat_catalog", "chat_aliases", "chat_participants", "chat_rollups"} {
 		var exists int
-		if err := checkDB.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, table).Scan(&exists); err != nil {
+		if err := checkDB.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, table).
+			Scan(&exists); err != nil {
 			t.Fatalf("table exists check for %s failed: %v", table, err)
 		}
 		if exists != 1 {
@@ -290,7 +306,8 @@ func TestIndex_Open_RepairsLegacySchema(t *testing.T) {
 	}
 
 	var legacyCount int
-	if err := checkDB.QueryRow(`SELECT COUNT(*) FROM observations WHERE content = 'legacy row'`).Scan(&legacyCount); err != nil {
+	if err := checkDB.QueryRow(`SELECT COUNT(*) FROM observations WHERE content = 'legacy row'`).
+		Scan(&legacyCount); err != nil {
 		t.Fatalf("legacy row count failed: %v", err)
 	}
 	if legacyCount != 1 {

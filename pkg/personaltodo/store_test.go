@@ -29,18 +29,18 @@ func TestStore_CRUDAndPersistence(t *testing.T) {
 		t.Fatalf("item2.ItemID = %d, want 2", item2.ItemID)
 	}
 
-	if _, err := store.MarkDone(t.Context(), "telegram:42", 1); err != nil {
-		t.Fatalf("MarkDone() error: %v", err)
+	if _, updateErr := store.MarkDone(t.Context(), "telegram:42", 1); updateErr != nil {
+		t.Fatalf("MarkDone() error: %v", updateErr)
 	}
-	if _, err := store.Reopen(t.Context(), "telegram:42", 1); err != nil {
-		t.Fatalf("Reopen() error: %v", err)
+	if _, reopenErr := store.Reopen(t.Context(), "telegram:42", 1); reopenErr != nil {
+		t.Fatalf("Reopen() error: %v", reopenErr)
 	}
-	if _, err := store.MarkDone(t.Context(), "telegram:42", 1); err != nil {
-		t.Fatalf("MarkDone(again) error: %v", err)
+	if _, updateErr := store.MarkDone(t.Context(), "telegram:42", 1); updateErr != nil {
+		t.Fatalf("MarkDone(again) error: %v", updateErr)
 	}
 
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close() error: %v", err)
+	if closeErr := store.Close(); closeErr != nil {
+		t.Fatalf("Close() error: %v", closeErr)
 	}
 
 	store, err = Open(dbPath)
@@ -81,8 +81,8 @@ func TestStore_CRUDAndPersistence(t *testing.T) {
 		t.Fatalf("remaining items = %#v, want only item #2", remaining)
 	}
 
-	if err := store.Delete(t.Context(), "telegram:42", 2); err != nil {
-		t.Fatalf("Delete() error: %v", err)
+	if deleteErr := store.Delete(t.Context(), "telegram:42", 2); deleteErr != nil {
+		t.Fatalf("Delete() error: %v", deleteErr)
 	}
 	finalCounts, err := store.Counts(t.Context(), "telegram:42")
 	if err != nil {
@@ -114,7 +114,12 @@ func TestStore_IsolatesOwnersAndKeepsPerOwnerCounters(t *testing.T) {
 	}
 
 	if alice1.ItemID != 1 || alice2.ItemID != 2 || bob1.ItemID != 1 {
-		t.Fatalf("unexpected per-owner counters: alice1=%d alice2=%d bob1=%d", alice1.ItemID, alice2.ItemID, bob1.ItemID)
+		t.Fatalf(
+			"unexpected per-owner counters: alice1=%d alice2=%d bob1=%d",
+			alice1.ItemID,
+			alice2.ItemID,
+			bob1.ItemID,
+		)
 	}
 
 	aliceItems, err := store.List(t.Context(), "telegram:42", "", 10)

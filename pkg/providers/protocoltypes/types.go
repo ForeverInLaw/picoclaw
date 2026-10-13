@@ -24,7 +24,23 @@ type FunctionCall struct {
 	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
+// ContentPhase is supplied by providers that distinguish answer text from commentary.
+type ContentPhase string
+
+const (
+	ContentPhaseUnknown    ContentPhase = ""
+	ContentPhaseAnswer     ContentPhase = "final_answer"
+	ContentPhaseCommentary ContentPhase = "commentary"
+	ContentPhaseReasoning  ContentPhase = "reasoning"
+)
+
+type StreamContent struct {
+	Content string
+	Phase   ContentPhase
+}
+
 type LLMResponse struct {
+	ContentPhase     ContentPhase      `json:"content_phase,omitempty"`
 	Content          string            `json:"content"`
 	ReasoningContent string            `json:"reasoning_content,omitempty"`
 	ToolCalls        []ToolCall        `json:"tool_calls,omitempty"`
@@ -63,6 +79,7 @@ type ContentBlock struct {
 }
 
 type Message struct {
+	ContentPhase     ContentPhase   `json:"content_phase,omitempty"`
 	Role             string         `json:"role"`
 	Content          string         `json:"content"`
 	Media            []string       `json:"media,omitempty"`

@@ -56,8 +56,23 @@ For substantial new features, please open an issue first to discuss the design b
 
 ### Prerequisites
 
-- Go 1.25 or later
+- Go 1.27.2 or later (see `go.mod`)
 - `make`
+- Node.js 22.12+ and pnpm for the web frontend
+- `golangci-lint` v2.14.0, matching the PR workflow
+
+Install development dependencies from the repo root:
+
+```bash
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+go mod download
+cd web/frontend
+pnpm install --frozen-lockfile
+```
+
+Ensure `$(go env GOPATH)/bin` is on your `PATH` for `golangci-lint`.
+The frontend's `pnpm-workspace.yaml` approves the dependency installation scripts.
+Go automatically downloads the minimum toolchain declared in `go.mod` when needed.
 
 ### Build
 

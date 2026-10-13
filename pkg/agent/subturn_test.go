@@ -872,9 +872,9 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 		t.Error("expected error from panic recovery")
 	}
 
-	// Result should be nil because panic occurred before runTurn could return
-	if result != nil {
-		t.Error("expected nil result after panic")
+	// The parent must receive the failure instead of silently ignoring nil.
+	if result == nil || !result.IsError || !errors.Is(result.Err, err) {
+		t.Fatalf("expected structured panic failure, got result=%+v err=%v", result, err)
 	}
 
 	time.Sleep(10 * time.Millisecond) // let event goroutine flush
@@ -883,11 +883,12 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 		t.Error("SubTurnEndEvent not emitted after panic")
 	}
 
-	// For async call, result should still be delivered to channel (even if nil)
+	// An async parent receives the same failed result as the caller.
 	select {
 	case res := <-parent.pendingResults:
-		// Result was delivered (nil due to panic)
-		_ = res
+		if res != result {
+			t.Fatalf("delivered panic failure = %+v, returned %+v", res, result)
+		}
 	default:
 		t.Error("async result should be delivered to channel even after panic")
 	}
@@ -1226,26 +1227,15 @@ func TestFinish_ConcurrentCalls(t *testing.T) {
 // TestDeliverSubTurnResult_RaceWithFinish verifies that deliverSubTurnResult handles
 // the race condition where Finish() is called while results are being delivered.
 func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
+	al, _, messageBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	defer messageBus.Close()
+	defer al.Close()
 
-	// Collect events via real EventBus
-	var mu sync.Mutex
+	// Delivery publishes synchronously into the real buffered EventBus.
 	var deliveredCount, orphanCount int
 	sub := al.SubscribeEvents(64)
 	defer al.UnsubscribeEvents(sub.ID)
-	go func() {
-		for evt := range sub.C {
-			mu.Lock()
-			switch evt.Kind {
-			case EventKindSubTurnResultDelivered:
-				deliveredCount++
-			case EventKindSubTurnOrphan:
-				orphanCount++
-			}
-			mu.Unlock()
-		}
-	}()
 
 	ctx := context.Background()
 	parentTS := &turnState{
@@ -1282,31 +1272,38 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 	}
 
 	wg.Wait()
-	time.Sleep(20 * time.Millisecond) // let event goroutine flush
-
-	// Get final counts
-	mu.Lock()
-	finalDelivered := deliveredCount
-	finalOrphan := orphanCount
-	mu.Unlock()
-
-	t.Logf("Delivered: %d, Orphan: %d, Total: %d", finalDelivered, finalOrphan, finalDelivered+finalOrphan)
-
-	// With the new drainPendingResults behavior, the total events may be >= numResults
-	// because Finish() drains remaining results from the channel and emits them as orphans.
-	// So we expect:
-	// - Some results were delivered successfully (before Finish())
-	// - Some results became orphans (after Finish() or channel full)
-	// - Some results were in the channel when Finish() was called and got drained as orphans
-	// The total should be at least numResults (could be more due to drain)
-	if finalDelivered+finalOrphan < numResults {
-		t.Errorf("Expected at least %d total events, got %d delivered + %d orphan = %d",
-			numResults, finalDelivered, finalOrphan, finalDelivered+finalOrphan)
+	for range numResults {
+		select {
+		case evt := <-sub.C:
+			switch evt.Kind {
+			case EventKindSubTurnResultDelivered:
+				deliveredCount++
+			case EventKindSubTurnOrphan:
+				orphanCount++
+			default:
+				t.Fatalf("unexpected result event: %v", evt.Kind)
+			}
+		default:
+			t.Fatalf("missing result event: delivered=%d orphan=%d", deliveredCount, orphanCount)
+		}
 	}
-
-	// Should have at least some orphan results (those that arrived after Finish() or were drained)
-	if finalOrphan == 0 {
+	select {
+	case evt := <-sub.C:
+		t.Fatalf("duplicate result event: %v", evt.Kind)
+	default:
+	}
+	if orphanCount == 0 {
 		t.Error("Expected at least some orphan results after Finish()")
+	}
+	queued := 0
+	for result := range parentTS.pendingResults {
+		if result == nil {
+			t.Fatal("queued nil result")
+		}
+		queued++
+	}
+	if queued != deliveredCount {
+		t.Fatalf("queued=%d delivered events=%d", queued, deliveredCount)
 	}
 }
 
@@ -1426,7 +1423,7 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 		},
 	}
 	msgBus := bus.NewMessageBus()
-	provider := &simpleMockProviderAPI{}
+	provider := &simpleMockProviderAPI{response: "sub-turn answer"}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	ctx := context.Background()
@@ -1472,7 +1469,7 @@ func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 		},
 	}
 	msgBus := bus.NewMessageBus()
-	provider := &simpleMockProviderAPI{}
+	provider := &simpleMockProviderAPI{response: "sub-turn answer"}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	ctx := context.Background()
@@ -1529,7 +1526,7 @@ func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 		},
 	}
 	msgBus := bus.NewMessageBus()
-	provider := &simpleMockProviderAPI{}
+	provider := &simpleMockProviderAPI{response: "sub-turn answer"}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	ctx := context.Background()

@@ -206,7 +206,7 @@ func TestNewAgentInstance_ConfiguresImageProviderFromModelList(t *testing.T) {
 	if len(agent.ImageCandidates) != 1 {
 		t.Fatalf("len(ImageCandidates) = %d, want 1", len(agent.ImageCandidates))
 	}
-	if agent.ImageCandidates[0] != (providers.FallbackCandidate{Provider: "openai", Model: "vision-model"}) {
+	if agent.ImageCandidates[0] != (providers.FallbackCandidate{Provider: "openai", Model: "vision-model", ConfigName: "vision-model"}) {
 		t.Fatalf("ImageCandidates[0] = %#v, want openai/vision-model", agent.ImageCandidates[0])
 	}
 }

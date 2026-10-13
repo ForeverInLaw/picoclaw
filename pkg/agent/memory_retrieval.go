@@ -8,12 +8,14 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/chatmemory"
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
+	"github.com/sipeed/picoclaw/pkg/session"
 )
 
 func lookupRetrievedMemories(
 	ctx context.Context,
 	agent *AgentInstance,
 	sessionKey, channel, chatID, peerKind, senderID, userMessage string,
+	contexts ...ConversationContext,
 ) string {
 	if agent == nil || agent.MemoryIndex == nil {
 		return ""
@@ -24,25 +26,39 @@ func lookupRetrievedMemories(
 		return ""
 	}
 
+	exactSessionKey := ""
+	var since time.Time
+	if len(contexts) > 0 && contexts[0].Reset {
+		view, ok := agent.Sessions.(session.ConversationTurn)
+		if !ok {
+			return ""
+		}
+		exactSessionKey = view.ConversationKey(sessionKey)
+		since = contexts[0].ResetAt
+	}
 	var (
 		hits []memoryindex.Hit
 		err  error
 	)
 	if agent.ChatMemory != nil {
 		hits, err = agent.ChatMemory.Search(ctx, chatmemory.SearchRequest{
-			RequesterID:    senderID,
-			CurrentChannel: channel,
-			CurrentChatID:  chatID,
-			CurrentPeer:    peerKind,
-			Query:          query,
-			Limit:          5,
+			RequesterID:     senderID,
+			ExactSessionKey: exactSessionKey,
+			Since:           since,
+			CurrentChannel:  channel,
+			CurrentChatID:   chatID,
+			CurrentPeer:     peerKind,
+			Query:           query,
+			Limit:           5,
 		})
 	} else {
 		hits, err = agent.MemoryIndex.Search(ctx, memoryindex.SearchRequest{
-			Query:      query,
-			SessionKey: sessionKey,
-			Channel:    channel,
-			ChatID:     chatID,
+			Query:           query,
+			SessionKey:      sessionKey,
+			ExactSessionKey: exactSessionKey,
+			Since:           since,
+			Channel:         channel,
+			ChatID:          chatID,
 		})
 	}
 	if err != nil || len(hits) == 0 {
@@ -50,7 +66,9 @@ func lookupRetrievedMemories(
 	}
 
 	var sb strings.Builder
-	sb.WriteString("RETRIEVED_MEMORY: Relevant prior dialog excerpts. Use them as reference, but prefer explicit current instructions.\n")
+	sb.WriteString(
+		"RETRIEVED_MEMORY: Relevant prior dialog excerpts. Use them as reference, but prefer explicit current instructions.\n",
+	)
 	for idx, hit := range hits {
 		fmt.Fprintf(&sb, "\n[%d] channel=%s chat=%s role=%s", idx+1, hit.Channel, hit.ChatID, hit.Role)
 		if hit.SenderID != "" {
@@ -70,7 +88,8 @@ func retrievalQuery(userMessage string) string {
 		return ""
 	}
 
-	if strings.HasPrefix(message, "[telegram_group_message]") || strings.HasPrefix(message, "[scheduled_reminder_trigger]") {
+	if strings.HasPrefix(message, "[telegram_group_message]") ||
+		strings.HasPrefix(message, "[scheduled_reminder_trigger]") {
 		if parts := strings.SplitN(message, "\n\n", 2); len(parts) == 2 {
 			message = strings.TrimSpace(parts[1])
 		}

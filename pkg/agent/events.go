@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 // EventKind identifies a structured agent-loop event.
@@ -146,6 +148,7 @@ type LLMResponsePayload struct {
 
 // LLMDeltaPayload describes a streamed LLM delta.
 type LLMDeltaPayload struct {
+	ContentPhase      providers.ContentPhase
 	ContentDeltaLen   int
 	ReasoningDeltaLen int
 }

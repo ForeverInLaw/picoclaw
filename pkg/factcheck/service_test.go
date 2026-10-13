@@ -26,12 +26,26 @@ func (f fakeFetcher) Fetch(_ context.Context, rawURL string, _ int) (*websource.
 func TestServiceCheck_Supported(t *testing.T) {
 	service := NewService(
 		fakeSearcher{hits: []websource.SearchHit{
-			{Title: "Press release", URL: "https://example.com/news", Snippet: "ExampleCorp announced the release officially."},
-			{Title: "Coverage", URL: "https://news.example.net/item", Snippet: "Several outlets reported the same release."},
+			{
+				Title:   "Press release",
+				URL:     "https://example.com/news",
+				Snippet: "ExampleCorp announced the release officially.",
+			},
+			{
+				Title:   "Coverage",
+				URL:     "https://news.example.net/item",
+				Snippet: "Several outlets reported the same release.",
+			},
 		}},
 		fakeFetcher{docs: map[string]*websource.Document{
-			"https://example.com/news":      {Title: "ExampleCorp announced product launch", Text: "ExampleCorp announced product launch officially and confirmed the release."},
-			"https://news.example.net/item": {Title: "Coverage", Text: "Media reported ExampleCorp announced product launch and confirmed the release."},
+			"https://example.com/news": {
+				Title: "ExampleCorp announced product launch",
+				Text:  "ExampleCorp announced product launch officially and confirmed the release.",
+			},
+			"https://news.example.net/item": {
+				Title: "Coverage",
+				Text:  "Media reported ExampleCorp announced product launch and confirmed the release.",
+			},
 		}},
 	)
 
@@ -50,12 +64,22 @@ func TestServiceCheck_Supported(t *testing.T) {
 func TestServiceCheck_Contradicted(t *testing.T) {
 	service := NewService(
 		fakeSearcher{hits: []websource.SearchHit{
-			{Title: "Official denial", URL: "https://agency.gov/notice", Snippet: "The agency says the claim is false."},
+			{
+				Title:   "Official denial",
+				URL:     "https://agency.gov/notice",
+				Snippet: "The agency says the claim is false.",
+			},
 			{Title: "Debunk", URL: "https://news.example.net/debunk", Snippet: "The rumor was debunked as incorrect."},
 		}},
 		fakeFetcher{docs: map[string]*websource.Document{
-			"https://agency.gov/notice":       {Title: "Official notice", Text: "The claim that ExampleCorp was fined is false and incorrect."},
-			"https://news.example.net/debunk": {Title: "Debunk", Text: "Reporters said the claim ExampleCorp was fined is false and debunked."},
+			"https://agency.gov/notice": {
+				Title: "Official notice",
+				Text:  "The claim that ExampleCorp was fined is false and incorrect.",
+			},
+			"https://news.example.net/debunk": {
+				Title: "Debunk",
+				Text:  "Reporters said the claim ExampleCorp was fined is false and debunked.",
+			},
 		}},
 	)
 
@@ -74,7 +98,10 @@ func TestServiceCheck_Unverified(t *testing.T) {
 			{Title: "Mention", URL: "https://blog.example.com/post", Snippet: "Some mentions exist."},
 		}},
 		fakeFetcher{docs: map[string]*websource.Document{
-			"https://blog.example.com/post": {Title: "Mention", Text: "This post mentions ExampleCorp and satellites but does not confirm the claim."},
+			"https://blog.example.com/post": {
+				Title: "Mention",
+				Text:  "This post mentions ExampleCorp and satellites but does not confirm the claim.",
+			},
 		}},
 	)
 

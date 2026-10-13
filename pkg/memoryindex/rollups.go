@@ -14,7 +14,8 @@ func (i *Index) UpsertChatRollup(ctx context.Context, record RollupRecord) error
 	record.Channel = strings.TrimSpace(record.Channel)
 	record.ChatID = strings.TrimSpace(record.ChatID)
 	record.Summary = strings.TrimSpace(record.Summary)
-	if record.Channel == "" || record.ChatID == "" || record.WindowStart.IsZero() || record.WindowEnd.IsZero() || record.Summary == "" {
+	if record.Channel == "" || record.ChatID == "" || record.WindowStart.IsZero() || record.WindowEnd.IsZero() ||
+		record.Summary == "" {
 		return nil
 	}
 	now := time.Now().UTC()
@@ -23,7 +24,25 @@ func (i *Index) UpsertChatRollup(ctx context.Context, record RollupRecord) error
 	}
 	record.UpdatedAt = now
 
-	_, err := i.db.ExecContext(
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("memoryindex: begin rollup replacement: %w", err)
+	}
+	defer tx.Rollback()
+
+	// An hour is identified by its start; the last hour's coverage end grows
+	// with each request. Remove superseded intervals in the same transaction,
+	// including legacy partial-hour rows and their derived embeddings.
+	for _, table := range []string{"chat_rollup_embeddings", "chat_rollups"} {
+		if _, err = tx.ExecContext(ctx,
+			`DELETE FROM `+table+` WHERE channel = ? AND chat_id = ? AND window_start_ms = ? AND window_end_ms != ?`,
+			record.Channel, record.ChatID, record.WindowStart.UnixMilli(), record.WindowEnd.UnixMilli(),
+		); err != nil {
+			return fmt.Errorf("memoryindex: remove superseded rollup from %s: %w", table, err)
+		}
+	}
+
+	_, err = tx.ExecContext(
 		ctx,
 		`INSERT INTO chat_rollups(channel, chat_id, window_start_ms, window_end_ms, source_count, last_observation_ms, summary, created_at_ms, updated_at_ms)
 		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -44,6 +63,9 @@ func (i *Index) UpsertChatRollup(ctx context.Context, record RollupRecord) error
 	)
 	if err != nil {
 		return fmt.Errorf("memoryindex: upsert chat rollup: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("memoryindex: commit rollup replacement: %w", err)
 	}
 	return nil
 }
@@ -114,7 +136,12 @@ func (i *Index) ListChatRollups(ctx context.Context, scope ChatScope, window Tim
 	return results, nil
 }
 
-func (i *Index) ListObservationsInWindow(ctx context.Context, scope ChatScope, window TimeWindow, limit int) ([]Hit, error) {
+func (i *Index) ListObservationsInWindow(
+	ctx context.Context,
+	scope ChatScope,
+	window TimeWindow,
+	limit int,
+) ([]Hit, error) {
 	if i == nil || i.db == nil {
 		return nil, nil
 	}
@@ -124,7 +151,7 @@ func (i *Index) ListObservationsInWindow(ctx context.Context, scope ChatScope, w
 		return nil, nil
 	}
 
-	query := `SELECT session_key, channel, chat_id, peer_kind, chat_label, role, sender_id, content, created_at_ms
+	query := `SELECT id, session_key, channel, chat_id, peer_kind, chat_label, role, sender_id, content, created_at_ms
 		FROM observations
 		WHERE channel = ? AND chat_id = ?`
 	args := []any{scope.Channel, scope.ChatID}
