@@ -53,15 +53,11 @@ func (p *ParallelSearchProvider) Search(ctx context.Context, query string, count
 			Excerpts []string `json:"excerpts"`
 		} `json:"results"`
 	}
-	apiKey, ok := p.keyPool.NewIterator().Next()
-	if !ok {
-		return nil, fmt.Errorf("Parallel credentials are unavailable")
-	}
-	if err := searchJSON(
+	if err := searchJSONWithKeys(
 		ctx,
 		p.client,
 		baseURL+"/v1/search",
-		apiKey,
+		p.keyPool,
 		p.ProviderName(),
 		request,
 		&response,
@@ -94,6 +90,7 @@ type searchHTTPError struct {
 	provider string
 	status   int
 	quota    bool
+	auth     bool
 }
 
 func (e *searchHTTPError) Error() string {
@@ -127,14 +124,23 @@ func searchJSON(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		message := strings.ToLower(string(body))
-		quota := false
+		quota := resp.StatusCode == http.StatusPaymentRequired
 		for _, marker := range []string{"insufficient_quota", "quota_exceeded", "credits exhausted", "insufficient credits", "exceeded your current quota", "payment_required", "credit balance"} {
 			if strings.Contains(message, marker) {
 				quota = true
 				break
 			}
 		}
-		return &searchHTTPError{provider: provider, status: resp.StatusCode, quota: quota}
+		auth := resp.StatusCode == http.StatusUnauthorized
+		if resp.StatusCode == http.StatusForbidden {
+			for _, marker := range []string{"invalid_api_key", "invalid api key", "expired api key", "revoked api key", "authentication_failed", "authentication_error"} {
+				if strings.Contains(message, marker) {
+					auth = true
+					break
+				}
+			}
+		}
+		return &searchHTTPError{provider: provider, status: resp.StatusCode, quota: quota, auth: auth}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(result); err != nil {
 		return fmt.Errorf("decode %s search: %w", provider, err)

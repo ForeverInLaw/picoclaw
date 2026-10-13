@@ -54,9 +54,7 @@ func newPreferredSearchProvider(opts WebSearchToolOptions) (SearchProvider, int,
 	if count <= 0 {
 		count = 5
 	}
-	if backup != nil {
-		chosen = &fallbackSearchProvider{primary: chosen, backup: backup}
-	}
+	chosen = &fallbackSearchProvider{primary: chosen, backup: backup}
 	return chosen, min(count, 10), nil
 }
 
@@ -66,11 +64,11 @@ type fallbackSearchProvider struct{ primary, backup SearchProvider }
 func (p *fallbackSearchProvider) ProviderName() string { return p.primary.ProviderName() }
 
 func (p *fallbackSearchProvider) Search(ctx context.Context, query string, count int) ([]websource.SearchHit, error) {
-	// Reserve time for at most two external requests, including a timed-out primary.
+	// Bound the complete operation, including credential repair and one backup.
 	ctx, cancel := context.WithTimeout(ctx, 2*searchTimeout)
 	defer cancel()
 	hits, err := p.primary.Search(ctx, query, count)
-	if err == nil || ctx.Err() != nil || !isTransientSearchError(err) {
+	if err == nil || ctx.Err() != nil || p.backup == nil || !isTransientSearchError(err) {
 		return hits, err
 	}
 	hits, backupErr := p.backup.Search(ctx, query, count)
@@ -88,4 +86,36 @@ func isTransientSearchError(err error) bool {
 	}
 	failure := providers.ClassifyError(err, "", "")
 	return failure != nil && failure.IsTransient()
+}
+
+// searchJSONWithKeys repairs credential failures with a finite pass over the
+// configured key pool. It never repeats a key or hides provider/transport errors.
+func searchJSONWithKeys(
+	ctx context.Context,
+	client *http.Client,
+	endpoint string,
+	keys *APIKeyPool,
+	provider string,
+	payload, result any,
+) error {
+	var lastErr error
+	iterator := keys.NewIterator()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		key, ok := iterator.Next()
+		if !ok {
+			if lastErr != nil {
+				return lastErr
+			}
+			return fmt.Errorf("%s credentials are unavailable", provider)
+		}
+		lastErr = searchJSON(ctx, client, endpoint, key, provider, payload, result)
+		var failure *searchHTTPError
+		if !errors.As(lastErr, &failure) ||
+			!(failure.auth || failure.quota || failure.status == http.StatusTooManyRequests) {
+			return lastErr
+		}
+	}
 }

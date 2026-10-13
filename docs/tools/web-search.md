@@ -22,10 +22,19 @@ configuration takes precedence over `prefer_native`, so the requested service
 is available even when the model also supports built-in search.
 
 Search requests respect cancellation and the existing HTTP proxy configuration.
-Successful searches call only the selected primary. Network interruptions,
-temporary rate limits and server failures can call the backup once within the
-same timeout budget. Invalid requests, authentication and exhausted credits or
-quota do not trigger the backup. Invalid endpoint addresses, nonexistent DNS names,
+The complete search has a 20-second deadline, including key rotation and any
+provider fallback; each HTTP request also has the existing 10-second limit.
+Successful searches normally make one primary request. Invalid authentication,
+exhausted credits or budgets, and HTTP 429 can try each configured key once,
+using the existing round-robin pool. A healthy key ends the sweep immediately.
+Generic HTTP 403 feature or policy errors do not rotate keys.
+
+Network interruptions, temporary rate limits remaining after the key sweep, and
+server failures can call the backup provider once, sequentially. The backup uses
+the same finite credential repair. This can exceed two HTTP requests, but never
+exceeds one attempt per configured key on either provider within the shared
+deadline. Invalid requests, authentication and exhausted credits or quota do
+not trigger another provider. Invalid endpoint addresses, nonexistent DNS names,
 unsupported protocols, and certificate validation failures also fail without a
 backup request. If both fail, the error names both failures.
 Automated contracts use temporary HTTP servers; no paid service is called by

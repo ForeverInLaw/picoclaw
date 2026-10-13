@@ -47,11 +47,15 @@ func (p *ExaSearchProvider) Search(ctx context.Context, query string, count int)
 			Text       string   `json:"text"`
 		} `json:"results"`
 	}
-	apiKey, ok := p.keyPool.NewIterator().Next()
-	if !ok {
-		return nil, fmt.Errorf("Exa credentials are unavailable")
-	}
-	if err := searchJSON(ctx, p.client, baseURL+"/search", apiKey, p.ProviderName(), request, &response); err != nil {
+	if err := searchJSONWithKeys(
+		ctx,
+		p.client,
+		baseURL+"/search",
+		p.keyPool,
+		p.ProviderName(),
+		request,
+		&response,
+	); err != nil {
 		return nil, err
 	}
 	hits := make([]websource.SearchHit, 0, min(count, len(response.Results)))
