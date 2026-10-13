@@ -9,6 +9,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/session"
 )
 
 type ingressRequest struct {
@@ -147,6 +148,55 @@ func TestRunFinalReplyPreservesInboundMessageAndTopic(t *testing.T) {
 				t.Fatalf("final reply target = (%q,%q), want (%q,31)", out.ChatID, out.ReplyToMessageID, chatID)
 			}
 		})
+	}
+}
+
+func TestRunRejectsCapturedConversationResetBeforeTurnRegistration(t *testing.T) {
+	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	defer mb.Close()
+	agent := al.registry.GetDefaultAgent()
+	store := agent.Sessions.(*session.ConversationStore)
+	msg := directIngressMessage("stale captured request")
+	msg.SessionKey = "agent:main:registration-gap"
+	captured, _, err := store.CaptureTurn(msg.SessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResetConversation(msg.SessionKey); err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions = captured
+	provider := &retryScriptProvider{}
+	agent.Provider = provider
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- al.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	publishIncoming(t, mb, msg)
+	for {
+		select {
+		case event := <-sub.C:
+			if event.Kind != EventKindTurnEnd {
+				continue
+			}
+			payload := event.Payload.(TurnEndPayload)
+			if payload.Status != TurnEndStatusAborted || provider.calls != 0 {
+				t.Fatalf("stale captured turn status=%s model calls=%d", payload.Status, provider.calls)
+			}
+			select {
+			case reply := <-mb.OutboundChan():
+				t.Fatalf("stale captured turn replied: %+v", reply)
+			default:
+			}
+			return
+		case <-time.After(2 * time.Second):
+			t.Fatal("stale captured turn did not terminate")
+		}
 	}
 }
 

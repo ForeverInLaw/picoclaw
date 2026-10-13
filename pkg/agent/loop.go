@@ -1640,6 +1640,12 @@ func (al *AgentLoop) runAgentLoop(
 	if result.status == TurnEndStatusAborted {
 		return "", nil
 	}
+	if view, ok := agent.Sessions.(session.ConversationTurn); ok {
+		current, err := view.IsCurrent()
+		if err != nil || !current {
+			return "", err
+		}
+	}
 
 	for _, followUp := range result.followUps {
 		if pubErr := al.bus.PublishInbound(ctx, followUp); pubErr != nil {
@@ -1749,6 +1755,19 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			},
 		)
 	}()
+
+	if view, ok := ts.agent.Sessions.(session.ConversationTurn); ok {
+		current, err := view.IsCurrent()
+		if err != nil {
+			turnStatus = TurnEndStatusError
+			return turnResult{}, err
+		}
+		if !current {
+			ts.requestHardAbort()
+			turnStatus = TurnEndStatusAborted
+			return al.abortTurn(ts)
+		}
+	}
 
 	al.emitEvent(
 		EventKindTurnStart,

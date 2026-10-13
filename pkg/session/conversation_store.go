@@ -106,6 +106,16 @@ type conversationView struct {
 	bound      bool
 }
 
+func (v *conversationView) IsCurrent() (bool, error) {
+	if !v.bound {
+		return true, nil
+	}
+	v.owner.mu.Lock()
+	defer v.owner.mu.Unlock()
+	boundary, err := v.owner.boundaryLocked(v.key)
+	return err == nil && boundary.Generation == v.generation, err
+}
+
 func (v *conversationView) apply(key string, operation func(SessionStore, string) error) error {
 	v.owner.mu.Lock()
 	defer v.owner.mu.Unlock()
