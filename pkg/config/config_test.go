@@ -23,6 +23,44 @@ func mustSetupSSHKey(t *testing.T) {
 	t.Setenv("PICOCLAW_SSH_KEY_PATH", keyPath)
 }
 
+func TestConfigSerializationPreservesValueAndPointerCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		config        Config
+		wantProviders bool
+		wantSession   bool
+	}{
+		{name: "empty optional sections"},
+		{
+			name: "configured optional sections",
+			config: Config{
+				Providers: ProvidersConfig{Anthropic: ProviderConfig{APIKey: "legacy-key"}},
+				Session:   SessionConfig{DMScope: "per-channel-peer"},
+			},
+			wantProviders: true,
+			wantSession:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, value := range []any{tc.config, &tc.config} {
+				data, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var fields map[string]json.RawMessage
+				if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil {
+					t.Fatal(decodeErr)
+				}
+				_, providersPresent := fields["providers"]
+				_, sessionPresent := fields["session"]
+				if providersPresent != tc.wantProviders || sessionPresent != tc.wantSession {
+					t.Fatalf("%T optional fields: providers=%v session=%v", value, providersPresent, sessionPresent)
+				}
+			}
+		})
+	}
+}
+
 func TestAgentModelConfig_UnmarshalString(t *testing.T) {
 	var m AgentModelConfig
 	if err := json.Unmarshal([]byte(`"gpt-4"`), &m); err != nil {

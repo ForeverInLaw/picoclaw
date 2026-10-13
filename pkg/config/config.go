@@ -76,6 +76,7 @@ func (f *FlexibleStringSlice) UnmarshalText(text []byte) error {
 	return nil
 }
 
+//nolint:recvcheck // Value MarshalJSON preserves Config value serialization; runtime methods need pointer receivers.
 type Config struct {
 	Agents    AgentsConfig    `json:"agents"`
 	Bindings  []AgentBinding  `json:"bindings,omitempty"`
@@ -154,14 +155,14 @@ type BuildInfo struct {
 
 // MarshalJSON implements custom JSON marshaling for Config
 // to omit providers section when empty and session when empty
-func (c *Config) MarshalJSON() ([]byte, error) {
+func (c Config) MarshalJSON() ([]byte, error) {
 	type Alias Config
 	aux := &struct {
 		Providers *ProvidersConfig `json:"providers,omitempty"`
 		Session   *SessionConfig   `json:"session,omitempty"`
 		*Alias
 	}{
-		Alias: (*Alias)(c),
+		Alias: (*Alias)(&c),
 	}
 
 	// Only include providers if not empty
