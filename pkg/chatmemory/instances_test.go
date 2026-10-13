@@ -65,7 +65,7 @@ func TestNamedInstanceArchiveRetrievalKeepsCanonicalPersonAndScope(t *testing.T)
 		if channel == "work" {
 			req.Target = "telegram"
 		}
-		if _, err := service.Search(t.Context(), req); err == nil {
+		if _, targetErr := service.Search(t.Context(), req); targetErr == nil {
 			t.Fatalf("%s explicitly accessed another instance", channel)
 		}
 	}
