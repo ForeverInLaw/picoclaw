@@ -17,6 +17,7 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 
 	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
 const telegramInlinePagePrefix = "__picoclaw_inline_page__:"
@@ -63,19 +64,7 @@ func (c *TelegramChannel) saveInlinePages(inlineMessageID string, pages telegram
 	if len(data) > 64<<20 {
 		return fmt.Errorf("inline answer exceeds retained result storage limit")
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".pages-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err = file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err = file.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(file.Name(), path); err != nil {
+	if err = fileutil.WriteFileAtomic(path, data, 0o600); err != nil {
 		return err
 	}
 	c.pruneInlinePages(filepath.Dir(path), path)
