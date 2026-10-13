@@ -1141,7 +1141,7 @@ func LoadConfig(path string) (*Config, error) {
 		// zero-initializing them, so fields absent from the user's JSON (e.g. api_base)
 		// would silently inherit values from the DefaultConfig template at the same
 		// index position. We only reset cfg.ModelList when the user actually provides
-		// entries; when count is 0 we keep DefaultConfig's built-in list as fallback.
+		// entries. Empty lists are restored after legacy provider migration.
 		var tmp Config
 		if decodeErr := json.Unmarshal(data, &tmp); decodeErr != nil {
 			return nil, decodeErr
@@ -1191,6 +1191,9 @@ func LoadConfig(path string) (*Config, error) {
 	// Auto-migrate: if only legacy providers config exists, convert to model_list
 	if len(cfg.ModelList) == 0 && cfg.HasProvidersConfig() {
 		cfg.ModelList = ConvertProvidersToModelList(cfg)
+	}
+	if len(cfg.ModelList) == 0 {
+		cfg.ModelList = DefaultConfig().ModelList
 	}
 
 	// Inherit credentials from providers to model_list entries (#1635).

@@ -3,8 +3,57 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestLoadConfig_EmptyModelListInheritsDefaultsAfterDecoding(t *testing.T) {
+	for _, body := range []string{`{}`, `{"model_list":[]}`, `{"model_list":null}`} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg.ModelList, DefaultConfig().ModelList) {
+				t.Fatal("empty model_list must inherit the default model configurations")
+			}
+		})
+	}
+	t.Run("custom entries", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(`{"model_list":[{"model_name":"custom","model":"openai/custom"}]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.ModelList) != 1 || cfg.ModelList[0].APIBase != "" || cfg.ModelList[0].Model != "openai/custom" {
+			t.Fatalf("custom model inherited template fields: %+v", cfg.ModelList)
+		}
+	})
+	for _, list := range []string{"[]", "null"} {
+		t.Run("legacy "+list, func(t *testing.T) {
+			t.Setenv("PICOCLAW_TOOLS_WEB_EXA_ENABLED", "true")
+			path := filepath.Join(t.TempDir(), "config.json")
+			body := `{"model_list":` + list + `,"providers":{"openai":{"api_key":"legacy-key"}}}`
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cfg.ModelList) != 1 || cfg.ModelList[0].APIKey != "legacy-key" || !cfg.Tools.Web.Exa.Enabled {
+				t.Fatalf("legacy providers must retain precedence and common environment processing: %+v", cfg.ModelList)
+			}
+		})
+	}
+}
 
 func TestLoadConfig_AppliesEnvironmentWithoutConfigFile(t *testing.T) {
 	t.Setenv("PICOCLAW_TOOLS_WEB_PRIMARY_PROVIDER", "exa")
