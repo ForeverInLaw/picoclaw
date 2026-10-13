@@ -86,12 +86,16 @@ func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*conf
 	modelName = strings.TrimSpace(modelName)
 	modelCfg, err := cfg.GetModelConfig(modelName)
 	if err != nil {
+		matching := *cfg
+		matching.ModelList = nil
 		for _, candidate := range cfg.ModelList {
 			_, id := providers.ExtractProtocol(candidate.Model)
 			if candidate.Model == modelName || id == modelName {
-				modelCfg, err = cfg.GetModelConfig(candidate.ModelName)
-				break
+				matching.ModelList = append(matching.ModelList, candidate)
 			}
+		}
+		if len(matching.ModelList) > 0 {
+			modelCfg, err = matching.GetModelConfig(matching.ModelList[0].ModelName)
 		}
 		if err != nil {
 			return nil, err
@@ -135,7 +139,7 @@ func candidateProviderResolver(
 		if name == "" && cfg != nil {
 			for _, mc := range cfg.ModelList {
 				protocol, id := providers.ExtractProtocol(mc.Model)
-				if protocol == provider && id == model {
+				if providers.NormalizeProvider(protocol) == providers.NormalizeProvider(provider) && id == model {
 					name = mc.ModelName
 					break
 				}
@@ -183,7 +187,8 @@ func resolvedCandidateConfig(cfg *config.Config, name, workspace, provider, mode
 		if !alias {
 			nameMatches = mc.Model == name || id == name
 		}
-		if nameMatches && protocol == provider && id == model {
+		if nameMatches && providers.NormalizeProvider(protocol) == providers.NormalizeProvider(provider) &&
+			id == model {
 			matching.ModelList = append(matching.ModelList, mc)
 		}
 	}

@@ -3,8 +3,10 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -45,6 +47,57 @@ func TestRichRepliesPreserveFormattingFormulasAndTopicReply(t *testing.T) {
 		"# Results\n\n| Value | Formula |\n| --- | --- |\n| one | $x^2$ |\n\n- item\n\n```go\nfmt.Println(\"ok\")\n```\n\n$$E = mc^2$$",
 		payload.Rich.Markdown,
 	)
+}
+
+func TestIndependentIdenticalRichMessagesDoNotShareFailedDelivery(t *testing.T) {
+	calls := 0
+	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("unknown send outcome")
+		}
+		return successResponse(t), nil
+	}}
+	channel := newTestChannel(t, caller)
+	msg := bus.OutboundMessage{
+		DeliveryID: bus.DeliveryID(bus.EnsureDeliveryID(t.Context())),
+		ChatID:     "42",
+		Content:    "identical notification",
+	}
+	require.ErrorIs(t, channel.Send(t.Context(), msg), channels.ErrSendFailed)
+	require.ErrorIs(t, channel.Send(t.Context(), msg), channels.ErrSendFailed)
+	require.Equal(t, 1, calls, "an uncertain send must not be replayed for the same operation")
+	msg.DeliveryID = ""
+	require.NoError(t, channel.Send(t.Context(), msg))
+	require.Equal(t, 2, calls, "independent messages without a reply reference need separate delivery identities")
+}
+
+func TestRichReplyNormalizesMathOutsideActualCodeFences(t *testing.T) {
+	for _, tc := range []struct{ name, source, want string }{
+		{"prose tildes", `literal ~~~ then \(x\)`, `literal ~~~ then $x$`},
+		{"invalid backtick fence info", "```not`fence\n\\(x\\)", "```not`fence\n$x$"},
+		{"indented prose", "    ~~~\n\\(x\\)", "    ~~~\n$x$"},
+		{"longer closing fence", "   ~~~latex\n\\(code\\)\n ~~~~~\n\\(x\\)", "   ~~~latex\n\\(code\\)\n ~~~~~\n$x$"},
+		{"invalid closing fence", "~~~\n\\(code\\)\ntext ~~~\n\\(still code\\)", "~~~\n\\(code\\)\ntext ~~~\n\\(still code\\)"},
+		{"short closing fence", "````\n\\(code\\)\n```\n\\(still code\\)", "````\n\\(code\\)\n```\n\\(still code\\)"},
+		{"inline code", "`\\(code\\)` then \\(x\\)", "`\\(code\\)` then $x$"},
+		{"unfinished real fence", "before \\(x\\)\n~~~\n\\(code\\)", "before $x$\n~~~\n\\(code\\)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caller := &stubCaller{
+				callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil },
+			}
+			channel := newTestChannel(t, caller)
+			require.NoError(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: "42", Content: tc.source}))
+			var payload struct {
+				Rich struct {
+					Markdown string `json:"markdown"`
+				} `json:"rich_message"`
+			}
+			require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
+			require.Equal(t, tc.want, payload.Rich.Markdown)
+		})
+	}
 }
 
 func TestInboundPlaceholderRepliesToOriginalMessageInTopic(t *testing.T) {
@@ -88,7 +141,9 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 	channel := newTestChannel(t, caller)
 	channel.config.Agents.Defaults.Workspace = t.TempDir()
 	channel.config.Channels.Telegram.Inline.Enabled = true
-	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, bus.NewMessageBus(), nil)
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
 	channel.SetRunning(true)
 	require.NoError(
 		t,
@@ -96,6 +151,7 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 			ResultID: "generate", InlineMessageID: "published-result", Query: "long answer", From: telego.User{ID: 42},
 		}),
 	)
+	<-mb.InboundChan()
 	caller.calls = nil
 	content := strings.Repeat("first paragraph\n\n", 2300) + "LAST ANSWER LINE"
 	require.NoError(t, channel.Send(context.Background(), bus.OutboundMessage{
@@ -118,6 +174,25 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 
 	reopened := newTestChannel(t, caller)
 	reopened.config = channel.config
+	reopened.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	for _, current := range []*TelegramChannel{channel, reopened} {
+		before := len(caller.calls)
+		require.NoError(
+			t,
+			current.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), telego.ChosenInlineResult{
+				ResultID:        "generate",
+				InlineMessageID: "published-result",
+				Query:           "long answer",
+				From:            telego.User{ID: 42},
+			}),
+		)
+		require.Len(t, caller.calls, before, "chosen-result redelivery must retain the published keyboard")
+		select {
+		case duplicate := <-mb.InboundChan():
+			t.Fatalf("chosen-result redelivery dispatched generation again: %+v", duplicate)
+		default:
+		}
+	}
 	require.NoError(
 		t,
 		reopened.handleInlineCallbackQuery(
@@ -151,6 +226,107 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(caller.calls[len(caller.calls)-2].Data.BodyRaw, &last))
 	require.Contains(t, last.Rich.Markdown, "LAST ANSWER LINE")
+}
+
+func TestChosenInlineFailedAdmissionCanRetryAfterRestartAndRetainsShortCompletion(t *testing.T) {
+	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
+	}}
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel := newTestChannel(t, caller)
+	channel.config.Agents.Defaults.Workspace = t.TempDir()
+	channel.config.Channels.Telegram.Inline.Enabled = true
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	result := telego.ChosenInlineResult{
+		ResultID:        "generate",
+		InlineMessageID: "retry-publication",
+		Query:           "question",
+		From:            telego.User{ID: 42},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(ctx), result), context.Canceled)
+	reopened := newTestChannel(t, caller)
+	reopened.config = channel.config
+	reopened.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	require.NoError(t, reopened.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	select {
+	case <-mb.InboundChan():
+	case <-time.After(time.Second):
+		t.Fatal("failed chosen admission could not recover after restart")
+	}
+	require.NoError(t, reopened.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	select {
+	case <-mb.InboundChan():
+		t.Fatal("active chosen request was admitted twice")
+	default:
+	}
+	reopened.SetRunning(true)
+	require.NoError(
+		t,
+		reopened.Send(
+			t.Context(),
+			bus.OutboundMessage{ChatID: "inline:retry-publication", Content: "short completed answer"},
+		),
+	)
+	third := newTestChannel(t, caller)
+	third.config = channel.config
+	third.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	require.NoError(t, third.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	select {
+	case <-mb.InboundChan():
+		t.Fatal("short completed publication was regenerated after restart")
+	default:
+	}
+}
+
+func TestChosenInlineRetainedSourceRecoversFailedPublicationWithoutGeneration(t *testing.T) {
+	failEdit := false
+	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
+		if failEdit && strings.HasSuffix(url, "/editMessageText") {
+			return &ta.Response{Ok: false, Error: &ta.Error{ErrorCode: 403, Description: "edit rejected"}}, nil
+		}
+		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
+	}}
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel := newTestChannel(t, caller)
+	channel.config.Agents.Defaults.Workspace = t.TempDir()
+	channel.config.Channels.Telegram.Inline.Enabled = true
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	channel.SetRunning(true)
+	result := telego.ChosenInlineResult{
+		ResultID:        "generate",
+		InlineMessageID: "retained-publication",
+		Query:           "question",
+		From:            telego.User{ID: 42},
+	}
+	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	<-mb.InboundChan()
+	failEdit = true
+	require.Error(
+		t,
+		channel.Send(
+			t.Context(),
+			bus.OutboundMessage{ChatID: "inline:retained-publication", Content: "RETAINED_COMPLETE_ANSWER"},
+		),
+	)
+	failEdit = false
+	reopened := newTestChannel(t, caller)
+	reopened.config = channel.config
+	reopened.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	before := len(caller.calls)
+	require.NoError(t, reopened.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	require.Len(t, caller.calls, before+1, "retained generated text must recover through one stable edit")
+	require.Contains(t, string(caller.calls[len(caller.calls)-1].Data.BodyRaw), "RETAINED_COMPLETE_ANSWER")
+	select {
+	case <-mb.InboundChan():
+		t.Fatal("retained answer caused another model generation")
+	default:
+	}
+	require.NoError(t, reopened.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	require.Len(t, caller.calls, before+1, "confirmed publication must remain untouched")
 }
 
 func TestRichReplyFormattingFailureDeliversAllPlainContent(t *testing.T) {

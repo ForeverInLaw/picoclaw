@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/channels/telegram"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -22,6 +25,92 @@ type ingressRequest struct {
 	messages []providers.Message
 	tools    []providers.ToolDefinition
 	release  chan struct{}
+}
+
+type ingressDeliveryResult struct {
+	message bus.OutboundMessage
+	err     error
+}
+type ingressTelegramChannel struct {
+	*telegram.TelegramChannel
+	delivered chan ingressDeliveryResult
+}
+
+func (c ingressTelegramChannel) Start(context.Context) error { c.SetRunning(true); return nil }
+func (c ingressTelegramChannel) Stop(context.Context) error  { c.SetRunning(false); return nil }
+
+func (c ingressTelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	err := c.TelegramChannel.Send(ctx, msg)
+	c.delivered <- ingressDeliveryResult{msg, err}
+	return err
+}
+
+func TestRunStreamFailureAndOrdinaryDeliveryShareLogicalIdentity(t *testing.T) {
+	var sends atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sendRichMessage") {
+			n := sends.Add(1)
+			if n == 2 {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_ = conn.Close()
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":11}}`))
+	}))
+	defer server.Close()
+	al, cfg, mb, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer mb.Close()
+	cfg.Channels.Telegram.Token = "1234567890:aaaabbbbaaaabbbbaaaabbbbaaaabbbbccc"
+	cfg.Channels.Telegram.BaseURL = server.URL
+	cfg.Channels.Telegram.Streaming.Enabled = true
+	channel, err := telegram.NewTelegramChannel(cfg, mb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := channels.NewManager(cfg, mb, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered := make(chan ingressDeliveryResult, 1)
+	manager.RegisterChannel("telegram", ingressTelegramChannel{channel, delivered})
+	if err := manager.StartAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.StopAll(t.Context()) }()
+	content := strings.Repeat("complete answer paragraph\n", 3000)
+	p := &phasedAnswerScriptProvider{
+		answerScriptProvider: answerScriptProvider{
+			responses: []*providers.LLMResponse{{Content: content, ContentPhase: providers.ContentPhaseAnswer}},
+		},
+	}
+	al.GetRegistry().GetDefaultAgent().Provider = p
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- al.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	publishIncoming(t, mb, directIngressMessage("generate the complete answer"))
+	var result ingressDeliveryResult
+	select {
+	case result = <-delivered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run final response did not reach the actual Manager worker")
+	}
+	if result.message.DeliveryID == "" {
+		t.Fatal("actual Run final envelope lost stream delivery identity")
+	}
+	if !errors.Is(result.err, channels.ErrSendFailed) {
+		t.Fatalf("unknown final send outcome was not retained across stream/bus recovery: %v", result.err)
+	}
+	if sends.Load() != 2 {
+		t.Fatalf("stream recovery replayed an acknowledged or unknown send: %d", sends.Load())
+	}
 }
 
 type ingressProvider struct{ requests chan ingressRequest }
@@ -495,76 +584,83 @@ func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
 }
 
 func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
-	for _, reference := range []string{"backup-alias", "anthropic/claude-backup", "claude-backup"} {
-		t.Run(reference, func(t *testing.T) {
-			var primaryCalls, backupCalls atomic.Int32
-			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				primaryCalls.Add(1)
-				if r.Header.Get("Authorization") != "Bearer primary-key" {
-					t.Error("primary credentials changed")
-				}
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
-			}))
-			defer primary.Close()
-			backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				n := backupCalls.Add(1)
-				var body struct {
-					Model string `json:"model"`
-				}
-				_ = json.NewDecoder(r.Body).Decode(&body)
-				if body.Model != "claude-backup" || r.Header.Get("Authorization") != "Bearer backup-key" {
-					t.Errorf("fallback model/auth=%s/%s", body.Model, r.Header.Get("Authorization"))
-				}
-				if n == 1 {
+	for _, protocol := range []string{"anthropic", "qwen-international", "dashscope-intl"} {
+		for _, reference := range []string{"backup-alias", protocol + "/claude-backup", "claude-backup"} {
+			t.Run(protocol+"/"+reference, func(t *testing.T) {
+				var primaryCalls, backupCalls atomic.Int32
+				primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					primaryCalls.Add(1)
+					if r.Header.Get("Authorization") != "Bearer primary-key" {
+						t.Error("primary credentials changed")
+					}
 					w.WriteHeader(http.StatusServiceUnavailable)
 					_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
-					return
+				}))
+				defer primary.Close()
+				backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					n := backupCalls.Add(1)
+					var body struct {
+						Model string `json:"model"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					if body.Model != "claude-backup" || r.Header.Get("Authorization") != "Bearer backup-key" {
+						t.Errorf("fallback model/auth=%s/%s", body.Model, r.Header.Get("Authorization"))
+					}
+					if n == 1 {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
+						return
+					}
+					_, _ = w.Write(
+						[]byte(
+							`{"choices":[{"message":{"role":"assistant","content":"cross-provider recovered"},"finish_reason":"stop"}]}`,
+						),
+					)
+				}))
+				defer backup.Close()
+				initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+				defer cleanup()
+				initial.Close()
+				cfg.Agents.Defaults.Model = "primary-alias"
+				cfg.Agents.Defaults.ModelFallbacks = []string{reference}
+				cfg.ModelList = []config.ModelConfig{
+					{
+						ModelName: "primary-alias",
+						Model:     "openai/gpt-primary",
+						APIKey:    "primary-key",
+						APIBase:   primary.URL,
+					},
+					{
+						ModelName: "backup-alias",
+						Model:     protocol + "/claude-backup",
+						APIKey:    "backup-key",
+						APIBase:   backup.URL,
+					},
 				}
-				_, _ = w.Write(
-					[]byte(
-						`{"choices":[{"message":{"role":"assistant","content":"cross-provider recovered"},"finish_reason":"stop"}]}`,
-					),
-				)
-			}))
-			defer backup.Close()
-			initial, cfg, _, _, cleanup := newTestAgentLoop(t)
-			defer cleanup()
-			initial.Close()
-			cfg.Agents.Defaults.Model = "primary-alias"
-			cfg.Agents.Defaults.ModelFallbacks = []string{reference}
-			cfg.ModelList = []config.ModelConfig{
-				{ModelName: "primary-alias", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL},
-				{
-					ModelName: "backup-alias",
-					Model:     "anthropic/claude-backup",
-					APIKey:    "backup-key",
-					APIBase:   backup.URL,
-				},
-			}
-			provider, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
-			if err != nil {
-				t.Fatal(err)
-			}
-			mb := bus.NewMessageBus()
-			defer mb.Close()
-			al := NewAgentLoop(cfg, mb, provider)
-			defer al.Close()
-			ctx, cancel := context.WithCancel(t.Context())
-			done := make(chan error, 1)
-			go func() { done <- al.Run(ctx) }()
-			defer func() { cancel(); <-done }()
-			publishIncoming(t, mb, directIngressMessage("recover through backup"))
-			out := finalOutbound(t, mb)
-			if primaryCalls.Load() != 1 || backupCalls.Load() != 2 || out.Content != "cross-provider recovered" {
-				t.Fatalf(
-					"fallback endpoint/attempts primary=%d backup=%d reply=%q",
-					primaryCalls.Load(),
-					backupCalls.Load(),
-					out.Content,
-				)
-			}
-		})
+				provider, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				mb := bus.NewMessageBus()
+				defer mb.Close()
+				al := NewAgentLoop(cfg, mb, provider)
+				defer al.Close()
+				ctx, cancel := context.WithCancel(t.Context())
+				done := make(chan error, 1)
+				go func() { done <- al.Run(ctx) }()
+				defer func() { cancel(); <-done }()
+				publishIncoming(t, mb, directIngressMessage("recover through backup"))
+				out := finalOutbound(t, mb)
+				if primaryCalls.Load() != 1 || backupCalls.Load() != 2 || out.Content != "cross-provider recovered" {
+					t.Fatalf(
+						"fallback endpoint/attempts primary=%d backup=%d reply=%q",
+						primaryCalls.Load(),
+						backupCalls.Load(),
+						out.Content,
+					)
+				}
+			})
+		}
 	}
 }
 
@@ -594,6 +690,73 @@ func TestRunResetControlsRemainResponsiveWithBackpressuredAcknowledgements(t *te
 			}
 		case <-deadline.C:
 			t.Fatal("independent inline-reset acknowledgement blocked the subsequent active reset")
+		}
+	}
+}
+
+func TestRunResetRevokesCompletedAnswerWaitingForOutboundCapacity(t *testing.T) {
+	al, mb, p := startIngressLoop(t)
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+	publishIncoming(t, mb, directIngressMessage("OLD_COMPLETED_ANSWER"))
+	req := inboundRequest(t, p)
+	store := al.GetRegistry().GetDefaultAgent().Sessions.(*session.ConversationStore)
+	captured, _, err := store.CaptureTurn("agent:main:main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := captured.(session.ConversationTurn)
+	for n := 0; n < 64; n++ {
+		if err := mb.PublishOutbound(
+			t.Context(),
+			bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "queued output"},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(req.release)
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ended := false
+	for !ended {
+		select {
+		case event := <-sub.C:
+			ended = event.Kind == EventKindTurnEnd
+		case <-deadline.C:
+			t.Fatal("model turn did not finish before publication")
+		}
+	}
+	publishIncoming(t, mb, directIngressMessage("/clear"))
+	resetDeadline := time.Now().Add(time.Second)
+	for {
+		current, err := view.IsCurrent()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !current {
+			break
+		}
+		if time.Now().After(resetDeadline) {
+			t.Fatal("completed-turn publication backpressure stranded reset control")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for n := 0; n < 64; n++ {
+		<-mb.OutboundChan()
+	}
+	publishIncoming(t, mb, directIngressMessage("NEW_GENERATION"))
+	fresh := inboundRequest(t, p)
+	close(fresh.release)
+	for {
+		out := finalOutbound(t, mb)
+		if strings.Contains(out.Content, "OLD_COMPLETED_ANSWER") {
+			t.Fatal("old generation answer was published after reset")
+		}
+		if strings.Contains(out.Content, "NEW_GENERATION") {
+			if out.DeliveryID == "" {
+				t.Fatal("final answer has no logical delivery identity")
+			}
+			break
 		}
 	}
 }
@@ -674,5 +837,72 @@ func TestRunDuplicateFallbackAliasPreservesSelectedProviderModelAndRetryClient(t
 	}
 	if firstCalls.Load() != 2 || secondCalls.Load() != 2 {
 		t.Fatalf("duplicate alias round-robin was not preserved: calls=%d/%d", firstCalls.Load(), secondCalls.Load())
+	}
+}
+
+func TestRunConcreteModelSwitchKeepsExactReferenceWithinDuplicateAlias(t *testing.T) {
+	for _, reference := range []string{"anthropic/claude-first", "claude-first"} {
+		t.Run(reference, func(t *testing.T) {
+			var firstCalls, wrongCalls atomic.Int32
+			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				firstCalls.Add(1)
+				var body struct {
+					Model string `json:"model"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if body.Model != "claude-first" || r.Header.Get("Authorization") != "Bearer first-key" {
+					t.Errorf("selected endpoint received model/auth %s/%s", body.Model, r.Header.Get("Authorization"))
+				}
+				_, _ = w.Write(
+					[]byte(
+						`{"choices":[{"message":{"role":"assistant","content":"exact model"},"finish_reason":"stop"}]}`,
+					),
+				)
+			}))
+			defer first.Close()
+			wrong := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				wrongCalls.Add(1)
+				_, _ = w.Write(
+					[]byte(
+						`{"choices":[{"message":{"role":"assistant","content":"wrong model"},"finish_reason":"stop"}]}`,
+					),
+				)
+			}))
+			defer wrong.Close()
+			initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+			defer cleanup()
+			initial.Close()
+			cfg.Agents.Defaults.Model = "initial"
+			cfg.ModelList = []config.ModelConfig{
+				{ModelName: "initial", Model: "openai/initial", APIBase: wrong.URL, APIKey: "initial-key"},
+				{ModelName: "duplicated", Model: "anthropic/claude-first", APIBase: first.URL, APIKey: "first-key"},
+				{ModelName: "duplicated", Model: "openai/second", APIBase: wrong.URL, APIKey: "wrong-key"},
+			}
+			p, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			mb := bus.NewMessageBus()
+			defer mb.Close()
+			al := NewAgentLoop(cfg, mb, p)
+			defer al.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- al.Run(ctx) }()
+			defer func() { cancel(); <-done }()
+			for n := 0; n < 3; n++ {
+				publishIncoming(t, mb, directIngressMessage("/switch model to "+reference))
+				if out := finalOutbound(t, mb); !strings.Contains(out.Content, reference) {
+					t.Fatalf("model selection failed: %q", out.Content)
+				}
+				publishIncoming(t, mb, directIngressMessage("use the selected concrete model"))
+				if out := finalOutbound(t, mb); out.Content != "exact model" {
+					t.Fatalf("model drifted: %q", out.Content)
+				}
+			}
+			if firstCalls.Load() != 3 || wrongCalls.Load() != 0 {
+				t.Fatalf("exact selection calls=%d/%d", firstCalls.Load(), wrongCalls.Load())
+			}
+		})
 	}
 }

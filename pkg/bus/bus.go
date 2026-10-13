@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
@@ -86,6 +87,46 @@ func (mb *MessageBus) InboundChan() <-chan InboundMessage {
 
 func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) error {
 	return publish(ctx, mb, mb.outbound, msg)
+}
+
+// PublishOutboundGuarded commits one enqueue through a lifetime gate. The gate
+// holds its lock only for a nonblocking attempt; backpressure waits outside it.
+// A revoked gate returns false without publishing. Shutdown shares publishMu.
+func (mb *MessageBus) PublishOutboundGuarded(
+	ctx context.Context, msg OutboundMessage, commit func(func() error) (bool, error),
+) (bool, error) {
+	full := errors.New("outbound queue full")
+	for {
+		current, err := commit(func() error {
+			mb.publishMu.Lock()
+			defer mb.publishMu.Unlock()
+			if mb.closed {
+				return ErrBusClosed
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			select {
+			case mb.outbound <- msg:
+				return nil
+			default:
+				return full
+			}
+		})
+		if !errors.Is(err, full) {
+			return current && err == nil, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, ctx.Err()
+		case <-mb.done:
+			timer.Stop()
+			return false, ErrBusClosed
+		case <-timer.C:
+		}
+	}
 }
 
 func (mb *MessageBus) OutboundChan() <-chan OutboundMessage {

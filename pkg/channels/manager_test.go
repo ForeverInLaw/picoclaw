@@ -1157,6 +1157,135 @@ func TestSendMessage_WithSplitting(t *testing.T) {
 	}
 }
 
+type progressLengthChannel struct{ *mockChannelWithLength }
+
+func (c *progressLengthChannel) SendProgress(ctx context.Context, msg bus.OutboundMessage) error {
+	return c.Send(ctx, msg)
+}
+
+func TestSendMessage_ProgressRespectsAdapterLengthCapability(t *testing.T) {
+	for _, capable := range []bool{false, true} {
+		t.Run(fmt.Sprint(capable), func(t *testing.T) {
+			m := newTestManager()
+			var received []bus.OutboundMessage
+			base := mockChannelWithLength{
+				mockChannel: mockChannel{
+					sendFn: func(_ context.Context, msg bus.OutboundMessage) error { received = append(received, msg); return nil },
+				},
+				maxLen: 5,
+			}
+			var ch Channel = &base
+			if capable {
+				ch = &progressLengthChannel{&base}
+			}
+			m.channels["test"] = ch
+			m.workers["test"] = &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+			progress := &bus.ProgressMessage{RequestID: "request", ActionID: "action"}
+			msg := bus.OutboundMessage{
+				Channel:          "test",
+				ChatID:           "42",
+				Content:          "long activity result",
+				Progress:         progress,
+				ReplyToMessageID: "19",
+			}
+			if err := m.SendMessage(t.Context(), msg); err != nil {
+				t.Fatal(err)
+			}
+			if capable && (len(received) != 1 || received[0].Content != msg.Content) {
+				t.Fatalf("typed progress was split: %+v", received)
+			}
+			for _, got := range received {
+				if !capable && len([]rune(got.Content)) > 5 {
+					t.Fatalf("ordinary adapter exceeded its limit: %q", got.Content)
+				}
+				if got.Progress != progress || got.ReplyToMessageID != "19" {
+					t.Fatal("progress fragments lost their delivery envelope")
+				}
+			}
+		})
+	}
+}
+
+func TestSendMessage_ReturnsFailureAndStopsRemainingFragments(t *testing.T) {
+	for _, failure := range []error{ErrSendFailed, ErrTemporary, context.Canceled} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			m := newTestManager()
+			var received []string
+			ch := &mockChannelWithLength{
+				mockChannel: mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+					received = append(received, msg.Content)
+					return failure
+				}},
+				maxLen: 5,
+			}
+			m.channels["test"] = ch
+			m.workers["test"] = &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if errors.Is(failure, context.Canceled) {
+				cancel()
+			}
+			err := m.SendMessage(ctx, bus.OutboundMessage{Channel: "test", ChatID: "42", Content: "abcdefghijklmno"})
+			if !errors.Is(err, failure) {
+				t.Fatalf("delivery failure was swallowed: %v", err)
+			}
+			for _, content := range received {
+				if content != SplitMessage("abcdefghijklmno", 5)[0] {
+					t.Fatalf("sent a later fragment after failure: %q", content)
+				}
+			}
+			want := 1
+			if errors.Is(failure, ErrTemporary) {
+				want = maxRetries + 1
+			}
+			if errors.Is(failure, context.Canceled) {
+				want = 0
+			}
+			if len(received) != want {
+				t.Fatalf("attempts=%d want=%d", len(received), want)
+			}
+		})
+	}
+}
+
+func TestWorker_FailedMessageStopsFragmentsButAllowsNextMessage(t *testing.T) {
+	m := newTestManager()
+	delivered := make(chan string, 4)
+	ch := &mockChannelWithLength{
+		mockChannel: mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+			delivered <- msg.Content
+			if msg.Content == SplitMessage("abcdefghij", 5)[0] {
+				return ErrSendFailed
+			}
+			return nil
+		}},
+		maxLen: 5,
+	}
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+		queue:   make(chan bus.OutboundMessage, 2),
+		done:    make(chan struct{}),
+	}
+	w.queue <- bus.OutboundMessage{Content: "abcdefghij"}
+	w.queue <- bus.OutboundMessage{Content: "next"}
+	close(w.queue)
+	go m.runWorker(t.Context(), "test", w)
+	select {
+	case <-w.done:
+	case <-time.After(time.Second):
+		t.Fatal("worker stalled after a failed message")
+	}
+	close(delivered)
+	var got []string
+	for text := range delivered {
+		got = append(got, text)
+	}
+	if len(got) != 2 || got[0] != SplitMessage("abcdefghij", 5)[0] || got[1] != "next" {
+		t.Fatalf("fragment/message isolation lost: %v", got)
+	}
+}
+
 func TestSendMessage_PreservesOrdering(t *testing.T) {
 	m := newTestManager()
 

@@ -107,13 +107,20 @@ type conversationView struct {
 }
 
 func (v *conversationView) IsCurrent() (bool, error) {
+	return v.CommitIfCurrent(func() error { return nil })
+}
+
+func (v *conversationView) CommitIfCurrent(operation func() error) (bool, error) {
 	if !v.bound {
-		return true, nil
+		return true, operation()
 	}
 	v.owner.mu.Lock()
 	defer v.owner.mu.Unlock()
 	boundary, err := v.owner.boundaryLocked(v.key)
-	return err == nil && boundary.Generation == v.generation, err
+	if err != nil || boundary.Generation != v.generation {
+		return false, err
+	}
+	return true, operation()
 }
 
 func generationKey(key, generation string) string {

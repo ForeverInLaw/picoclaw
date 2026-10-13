@@ -2,7 +2,6 @@ package telegram
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,14 +11,23 @@ import (
 	ta "github.com/mymmrac/telego/telegoapi"
 	tu "github.com/mymmrac/telego/telegoutil"
 
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 )
 
+const telegramDeliveryLifetime = 10 * time.Minute
+
+func (c *TelegramChannel) deliveryTime() time.Time {
+	if c.deliveryNow != nil {
+		return c.deliveryNow()
+	}
+	return time.Now()
+}
+
 type telegramReplyKey struct {
-	chatID   int64
-	threadID int
-	replyTo  string
-	source   [32]byte
+	chatID     int64
+	threadID   int
+	deliveryID string
 }
 
 type telegramReplyPart struct {
@@ -54,33 +62,37 @@ func (c *TelegramChannel) deliverReply(
 		return 0, nil, nil
 	}
 	key := telegramReplyKey{
-		chatID:   chatID,
-		threadID: threadID,
-		replyTo:  replyTo,
-		source:   sha256.Sum256([]byte(content)),
+		chatID:     chatID,
+		threadID:   threadID,
+		deliveryID: bus.DeliveryID(bus.EnsureDeliveryID(ctx)),
 	}
+	startedAt, identityErr := bus.DeliveryStartedAt(key.deliveryID)
+	if identityErr != nil {
+		return 0, nil, fmt.Errorf("Telegram delivery identity: %w: %w", channels.ErrSendFailed, identityErr)
+	}
+	now := c.deliveryTime()
 	c.deliveryMu.Lock()
 	defer c.deliveryMu.Unlock()
 	if c.pendingReplies == nil {
 		c.pendingReplies = make(map[telegramReplyKey]*telegramReplyDelivery)
 	}
-	delivery := c.pendingReplies[key]
-
-	if delivery == nil {
-		var retainedBytes int
-		for candidate, pending := range c.pendingReplies {
-			// Manager recovery lasts seconds; retain failures longer than its complete
-			// retry/typing lifecycle, with bounded count and source bytes.
-			if time.Since(pending.createdAt) > 10*time.Minute {
-				delete(c.pendingReplies, candidate)
-				continue
-			}
-			retainedBytes += pending.sourceBytes
+	var retainedBytes int
+	for candidate, pending := range c.pendingReplies {
+		if now.Sub(pending.createdAt) > telegramDeliveryLifetime {
+			delete(c.pendingReplies, candidate)
+			continue
 		}
+		retainedBytes += pending.sourceBytes
+	}
+	if now.Sub(startedAt) > telegramDeliveryLifetime {
+		return 0, nil, fmt.Errorf("Telegram delivery expired: %w", channels.ErrSendFailed)
+	}
+	delivery := c.pendingReplies[key]
+	if delivery == nil {
 		if len(c.pendingReplies) >= 64 || retainedBytes+len(content) > 64<<20 {
 			return 0, nil, fmt.Errorf("pending Telegram delivery capacity exceeded: %w", channels.ErrSendFailed)
 		}
-		delivery = &telegramReplyDelivery{editID: editID, createdAt: time.Now(), sourceBytes: len(content)}
+		delivery = &telegramReplyDelivery{editID: editID, createdAt: startedAt, sourceBytes: len(content)}
 		for _, chunk := range channels.SplitMessage(content, telegramRichMessageLimit) {
 			delivery.parts = append(delivery.parts, telegramReplyPart{content: chunk})
 		}

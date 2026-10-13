@@ -632,7 +632,9 @@ func newChannelWorker(name string, ch Channel) *channelWorker {
 // outboundChunks leaves complete answers with adapters that own length handling.
 func outboundChunks(ch Channel, msg bus.OutboundMessage) []string {
 	if msg.Progress != nil {
-		return []string{msg.Content}
+		if _, ok := ch.(ProgressCapable); ok {
+			return []string{msg.Content}
+		}
 	}
 	if splitter, ok := ch.(MessageSplittingCapable); ok && splitter.HandlesMessageSplitting() {
 		return []string{msg.Content}
@@ -653,10 +655,18 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			if !ok {
 				return
 			}
-			for _, chunk := range outboundChunks(w.ch, msg) {
+			if msg.DeliveryID == "" {
+				msg.DeliveryID = bus.DeliveryID(bus.EnsureDeliveryID(ctx))
+			}
+			for n, chunk := range outboundChunks(w.ch, msg) {
 				chunkMsg := msg
 				chunkMsg.Content = chunk
-				m.sendWithRetry(ctx, name, w, chunkMsg)
+				if n > 0 {
+					chunkMsg.DeliveryID += fmt.Sprintf(":part:%d", n)
+				}
+				if err := m.sendWithRetry(ctx, name, w, chunkMsg); err != nil {
+					break
+				}
 			}
 		case <-ctx.Done():
 			return
@@ -669,31 +679,38 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 //   - ErrNotRunning / ErrSendFailed: permanent, no retry
 //   - ErrRateLimit: fixed delay retry
 //   - ErrTemporary / unknown: exponential backoff retry
-func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWorker, msg bus.OutboundMessage) {
+func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWorker, msg bus.OutboundMessage) error {
+	if msg.DeliveryID != "" {
+		ctx = bus.WithDeliveryID(ctx, msg.DeliveryID)
+	}
 	// Rate limit: wait for token
 	if err := w.limiter.Wait(ctx); err != nil {
 		// ctx canceled, shutting down
-		return
+		return err
 	}
 
 	// Pre-send: stop typing and try to edit placeholder
 	if m.preSend(ctx, name, msg, w.ch) {
-		return // placeholder was edited successfully, skip Send
+		return nil // placeholder was edited successfully, skip Send
 	}
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if progress, ok := w.ch.(ProgressCapable); ok && msg.Progress != nil {
 			lastErr = progress.SendProgress(ctx, msg)
 		} else {
 			lastErr = w.ch.Send(ctx, msg)
 		}
 		if lastErr == nil {
-			return
+			return nil
 		}
 
 		// Permanent failures — don't retry
-		if errors.Is(lastErr, ErrNotRunning) || errors.Is(lastErr, ErrSendFailed) {
+		if errors.Is(lastErr, ErrNotRunning) || errors.Is(lastErr, ErrSendFailed) ||
+			errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
 			break
 		}
 
@@ -708,7 +725,7 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 			case <-time.After(rateLimitDelay):
 				continue
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			}
 		}
 
@@ -717,7 +734,7 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		}
 	}
 
@@ -728,6 +745,7 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 		"error":   lastErr.Error(),
 		"retries": maxRetries,
 	})
+	return lastErr
 }
 
 func dispatchLoop[M any](
@@ -1071,10 +1089,18 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 		return fmt.Errorf("channel %s has no active worker", msg.Channel)
 	}
 
-	for _, chunk := range outboundChunks(w.ch, msg) {
+	if msg.DeliveryID == "" {
+		msg.DeliveryID = bus.DeliveryID(bus.EnsureDeliveryID(ctx))
+	}
+	for n, chunk := range outboundChunks(w.ch, msg) {
 		chunkMsg := msg
 		chunkMsg.Content = chunk
-		m.sendWithRetry(ctx, msg.Channel, w, chunkMsg)
+		if n > 0 {
+			chunkMsg.DeliveryID += fmt.Sprintf(":part:%d", n)
+		}
+		if err := m.sendWithRetry(ctx, msg.Channel, w, chunkMsg); err != nil {
+			return err
+		}
 	}
 	return nil
 }

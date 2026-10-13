@@ -427,6 +427,11 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 
 ### Model Configuration (model_list)
 
+An omitted, empty, or `null` `model_list` inherits the built-in defaults. When
+an empty list accompanies legacy `providers` settings, those providers are
+migrated first. Custom model entries replace the defaults and inherit only
+explicitly supported provider credentials, not unrelated template fields.
+
 > **What's New?** PicoClaw now uses a **model-centric** configuration approach. Simply specify `vendor/model` format (e.g., `zhipu/glm-4.7`) to add new providers — **zero code changes required!**
 
 This design also enables **multi-agent support** with flexible provider selection:

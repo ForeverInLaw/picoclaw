@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -142,7 +143,8 @@ func (p *CodexProvider) chat(
 	defer stream.Close()
 
 	var resp *responses.Response
-	partials := make(map[int64]*strings.Builder)
+	type contentPosition struct{ output, content int64 }
+	partials := make(map[contentPosition]*strings.Builder)
 	phases := make(map[int64]ContentPhase)
 	for stream.Next() {
 		evt := stream.Current()
@@ -152,13 +154,34 @@ func (p *CodexProvider) chat(
 		if evt.Type == "response.output_text.delta" {
 			deltaEvent := evt.AsResponseOutputTextDelta()
 			if deltaEvent.Delta != "" && onUpdate != nil {
-				partial := partials[deltaEvent.OutputIndex]
+				position := contentPosition{deltaEvent.OutputIndex, deltaEvent.ContentIndex}
+				partial := partials[position]
 				if partial == nil {
 					partial = &strings.Builder{}
-					partials[deltaEvent.OutputIndex] = partial
+					partials[position] = partial
 				}
 				partial.WriteString(deltaEvent.Delta)
-				onUpdate(StreamContent{Content: partial.String(), Phase: phases[deltaEvent.OutputIndex]})
+				phase := phases[deltaEvent.OutputIndex]
+				positions := make([]contentPosition, 0, len(partials))
+				for pos := range partials {
+					if phases[pos.output] == phase {
+						positions = append(positions, pos)
+					}
+				}
+				slices.SortFunc(positions, func(a, b contentPosition) int {
+					if a.output < b.output || (a.output == b.output && a.content < b.content) {
+						return -1
+					}
+					if a == b {
+						return 0
+					}
+					return 1
+				})
+				var snapshot strings.Builder
+				for _, pos := range positions {
+					snapshot.WriteString(partials[pos].String())
+				}
+				onUpdate(StreamContent{Content: snapshot.String(), Phase: phase})
 			}
 		}
 		if evt.Type == "response.completed" || evt.Type == "response.failed" || evt.Type == "response.incomplete" {

@@ -54,6 +54,7 @@ type TelegramChannel struct {
 	inlineMu       sync.Mutex
 	inlineReplies  map[string]*telegramInlineReplyState
 	deliveryMu     sync.Mutex
+	deliveryNow    func() time.Time
 	pendingReplies map[telegramReplyKey]*telegramReplyDelivery
 
 	registerFunc     func(context.Context, []commands.Definition) error
@@ -242,6 +243,9 @@ func telegramMessageAuthor(message *telego.Message) string {
 }
 
 func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	if msg.DeliveryID != "" {
+		ctx = bus.WithDeliveryID(ctx, msg.DeliveryID)
+	}
 	if !c.IsRunning() {
 		return channels.ErrNotRunning
 	}
@@ -318,6 +322,9 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID, messageID, co
 // EditReply retains request identity when a partial placeholder delivery later
 // falls through to normal manager delivery.
 func (c *TelegramChannel) EditReply(ctx context.Context, msg bus.OutboundMessage, messageID string) error {
+	if msg.DeliveryID != "" {
+		ctx = bus.WithDeliveryID(ctx, msg.DeliveryID)
+	}
 	if inlineMessageID, ok := telegramInlineMessageID(msg.ChatID); ok {
 		return c.editInlineMessageText(ctx, inlineMessageID, msg.Content)
 	}
