@@ -28,6 +28,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
+	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -94,6 +95,7 @@ type processOptions struct {
 	AllowedTools            []string            // Optional per-turn tool allowlist
 	DisableToolFeedback     bool                // Suppress raw tool feedback for this turn
 	SkipInitialSteeringPoll bool                // If true, skip the steering poll at loop start (used by Continue)
+	ConversationContext     ConversationContext // Automatic memory boundary for this conversation
 }
 
 type continuationTarget struct {
@@ -1559,6 +1561,16 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
+	if store, ok := agent.Sessions.(*session.ConversationStore); ok {
+		turnStore, resetAt, err := store.CaptureTurn(opts.SessionKey)
+		if err != nil {
+			return "", err
+		}
+		turnAgent := *agent
+		turnAgent.Sessions = turnStore
+		agent = &turnAgent
+		opts.ConversationContext.Reset = !resetAt.IsZero()
+	}
 	// Record last channel for heartbeat notifications (skip internal channels and cli)
 	if opts.Channel != "" && opts.ChatID != "" &&
 		!constants.IsInternalChannel(opts.Channel) &&
@@ -1708,16 +1720,18 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	if !ts.opts.NoHistory {
 		history = ts.agent.Sessions.GetHistory(ts.sessionKey)
 		summary = ts.agent.Sessions.GetSummary(ts.sessionKey)
-		retrievedMemory = lookupRetrievedMemories(
-			ctx,
-			ts.agent,
-			ts.sessionKey,
-			ts.opts.Channel,
-			ts.opts.ChatID,
-			ts.opts.PeerKind,
-			ts.opts.SenderID,
-			ts.opts.UserMessage,
-		)
+		if !ts.opts.ConversationContext.Reset && !ts.opts.ConversationContext.Inline {
+			retrievedMemory = lookupRetrievedMemories(
+				ctx,
+				ts.agent,
+				ts.sessionKey,
+				ts.opts.Channel,
+				ts.opts.ChatID,
+				ts.opts.PeerKind,
+				ts.opts.SenderID,
+				ts.opts.UserMessage,
+			)
+		}
 	}
 	ts.captureRestorePoint(history, summary)
 
@@ -1732,6 +1746,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		ts.opts.ChatLabel,
 		ts.opts.SenderID,
 		ts.opts.SenderDisplayName,
+		ts.opts.ConversationContext,
 	)
 
 	cfg := al.GetConfig()
@@ -1762,6 +1777,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				newHistory, newSummary, retrievedMemory, ts.userMessage,
 				ts.media, ts.channel, ts.chatID, ts.opts.ChatLabel,
 				ts.opts.SenderID, ts.opts.SenderDisplayName,
+				ts.opts.ConversationContext,
 			)
 			messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
 		}
@@ -2220,6 +2236,7 @@ turnLoop:
 					newHistory, newSummary, retrievedMemory, "",
 					nil, ts.channel, ts.chatID, ts.opts.ChatLabel,
 					"", "",
+					ts.opts.ConversationContext,
 				)
 				callMessages = messages
 				if gracefulTerminal {
@@ -3549,10 +3566,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 				return fmt.Errorf("sessions not initialized for agent")
 			}
 
-			agent.Sessions.SetHistory(opts.SessionKey, make([]providers.Message, 0))
-			agent.Sessions.SetSummary(opts.SessionKey, "")
-			agent.Sessions.Save(opts.SessionKey)
-			return nil
+			return al.resetConversation(agent, opts.SessionKey)
 		}
 	}
 	return rt

@@ -45,6 +45,13 @@ type ContextBuilder struct {
 	skillFilesAtCache map[string]time.Time
 }
 
+// ConversationContext controls automatic workspace context, independently of
+// the transcript. Inline replies may be published outside a private chat.
+type ConversationContext struct {
+	Inline bool
+	Reset  bool
+}
+
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
 	cb.toolDiscoveryBM25 = useBM25
 	cb.toolDiscoveryRegex = useRegex
@@ -101,7 +108,7 @@ Your workspace is at: %s
 
 2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
-3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
+3. **Memory** - Save facts intentionally retained by the user under a "Saved facts" heading in %s/memory/MEMORY.md (or memory/SAVED_FACTS.md). Keep temporary conversational notes in daily notes. Conversation reset retains only explicitly Saved facts.
 
 4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
 
@@ -135,13 +142,17 @@ func (cb *ContextBuilder) getDiscoveryRule() string {
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
+	return cb.buildSystemPrompt(cb.memory.GetMemoryContext(), true)
+}
+
+func (cb *ContextBuilder) buildSystemPrompt(memoryContext string, includeUser bool) string {
 	parts := []string{}
 
 	// Core identity section
 	parts = append(parts, cb.getIdentity())
 
 	// Bootstrap files
-	bootstrapContent := cb.LoadBootstrapFiles()
+	bootstrapContent := cb.loadBootstrapFiles(includeUser)
 	if bootstrapContent != "" {
 		parts = append(parts, bootstrapContent)
 	}
@@ -157,7 +168,6 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 	}
 
 	// Memory context
-	memoryContext := cb.memory.GetMemoryContext()
 	if memoryContext != "" {
 		parts = append(parts, "# Memory\n\n"+memoryContext)
 	}
@@ -435,6 +445,10 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 }
 
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
+	return cb.loadBootstrapFiles(true)
+}
+
+func (cb *ContextBuilder) loadBootstrapFiles(includeUser bool) string {
 	var sb strings.Builder
 
 	agentDefinition := cb.LoadAgentDefinition()
@@ -453,7 +467,7 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 			agentDefinition.Soul.Content,
 		)
 	}
-	if agentDefinition.User != nil {
+	if includeUser && agentDefinition.User != nil {
 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
 	}
 
@@ -526,6 +540,7 @@ func (cb *ContextBuilder) BuildMessages(
 	currentMessage string,
 	media []string,
 	channel, chatID, chatLabel, senderID, senderDisplayName string,
+	conversation ...ConversationContext,
 ) []providers.Message {
 	messages := []providers.Message{}
 
@@ -539,6 +554,17 @@ func (cb *ContextBuilder) BuildMessages(
 	// - Codex maps only the first system message to its instructions field.
 	// - OpenAI-compat passes messages through as-is.
 	staticPrompt := cb.BuildSystemPromptWithCache()
+	if len(conversation) > 0 {
+		scope := conversation[0]
+		switch {
+		case scope.Inline:
+			staticPrompt = cb.buildSystemPrompt("", false)
+			staticPrompt += "\n\nINLINE_CONVERSATION: Use only this inline conversation's transcript and summary. Private chat history, user profiles, Saved facts, and workspace notes are unavailable. Only the explicitly allowed tools can be used."
+		case scope.Reset:
+			staticPrompt = cb.buildSystemPrompt(cb.memory.ReadSavedFacts(), true)
+			staticPrompt += "\n\nCONVERSATION_RESET: This is a fresh conversation. Do not automatically restore earlier dialogs, summaries, or temporary notes. The chat_memory rule above applies to archived dialogs only when the user explicitly requests earlier history or archive search. Saved facts remain available."
+		}
+	}
 
 	// Build short dynamic context (time, runtime, session) — changes per request
 	dynamicCtx := cb.buildDynamicContext(channel, chatID, chatLabel, senderID, senderDisplayName)
