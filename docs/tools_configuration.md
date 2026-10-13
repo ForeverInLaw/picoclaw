@@ -212,6 +212,8 @@ The cron tool is used for scheduling periodic tasks.
 
 The MCP tool enables integration with external Model Context Protocol servers.
 
+Zero-argument tool calls send `arguments: {}` for compatibility with strict MCP servers. Non-empty argument objects, including nested values, are forwarded unchanged.
+
 ### Tool Discovery (Lazy Loading)
 
 When connecting to multiple MCP servers, exposing hundreds of tools simultaneously can exhaust the LLM's context window
