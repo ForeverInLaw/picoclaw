@@ -308,7 +308,12 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 			content := source.String()
 			finalizeErr := stream.Finalize(ctx, content)
 			msg := bus.OutboundMessage{Channel: "telegram", ChatID: "-123/7", ReplyToMessageID: "42", Content: content}
-			require.NoError(t, manager.SendMessage(ctx, msg))
+			deliveryErr := manager.SendMessage(ctx, msg)
+			if mode == "ambiguous_send" {
+				require.ErrorIs(t, deliveryErr, channels.ErrSendFailed)
+			} else {
+				require.NoError(t, deliveryErr)
+			}
 			if mode != "ambiguous_send" {
 				require.NoError(t, stream.Finalize(ctx, content))
 				require.NoError(t, manager.SendMessage(ctx, msg))
@@ -386,7 +391,7 @@ func TestManagerFailedPlaceholderDoesNotCaptureLaterIdenticalAnswer(t *testing.T
 		ReplyToMessageID: "42",
 		Content:          strings.Repeat("answer paragraph\n", 4500),
 	}
-	require.NoError(t, manager.SendMessage(t.Context(), msg))
+	require.ErrorIs(t, manager.SendMessage(t.Context(), msg), channels.ErrSendFailed)
 	msg.ReplyToMessageID = "77"
 	require.NoError(t, manager.SendMessage(t.Context(), msg))
 	mu.Lock()
