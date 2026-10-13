@@ -47,6 +47,31 @@ func TestRichRepliesPreserveFormattingFormulasAndTopicReply(t *testing.T) {
 	)
 }
 
+func TestRichReplyNormalizesMathOutsideActualCodeFences(t *testing.T) {
+	for _, tc := range []struct{ name, source, want string }{
+		{"prose tildes", `literal ~~~ then \(x\)`, `literal ~~~ then $x$`},
+		{"indented prose", "    ~~~\n\\(x\\)", "    ~~~\n$x$"},
+		{"longer closing fence", "   ~~~latex\n\\(code\\)\n ~~~~~\n\\(x\\)", "   ~~~latex\n\\(code\\)\n ~~~~~\n$x$"},
+		{"invalid closing fence", "~~~\n\\(code\\)\ntext ~~~\n\\(still code\\)", "~~~\n\\(code\\)\ntext ~~~\n\\(still code\\)"},
+		{"short closing fence", "````\n\\(code\\)\n```\n\\(still code\\)", "````\n\\(code\\)\n```\n\\(still code\\)"},
+		{"inline code", "`\\(code\\)` then \\(x\\)", "`\\(code\\)` then $x$"},
+		{"unfinished real fence", "before \\(x\\)\n~~~\n\\(code\\)", "before $x$\n~~~\n\\(code\\)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil }}
+			channel := newTestChannel(t, caller)
+			require.NoError(t, channel.Send(t.Context(), bus.OutboundMessage{ChatID: "42", Content: tc.source}))
+			var payload struct {
+				Rich struct {
+					Markdown string `json:"markdown"`
+				} `json:"rich_message"`
+			}
+			require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
+			require.Equal(t, tc.want, payload.Rich.Markdown)
+		})
+	}
+}
+
 func TestInboundPlaceholderRepliesToOriginalMessageInTopic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

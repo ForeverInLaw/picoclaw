@@ -26,34 +26,80 @@ var (
 // untouched, including unfinished code blocks in streamed previews.
 func normalizeRichMarkdown(content string) string {
 	var result strings.Builder
-	for len(content) > 0 {
-		start := strings.IndexAny(content, "`~")
+	for pos := 0; pos < len(content); {
+		start := strings.IndexAny(content[pos:], "`~")
 		if start < 0 {
-			result.WriteString(normalizeFormulaDelimiters(content))
+			result.WriteString(normalizeFormulaDelimiters(content[pos:]))
 			break
 		}
-		result.WriteString(normalizeFormulaDelimiters(content[:start]))
-		content = content[start:]
-		n := 1
-		for n < len(content) && content[n] == content[0] {
-			n++
+		start += pos
+		result.WriteString(normalizeFormulaDelimiters(content[pos:start]))
+		n := markdownDelimiterLength(content, start)
+		end := start + n
+		if n >= 3 && markdownFencePosition(content, start) {
+			end = markdownFenceEnd(content, start, n)
+		} else if content[start] == '`' {
+			for next := end; next < len(content); {
+				match := strings.IndexByte(content[next:], '`')
+				if match < 0 {
+					break
+				}
+				match += next
+				length := markdownDelimiterLength(content, match)
+				if length == n {
+					end = match + n
+					break
+				}
+				next = match + length
+			}
 		}
-		if content[0] == '~' && n < 3 {
-			result.WriteString(content[:n])
-			content = content[n:]
-			continue
-		}
-		delimiter := content[:n]
-		end := strings.Index(content[n:], delimiter)
-		if end < 0 {
-			result.WriteString(content)
-			break
-		}
-		end += 2 * n
-		result.WriteString(content[:end])
-		content = content[end:]
+		result.WriteString(content[start:end])
+		pos = end
 	}
 	return result.String()
+}
+
+func markdownDelimiterLength(content string, start int) int {
+	end := start + 1
+	for end < len(content) && content[end] == content[start] {
+		end++
+	}
+	return end - start
+}
+
+func markdownFencePosition(content string, start int) bool {
+	lineStart := strings.LastIndexByte(content[:start], '\n') + 1
+	indent := content[lineStart:start]
+	return len(indent) <= 3 && strings.Trim(indent, " ") == ""
+}
+
+// Fences close only at a line's start, with the same character and at least
+// the opening length. An unfinished block remains opaque during streaming.
+func markdownFenceEnd(content string, start, length int) int {
+	for pos := start + length; pos < len(content); {
+		newline := strings.IndexByte(content[pos:], '\n')
+		if newline < 0 {
+			break
+		}
+		pos += newline + 1
+		match := pos
+		for match < len(content) && content[match] == ' ' {
+			match++
+		}
+		if match < len(content) && content[match] == content[start] && markdownFencePosition(content, match) {
+			n := markdownDelimiterLength(content, match)
+			lineEnd := strings.IndexByte(content[match+n:], '\n')
+			if lineEnd < 0 {
+				lineEnd = len(content)
+			} else {
+				lineEnd += match + n
+			}
+			if n >= length && strings.TrimSpace(content[match+n:lineEnd]) == "" {
+				return match + n
+			}
+		}
+	}
+	return len(content)
 }
 
 func normalizeFormulaDelimiters(content string) string {
