@@ -1974,8 +1974,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var lastToolResultForFallback string
 	var hadToolCalls bool
 	var terminalToolCompleted bool
-	streamProvider, providerCanStream := activeProvider.(providers.StreamingProvider)
-	phasedProvider, providerCanStreamPhases := activeProvider.(providers.PhasedStreamingProvider)
 
 turnLoop:
 	for ts.currentIteration() < ts.agent.MaxIterations || len(pendingMessages) > 0 || func() bool {
@@ -2200,16 +2198,6 @@ turnLoop:
 			al.activeRequests.Add(1)
 			defer al.activeRequests.Done()
 
-			var streamer bus.Streamer
-			var streamUpdater *partialReplyUpdater
-			streamingEnabled := (providerCanStream || providerCanStreamPhases) &&
-				len(activeCandidates) <= 1 &&
-				!ts.opts.NoHistory &&
-				!constants.IsInternalChannel(ts.channel)
-			if streamingEnabled {
-				streamer, streamUpdater = selectStreamingTargets(providerCtx, al.bus, al.channelManager, ts.channel, ts.chatID)
-			}
-
 			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
 				defer func() {
 					if requestErr != nil {
@@ -2223,6 +2211,16 @@ turnLoop:
 					return nil, errModelAttemptBudget
 				}
 				modelAttempts++
+				streamProvider, providerCanStream := client.(providers.StreamingProvider)
+				phasedProvider, providerCanStreamPhases := client.(providers.PhasedStreamingProvider)
+				var streamer bus.Streamer
+				var streamUpdater *partialReplyUpdater
+				streamingEnabled := (providerCanStream || providerCanStreamPhases) &&
+					!ts.opts.NoHistory && !constants.IsInternalChannel(ts.channel)
+				if streamingEnabled {
+					// Each candidate gets its own preview; failed attempts cancel theirs.
+					streamer, streamUpdater = selectStreamingTargets(ctx, al.bus, al.channelManager, ts.channel, ts.chatID)
+				}
 				if streamingEnabled && (streamer != nil || streamUpdater != nil) {
 					lastSnapshots := make(map[providers.ContentPhase]string)
 					var response *providers.LLMResponse
@@ -2245,7 +2243,9 @@ turnLoop:
 							ts.eventMeta("runTurn", "turn.llm.delta"),
 							deltaPayload,
 						)
-						if update.Phase == providers.ContentPhaseAnswer {
+						// Chat Completions content is public text without phase metadata.
+						if update.Phase == providers.ContentPhaseAnswer ||
+							(!providerCanStreamPhases && update.Phase == providers.ContentPhaseUnknown) {
 							offerStreamingContent(ctx, streamer, streamUpdater, formatInlineResponse(ts.opts.ResponseQuote, accumulated))
 						}
 					}

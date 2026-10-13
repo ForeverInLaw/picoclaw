@@ -91,9 +91,12 @@ continues; final edits can be retried once without restarting generation or tool
 Repeated finalization does not publish another answer, and cancellation stops
 further draft or message updates.
 
-Only answer content enters this stream. Tool activity and retry status have their
-own message identities. Internal reasoning and commentary that introduces tool
-calls do not appear in the answer preview.
+Tool activity and retry status have their own message identities. Providers with
+explicit content phases stream only answer text. Chat Completions providers
+stream public `content` deltas without waiting for the complete response;
+separate reasoning fields stay private. If the response requests tools, its
+preview is canceled before tool execution and the next response gets a fresh
+stream. Configuring backup models does not disable streaming.
 
 Inline page navigation is restricted to the user who selected that inline result
 and to its original published destination. Retained results expire after 30 days;

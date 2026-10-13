@@ -18,8 +18,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
-// BeginStream uses ephemeral rich drafts in private chats. Group messages and
-// inline destinations use rich message edits, supported by those destinations.
+// BeginStream uses private rich drafts without tool feedback, otherwise a new
+// message preview. Groups and inline destinations use rich message edits.
 func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (channels.Streamer, error) {
 	if !c.config.Channels.Telegram.Streaming.Enabled {
 		return nil, fmt.Errorf("streaming disabled in config")
