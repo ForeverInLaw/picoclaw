@@ -7,6 +7,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,13 +118,21 @@ func TestRunToolActivityKeepsLLMOnlyResultsPrivate(t *testing.T) {
 	}
 }
 
-type activityFileProvider struct{ calls int }
+type activityFileProvider struct {
+	calls     int
+	tool      string
+	arguments map[string]any
+}
 
 func (p *activityFileProvider) GetDefaultModel() string { return "activity" }
 func (p *activityFileProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
 	p.calls++
+	if p.tool == "" {
+		p.tool = "read_file"
+		p.arguments = map[string]any{"path": "public.txt"}
+	}
 	if p.calls == 1 {
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "file", Name: "read_file", Arguments: map[string]any{"path": "public.txt"}}}}, nil
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "file", Name: p.tool, Arguments: p.arguments}}}, nil
 	}
 	return &providers.LLMResponse{Content: "done"}, nil
 }
@@ -184,5 +194,41 @@ func TestRunFileActivityRetainsExplicitOutputWithSensitiveDataFiltering(t *testi
 				t.Fatal("explicit file result disappeared from public activity")
 			}
 		})
+	}
+}
+
+func TestRunSearchFailurePublishesExplicitSafeActivity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid_api_key"}`))
+	}))
+	defer server.Close()
+	search, err := tools.NewWebSearchTool(tools.WebSearchToolOptions{ParallelEnabled: true, ParallelAPIKeys: []string{"test-key"}, ParallelBaseURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	defer mb.Close()
+	al.registry.GetDefaultAgent().Provider = &activityFileProvider{tool: "web_search", arguments: map[string]any{"query": "bicycle"}}
+	al.RegisterTool(search)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- al.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	publishIncoming(t, mb, directIngressMessage("search bicycle"))
+	found := false
+	for {
+		out := <-mb.OutboundChan()
+		if out.Progress == nil {
+			break
+		}
+		if out.Progress.State == bus.ProgressFailed {
+			found = strings.Contains(out.Progress.Result, "Search failed") && strings.Contains(out.Progress.Result, "401")
+		}
+	}
+	if !found {
+		t.Fatal("public search failure lost its useful provider/category detail")
 	}
 }
