@@ -14,6 +14,7 @@ import (
 // and queued status edits share the same lock, so a late status cannot replace
 // pagination or reappear on a completed answer.
 type telegramInlineReplyState struct {
+	admitted  bool
 	markup    *telego.InlineKeyboardMarkup
 	retryID   string
 	retryText string

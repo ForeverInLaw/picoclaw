@@ -178,22 +178,29 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 	c.inlineMu.Lock()
 	previous, readErr := c.loadInlinePages(result.InlineMessageID)
 	if readErr == nil {
-		c.inlineMu.Unlock()
 		if previous.OwnerID != result.From.ID {
+			c.inlineMu.Unlock()
 			return fmt.Errorf("inline result belongs to another user")
 		}
-		return nil
-	}
-	if !os.IsNotExist(readErr) {
+		if previous.Content != "" {
+			c.inlineMu.Unlock()
+			return nil
+		}
+	} else if !os.IsNotExist(readErr) {
 		c.inlineMu.Unlock()
 		return fmt.Errorf("read selected inline result identity: %w", readErr)
+	}
+	state := c.inlineReplyLocked(result.InlineMessageID)
+	if state.admitted {
+		c.inlineMu.Unlock()
+		return nil
 	}
 	if err := c.saveInlinePages(result.InlineMessageID, telegramInlinePages{OwnerID: result.From.ID}); err != nil {
 		c.inlineMu.Unlock()
 		return fmt.Errorf("persist selected inline result identity: %w", err)
 	}
 
-	c.inlineReplyLocked(result.InlineMessageID)
+	state.admitted = true
 	c.inlineMu.Unlock()
 
 	if err := c.clearInlineReplyMarkup(ctx, result.InlineMessageID); err != nil && !isTelegramMessageNotModified(err) {
@@ -202,7 +209,13 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 		})
 	}
 
-	return c.PublishInbound(ctx, buildTelegramInlineInboundMessage(result, sender))
+	err := c.PublishInbound(ctx, buildTelegramInlineInboundMessage(result, sender))
+	if err != nil {
+		c.inlineMu.Lock()
+		state.admitted = false
+		c.inlineMu.Unlock()
+	}
+	return err
 }
 
 func renderTelegramInlineInitialContent(query, placeholder string, useMarkdownV2 bool) string {

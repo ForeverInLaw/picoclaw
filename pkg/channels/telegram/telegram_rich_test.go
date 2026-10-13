@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -193,6 +194,48 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(caller.calls[len(caller.calls)-2].Data.BodyRaw, &last))
 	require.Contains(t, last.Rich.Markdown, "LAST ANSWER LINE")
+}
+
+func TestChosenInlineFailedAdmissionCanRetryAfterRestartAndRetainsShortCompletion(t *testing.T) {
+	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
+	}}
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel := newTestChannel(t, caller)
+	channel.config.Agents.Defaults.Workspace = t.TempDir()
+	channel.config.Channels.Telegram.Inline.Enabled = true
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	result := telego.ChosenInlineResult{ResultID: "generate", InlineMessageID: "retry-publication", Query: "question", From: telego.User{ID: 42}}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(ctx), result), context.Canceled)
+	reopened := newTestChannel(t, caller)
+	reopened.config = channel.config
+	reopened.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	require.NoError(t, reopened.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	select {
+	case <-mb.InboundChan():
+	case <-time.After(time.Second):
+		t.Fatal("failed chosen admission could not recover after restart")
+	}
+	require.NoError(t, reopened.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	select {
+	case <-mb.InboundChan():
+		t.Fatal("active chosen request was admitted twice")
+	default:
+	}
+	reopened.SetRunning(true)
+	require.NoError(t, reopened.Send(t.Context(), bus.OutboundMessage{ChatID: "inline:retry-publication", Content: "short completed answer"}))
+	third := newTestChannel(t, caller)
+	third.config = channel.config
+	third.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	require.NoError(t, third.handleChosenInlineResult((&th.Context{}).WithContext(t.Context()), result))
+	select {
+	case <-mb.InboundChan():
+		t.Fatal("short completed publication was regenerated after restart")
+	default:
+	}
 }
 
 func TestRichReplyFormattingFailureDeliversAllPlainContent(t *testing.T) {

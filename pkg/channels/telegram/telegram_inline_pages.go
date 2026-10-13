@@ -250,7 +250,8 @@ func (c *TelegramChannel) sendInlineAnswer(ctx context.Context, inlineMessageID,
 	if strings.TrimSpace(pages.Content) == "" {
 		return nil
 	}
-	if len([]rune(pages.Content)) > telegramRichMessageLimit-64 {
+	_, ownerErr := c.loadInlinePages(inlineMessageID)
+	if ownerErr == nil || len([]rune(pages.Content)) > telegramRichMessageLimit-64 {
 		if err := c.saveInlinePages(inlineMessageID, pages); err != nil {
 			return fmt.Errorf("save complete inline answer: %w", err)
 		}
