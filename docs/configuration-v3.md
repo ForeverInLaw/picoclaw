@@ -79,7 +79,8 @@ session keys, inline history, published-inline storage, and archive access.
 Renaming it creates a new conversation boundary. New lowercase instance names
 isolate direct/group/inline history and archive retrieval, including when an
 older `session.dm_scope` shares default direct conversations. Names cannot
-contain colons or path separators. A person's canonical identity remains
+contain whitespace, colons or path separators; `cli`, `system`, and `subagent`
+are reserved for internal messages. A person's canonical identity remains
 `telegram:<user-id>`. Workspace Saved facts retain their existing ownership.
 
 Gateway and channel factories receive an instance-specific typed configuration.

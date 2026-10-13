@@ -226,11 +226,10 @@ func legacyChannelKey(channelType string) string {
 }
 
 func (c *Config) IsChannelType(name, channelType string) bool {
-	if name == channelType {
-		return true
+	if ch := c.ChannelList[name]; ch != nil {
+		return ch.Type == channelType
 	}
-	ch := c.ChannelList[name]
-	return ch != nil && ch.Type == channelType
+	return name == channelType
 }
 
 func (c *Config) IsNamedChannel(name string) bool {
