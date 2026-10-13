@@ -108,6 +108,7 @@ type continuationTarget struct {
 }
 
 const (
+	maxPendingRequests        = 64
 	defaultResponse           = "The model returned an empty response. This may indicate a provider error or token limit."
 	toolLimitResponse         = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
 	sessionKeyAgentPrefix     = "agent:"
@@ -456,7 +457,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			drainCancel = cancel
 			done := make(chan []bus.InboundMessage, 1)
 			drainDone = done
-			go func() { done <- al.drainBusToSteering(drainCtx, activeScope, activeAgentID) }()
+			go func() { done <- al.drainBusToSteering(drainCtx, activeScope, activeAgentID, len(queued)) }()
 		}
 
 		// Process message
@@ -591,8 +592,16 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 // drainBusToSteering consumes inbound messages and redirects messages from the
 // active scope into the steering queue. Other requests retain their complete
 // transport envelope in FIFO order until the active turn completes.
-func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, activeAgentID string) []bus.InboundMessage {
+func (al *AgentLoop) drainBusToSteering(
+	ctx context.Context,
+	activeScope, activeAgentID string,
+	inherited ...int,
+) []bus.InboundMessage {
 	var queued []bus.InboundMessage
+	pending := 0
+	if len(inherited) > 0 {
+		pending = inherited[0]
+	}
 	for {
 		var msg bus.InboundMessage
 		select {
@@ -612,6 +621,10 @@ func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, active
 		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
 		if !scopeOK || msgScope != activeScope || isInlineMessage(msg) ||
 			strings.Contains(activeScope, ":telegram:inline:user:") {
+			if pending+len(queued) >= maxPendingRequests {
+				al.rejectBusyRequest(ctx, msg)
+				continue
+			}
 			queued = append(queued, msg)
 			continue
 		}
@@ -638,6 +651,25 @@ func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, active
 					"channel": msg.Channel,
 				})
 		}
+	}
+}
+
+func (al *AgentLoop) rejectBusyRequest(ctx context.Context, msg bus.InboundMessage) {
+	if strings.EqualFold(msg.Metadata["observe_only"], "true") || constants.IsInternalChannel(msg.Channel) {
+		return
+	}
+	// A congested answer channel must not keep reset commands behind busy replies.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
+		Channel: msg.Channel, ChatID: msg.ChatID, ReplyToMessageID: msg.MessageID,
+		Content: "The assistant is busy. Please try again shortly.",
+	}); err != nil {
+		logger.WarnCF(
+			"agent",
+			"Failed to deliver busy reply",
+			map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "error": err.Error()},
+		)
 	}
 }
 

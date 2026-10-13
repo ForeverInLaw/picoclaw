@@ -200,6 +200,41 @@ func TestRunRejectsCapturedConversationResetBeforeTurnRegistration(t *testing.T)
 	}
 }
 
+func TestRunBoundsAggregatePendingRequestsAndKeepsResetResponsive(t *testing.T) {
+	_, mb, provider := startIngressLoop(t)
+	publishIncoming(t, mb, directIngressMessage("blocked private turn"))
+	_ = inboundRequest(t, provider)
+	for n := 0; n < 64; n++ {
+		publishIncoming(t, mb, selectedInlineMessage("42", fmt.Sprintf("accepted-%d", n), "queued selection"))
+	}
+	awaitInboundDrain(t, mb)
+	overflow := selectedInlineMessage("42", "rejected-first", "overflow")
+	overflow.MessageID = "overflow-ref"
+	publishIncoming(t, mb, overflow)
+	busy := finalOutbound(t, mb)
+	if busy.ChatID != overflow.ChatID || busy.ReplyToMessageID != overflow.MessageID ||
+		!strings.Contains(strings.ToLower(busy.Content), "busy") {
+		t.Fatalf("overflow must finish its original publication: %+v", busy)
+	}
+	publishIncoming(t, mb, directIngressMessage("/clear"))
+	reset := finalOutbound(t, mb)
+	if !strings.Contains(strings.ToLower(reset.Content), "clear") {
+		t.Fatalf("full queue blocked reset: %+v", reset)
+	}
+	_ = inboundRequest(t, provider)
+	publishIncoming(t, mb, selectedInlineMessage("42", "accepted-next", "new selection"))
+	publishIncoming(t, mb, selectedInlineMessage("42", "rejected-second", "new overflow"))
+	busy = finalOutbound(t, mb)
+	if busy.ChatID != "inline:rejected-second" || !strings.Contains(strings.ToLower(busy.Content), "busy") {
+		t.Fatalf("inherited queue and drainer must share one capacity: %+v", busy)
+	}
+	publishIncoming(t, mb, directIngressMessage("/clear_inline"))
+	reset = finalOutbound(t, mb)
+	if reset.ChatID != "42" || !strings.Contains(strings.ToLower(reset.Content), "reset") {
+		t.Fatalf("inline reset did not remain responsive: %+v", reset)
+	}
+}
+
 func TestRunQueuesSelectedInlineRequestsWithTheirOwnTransportAndContext(t *testing.T) {
 	cases := []struct {
 		name          string
