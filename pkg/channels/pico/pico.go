@@ -22,12 +22,13 @@ import (
 
 // picoConn represents a single WebSocket connection.
 type picoConn struct {
-	id        string
-	conn      *websocket.Conn
-	sessionID string
-	writeMu   sync.Mutex
-	closed    atomic.Bool
-	cancel    context.CancelFunc // cancels per-connection goroutines (e.g. pingLoop)
+	id           string
+	conn         *websocket.Conn
+	sessionID    string
+	writeMu      sync.Mutex
+	closed       atomic.Bool
+	writeTimeout time.Duration
+	cancel       context.CancelFunc // cancels per-connection goroutines (e.g. pingLoop)
 }
 
 // writeJSON sends a JSON message to the connection with write locking.
@@ -37,6 +38,9 @@ func (pc *picoConn) writeJSON(v any) error {
 	}
 	pc.writeMu.Lock()
 	defer pc.writeMu.Unlock()
+	if pc.writeTimeout > 0 {
+		_ = pc.conn.SetWriteDeadline(time.Now().Add(pc.writeTimeout))
+	}
 	return pc.conn.WriteJSON(v)
 }
 
@@ -60,6 +64,7 @@ type PicoChannel struct {
 	connCount   atomic.Int32
 	ctx         context.Context
 	cancel      context.CancelFunc
+	replay      picoReplay
 }
 
 // NewPicoChannel creates a new Pico Protocol channel.
@@ -146,9 +151,17 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	if !c.IsRunning() {
 		return channels.ErrNotRunning
 	}
+	if msg.Progress != nil {
+		return c.SendProgress(ctx, msg)
+	}
+	id := msg.DeliveryID
+	if id == "" {
+		id = bus.DeliveryID(bus.EnsureDeliveryID(ctx))
+	}
 
 	outMsg := newMessage(TypeMessageCreate, map[string]any{
-		"content": msg.Content,
+		"content":    msg.Content,
+		"message_id": id, "final": true, "reply_to_message_id": msg.ReplyToMessageID,
 	})
 
 	return c.broadcastToSession(msg.ChatID, outMsg)
@@ -161,6 +174,22 @@ func (c *PicoChannel) EditMessage(ctx context.Context, chatID string, messageID 
 		"content":    content,
 	})
 	return c.broadcastToSession(chatID, outMsg)
+}
+
+// EditReply replaces a legacy placeholder with the canonical final identity.
+func (c *PicoChannel) EditReply(ctx context.Context, msg bus.OutboundMessage, placeholderID string) error {
+	id := msg.DeliveryID
+	if id == "" {
+		id = bus.DeliveryID(bus.EnsureDeliveryID(ctx))
+	}
+	return c.broadcastToSession(msg.ChatID, newMessage(TypeMessageCreate, map[string]any{
+		"message_id": id, "replace_message_id": placeholderID, "content": msg.Content,
+		"reply_to_message_id": msg.ReplyToMessageID, "final": true,
+	}))
+}
+
+func (c *PicoChannel) DeleteMessage(ctx context.Context, chatID, messageID string) error {
+	return c.broadcastToSession(chatID, newMessage(TypeMessageDelete, map[string]any{"message_id": messageID}))
 }
 
 // StartTyping implements channels.TypingCapable.
@@ -190,8 +219,9 @@ func (c *PicoChannel) SendPlaceholder(ctx context.Context, chatID string) (strin
 
 	msgID := uuid.New().String()
 	outMsg := newMessage(TypeMessageCreate, map[string]any{
-		"content":    text,
-		"message_id": msgID,
+		"content":     text,
+		"message_id":  msgID,
+		"placeholder": true, "final": false, "reply_to_message_id": bus.StreamReplyTo(ctx),
 	})
 
 	if err := c.broadcastToSession(chatID, outMsg); err != nil {
@@ -206,6 +236,9 @@ func (c *PicoChannel) broadcastToSession(chatID string, msg PicoMessage) error {
 	// chatID format: "pico:<sessionID>"
 	sessionID := strings.TrimPrefix(chatID, "pico:")
 	msg.SessionID = sessionID
+	c.replay.mu.Lock()
+	defer c.replay.mu.Unlock()
+	c.replay.retain(sessionID, msg)
 
 	var sent bool
 	c.connections.Range(func(key, value any) bool {
@@ -276,13 +309,26 @@ func (c *PicoChannel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pc := &picoConn{
-		id:        uuid.New().String(),
-		conn:      conn,
-		sessionID: sessionID,
+		id:           uuid.New().String(),
+		conn:         conn,
+		sessionID:    sessionID,
+		writeTimeout: time.Duration(c.config.WriteTimeout) * time.Second,
+	}
+	if pc.writeTimeout <= 0 {
+		pc.writeTimeout = 5 * time.Second
 	}
 
+	c.replay.mu.Lock()
 	c.connections.Store(pc.id, pc)
 	c.connCount.Add(1)
+	if session := c.replay.sessions[sessionID]; session != nil {
+		for _, event := range session.messages {
+			if err := pc.writeJSON(event); err != nil {
+				break
+			}
+		}
+	}
+	c.replay.mu.Unlock()
 
 	logger.InfoCF("pico", "WebSocket client connected", map[string]any{
 		"conn_id":    pc.id,
@@ -453,6 +499,7 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	}
 
 	chatID := "pico:" + sessionID
+	c.replay.begin(sessionID, msg.ID)
 	senderID := "pico-user"
 
 	peer := bus.Peer{Kind: "direct", ID: "pico:" + sessionID}

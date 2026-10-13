@@ -37,6 +37,7 @@ const (
 	ProgressTool       ProgressKind  = "tool"
 	ProgressRetry      ProgressKind  = "retry"
 	ProgressCommentary ProgressKind  = "commentary"
+	ProgressReasoning  ProgressKind  = "reasoning"
 	ProgressStarted    ProgressState = "started"
 	ProgressCompleted  ProgressState = "completed"
 	ProgressFailed     ProgressState = "failed"
