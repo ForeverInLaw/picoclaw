@@ -83,6 +83,7 @@ type processOptions struct {
 	Sender                  bus.SenderInfo      // Structured sender info for tools
 	SenderID                string              // Current sender ID for dynamic context
 	SenderDisplayName       string              // Current sender display name for dynamic context
+	TelegramUserID          string              // Stable user identity, independent of inline transport
 	ReplyToMessageID        string              // Original inbound message ID for threaded replies
 	UserMessage             string              // User message content (may include prefix)
 	SystemPromptOverride    string              // Override the default system prompt (Used by SubTurns)
@@ -1369,6 +1370,13 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// Resolve session key from route, while preserving explicit agent-scoped keys.
 	scopeKey := resolveScopeKey(route, msg.SessionKey)
 	sessionKey := scopeKey
+	if inlineMode {
+		uid := telegramUserID(msg)
+		if uid == "" {
+			return "", fmt.Errorf("inline conversation requires a Telegram user identity")
+		}
+		sessionKey = inlineConversationKey(agent.ID, uid)
+	}
 
 	logger.InfoCF("agent", "Routed message",
 		map[string]any{
@@ -1391,15 +1399,17 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		Sender:              msg.Sender,
 		SenderID:            msg.SenderID,
 		SenderDisplayName:   msg.Sender.DisplayName,
+		TelegramUserID:      telegramUserID(msg),
 		ReplyToMessageID:    msg.MessageID,
 		UserMessage:         buildConversationUserMessage(msg),
 		Media:               msg.Media,
 		DefaultResponse:     defaultResponse,
-		EnableSummary:       !inlineMode,
+		EnableSummary:       true,
 		SendResponse:        false,
-		NoHistory:           inlineMode,
+		NoHistory:           false,
 		AllowedTools:        nil,
 		DisableToolFeedback: inlineMode,
+		ConversationContext: ConversationContext{Inline: inlineMode},
 	}
 	if inlineMode {
 		opts.AllowedTools = inlineToolAllowlist()
@@ -1570,6 +1580,12 @@ func (al *AgentLoop) runAgentLoop(
 		turnAgent.Sessions = turnStore
 		agent = &turnAgent
 		opts.ConversationContext.Reset = !resetAt.IsZero()
+	}
+	if opts.ConversationContext.Inline {
+		turnAgent := *agent
+		turnAgent.MemoryIndex = nil
+		turnAgent.ChatMemory = nil
+		agent = &turnAgent
 	}
 	// Record last channel for heartbeat notifications (skip internal channels and cli)
 	if opts.Channel != "" && opts.ChatID != "" &&
@@ -1756,21 +1772,23 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	if !ts.opts.NoHistory {
 		toolDefs := ts.agent.Tools.ToProviderDefsFiltered(allowedTools)
-		if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
+		for isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
-			if compression, ok := al.forceCompression(ts.agent, ts.sessionKey); ok {
-				al.emitEvent(
-					EventKindContextCompress,
-					ts.eventMeta("runTurn", "turn.context.compress"),
-					ContextCompressPayload{
-						Reason:            ContextCompressReasonProactive,
-						DroppedMessages:   compression.DroppedMessages,
-						RemainingMessages: compression.RemainingMessages,
-					},
-				)
-				ts.refreshRestorePointFromSession(ts.agent)
+			compression, ok := al.forceCompression(ts.agent, ts.sessionKey)
+			if !ok || compression.DroppedMessages <= 0 {
+				break
 			}
+			al.emitEvent(
+				EventKindContextCompress,
+				ts.eventMeta("runTurn", "turn.context.compress"),
+				ContextCompressPayload{
+					Reason:            ContextCompressReasonProactive,
+					DroppedMessages:   compression.DroppedMessages,
+					RemainingMessages: compression.RemainingMessages,
+				},
+			)
+			ts.refreshRestorePointFromSession(ts.agent)
 			newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 			newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
 			messages = ts.agent.ContextBuilder.BuildMessages(
@@ -3016,6 +3034,18 @@ func publishToolMessage(msgBus *bus.MessageBus, toolCtx context.Context, channel
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
 func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, turnScope turnEventScope) {
+	// Observe-only messages do not create a turn; bind their background
+	// summarization too, so a late summary cannot cross a reset boundary.
+	if store, ok := agent.Sessions.(*session.ConversationStore); ok {
+		turnStore, _, err := store.CaptureTurn(sessionKey)
+		if err != nil {
+			logger.WarnCF("agent", "Cannot capture conversation for summarization", map[string]any{"error": err.Error()})
+			return
+		}
+		turnAgent := *agent
+		turnAgent.Sessions = turnStore
+		agent = &turnAgent
+	}
 	newHistory := agent.Sessions.GetHistory(sessionKey)
 	tokenEstimate := al.estimateTokens(newHistory)
 	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
@@ -3567,6 +3597,11 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			}
 
 			return al.resetConversation(agent, opts.SessionKey)
+		}
+		if opts != nil && opts.Channel == "telegram" && opts.PeerKind == "direct" && opts.TelegramUserID != "" {
+			rt.ClearInlineHistory = func() error {
+				return al.resetConversation(agent, inlineConversationKey(agent.ID, opts.TelegramUserID))
+			}
 		}
 	}
 	return rt

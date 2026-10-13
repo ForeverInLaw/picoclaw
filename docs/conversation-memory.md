@@ -26,3 +26,26 @@ notes while archive retrieval was disabled. `memory_index.enabled` defaults to
 false; production configuration was not supplied or inspected, so archive
 retrieval is not assumed to explain the deployed behavior. No production
 containers or ports were changed.
+
+## Telegram inline conversations
+
+Only a selected Telegram inline result starts a turn. Typing and abandoned
+queries never enter session storage. Each conversation uses the current agent
+and Telegram user UID as its identity; an inline message ID is only a delivery
+destination. Selected questions and replies therefore continue across chats
+and bot restarts, while different users and agents remain separate.
+
+Inline model context includes its own transcript and summary, agent
+instructions, and skills. It excludes direct/group transcripts, automatic
+archive retrieval, `USER.md`, Saved facts, and shared workspace memory or daily
+notes. Inline turns are not added to the private chat-memory index. Existing
+context budgeting and summarization apply to inline history, including repeated
+compression when one pass does not make the history fit. The tool allowlist
+remains `web_search`, `web_fetch`, and `fact_check`.
+
+Send `/clear_inline` in the bot's private chat to start a fresh Inline
+conversation for the current agent across destinations. It leaves your direct
+conversation and other users' Inline conversations intact. `/clear` resets the
+current direct/group conversation independently. Both commands report storage
+errors, and inline reset uses the same persistent generation boundary as normal
+reset.
