@@ -8,7 +8,9 @@ import (
 )
 
 func TestDashboardProtectsHTTPWebSocketAndMedia(t *testing.T) {
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("unauthenticated request reached dashboard") })
+	next := http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) { t.Fatal("unauthenticated request reached dashboard") },
+	)
 	h := LauncherDashboardAuth(LauncherDashboardAuthConfig{Sessions: NewLauncherDashboardSessions()}, next)
 	for _, route := range []string{"/api/config", "/pico/ws", "/media/file.png", "/api/media/file.png", "/assets/../api/config"} {
 		t.Run(route, func(t *testing.T) {
@@ -27,7 +29,10 @@ func TestDashboardBootstrapIsOneTimeAndRejectsCrossSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := LauncherDashboardAuth(LauncherDashboardAuthConfig{Sessions: NewLauncherDashboardSessions(), LocalAutoLogin: grant}, http.NotFoundHandler())
+	h := LauncherDashboardAuth(
+		LauncherDashboardAuthConfig{Sessions: NewLauncherDashboardSessions(), LocalAutoLogin: grant},
+		http.NotFoundHandler(),
+	)
 	r := httptest.NewRequest("GET", grant.URLPath(), nil)
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()
@@ -50,7 +55,10 @@ func TestDashboardBootstrapIsOneTimeAndRejectsCrossSite(t *testing.T) {
 
 func TestDashboardAllowlistStillAppliesToAuthenticatedRequests(t *testing.T) {
 	sessions := NewLauncherDashboardSessions()
-	auth := LauncherDashboardAuth(LauncherDashboardAuthConfig{Sessions: sessions}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }))
+	auth := LauncherDashboardAuth(
+		LauncherDashboardAuthConfig{Sessions: sessions},
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }),
+	)
 	h, err := IPAllowlist([]string{"192.0.2.0/24"}, auth)
 	if err != nil {
 		t.Fatal(err)

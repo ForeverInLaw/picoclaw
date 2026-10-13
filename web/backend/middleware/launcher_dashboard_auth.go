@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -30,7 +31,7 @@ const (
 	LauncherDashboardSetupPath = "/launcher-setup"
 )
 
-// NewLauncherDashboardSessionCookie creates the per-process session cookie value.
+// NewLauncherDashboardSessionCookie creates a fresh dashboard session token.
 func NewLauncherDashboardSessionCookie() (string, error) {
 	return randomURLToken(launcherSessionCookieBytes)
 }
@@ -45,7 +46,8 @@ func randomURLToken(n int) (string, error) {
 
 // LauncherDashboardAuthConfig holds runtime material for dashboard access checks.
 type LauncherDashboardAuthConfig struct {
-	Sessions *LauncherDashboardSessions
+	Sessions            *LauncherDashboardSessions
+	bootstrapGeneration uint64
 	// LocalAutoLogin enables one-shot startup auto-login.
 	LocalAutoLogin *LauncherDashboardLocalAutoLogin
 	// SecureCookie sets the session cookie's Secure flag. If nil, DefaultLauncherDashboardSecureCookie is used.
@@ -54,7 +56,7 @@ type LauncherDashboardAuthConfig struct {
 
 // LauncherDashboardLocalAutoLogin is an in-memory, one-shot startup grant.
 // It is not a reusable credential; it only lets the launcher-opened browser
-// receive the current process session cookie.
+// receive a fresh dashboard session cookie.
 type LauncherDashboardLocalAutoLogin struct {
 	grant *launcherDashboardOneTimeGrant
 }
@@ -85,10 +87,7 @@ func (a *LauncherDashboardLocalAutoLogin) URLPath() string {
 
 // DefaultLauncherDashboardSecureCookie mirrors typical production HTTPS detection (TLS or X-Forwarded-Proto).
 func DefaultLauncherDashboardSecureCookie(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return launcherRequestScheme(r) == "https"
 }
 
 // SetLauncherDashboardSessionCookie writes the HttpOnly session cookie after successful dashboard password login.
@@ -132,6 +131,7 @@ func ClearLauncherDashboardSessionCookie(w http.ResponseWriter, r *http.Request,
 // LauncherDashboardAuth requires a valid session cookie before calling next.
 // Public paths are login/setup pages and /api/auth/* handlers.
 func LauncherDashboardAuth(cfg LauncherDashboardAuthConfig, next http.Handler) http.Handler {
+	cfg.bootstrapGeneration = cfg.Sessions.currentGeneration()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := canonicalAuthPath(r.URL.Path)
 		if p == LauncherDashboardLocalAutoLoginPath {
@@ -142,20 +142,22 @@ func LauncherDashboardAuth(cfg LauncherDashboardAuthConfig, next http.Handler) h
 			next.ServeHTTP(w, r)
 			return
 		}
-		if validLauncherDashboardAuth(r, cfg) {
-			if (r.Method != http.MethodGet && r.Method != http.MethodHead || p == "/pico/ws") && CrossSiteLauncherRequest(r) {
+		if sessionContext, ok := cfg.Sessions.sessionContext(r); ok {
+			if (r.Method != http.MethodGet && r.Method != http.MethodHead || p == "/pico/ws") &&
+				CrossSiteLauncherRequest(r) {
 				http.Error(w, "cross-site request rejected", http.StatusForbidden)
 				return
 			}
-			next.ServeHTTP(w, r)
+			ctx, cancel := context.WithCancel(r.Context())
+			stop := context.AfterFunc(sessionContext, cancel)
+			defer stop()
+			defer cancel()
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		rejectLauncherDashboardAuth(w, r, p)
 	})
 }
-
-// canonicalAuthPath matches path cleaning used for routing decisions so
-// prefixes like /assets/../ cannot bypass auth (CVE-class traversal).
 
 func handleLauncherLocalAutoLogin(w http.ResponseWriter, r *http.Request, cfg LauncherDashboardAuthConfig) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -177,22 +179,20 @@ func handleLauncherLocalAutoLogin(w http.ResponseWriter, r *http.Request, cfg La
 		rejectLauncherDashboardAuth(w, r, LauncherDashboardLocalAutoLoginPath)
 		return
 	}
-	if cfg.LocalAutoLogin != nil && cfg.LocalAutoLogin.consume(r.URL.Query().Get("nonce")) {
-		if err := cfg.Sessions.Issue(w, r, cfg.SecureCookie); err != nil {
-			http.Error(w, "session creation failed", http.StatusInternalServerError)
-			return
-		}
+	if cfg.LocalAutoLogin != nil && cfg.LocalAutoLogin.consume(r.URL.Query().Get("nonce"), func() error {
+		return cfg.Sessions.issue(w, r, cfg.SecureCookie, &cfg.bootstrapGeneration)
+	}) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	rejectLauncherDashboardAuth(w, r, LauncherDashboardLocalAutoLoginPath)
 }
 
-func (a *LauncherDashboardLocalAutoLogin) consume(nonce string) bool {
+func (a *LauncherDashboardLocalAutoLogin) consume(nonce string, issueSession func() error) bool {
 	if a == nil || a.grant == nil {
 		return false
 	}
-	return a.grant.use(nonce, nil) == nil
+	return a.grant.use(nonce, issueSession) == nil
 }
 
 func newLauncherDashboardOneTimeGrant(ttl time.Duration) (*launcherDashboardOneTimeGrant, error) {
@@ -246,6 +246,7 @@ func (g *launcherDashboardOneTimeGrant) use(nonce string, fn func() error) error
 	return nil
 }
 
+// canonicalAuthPath uses the router's path cleaning before checking public assets.
 func canonicalAuthPath(raw string) string {
 	if raw == "" {
 		return "/"
@@ -305,7 +306,8 @@ func validLauncherDashboardAuth(r *http.Request, cfg LauncherDashboardAuthConfig
 }
 
 func rejectLauncherDashboardAuth(w http.ResponseWriter, r *http.Request, canonicalPath string) {
-	if canonicalPath == "/pico/ws" || canonicalPath == LauncherDashboardLocalAutoLoginPath || strings.HasPrefix(canonicalPath, "/media/") {
+	if canonicalPath == "/pico/ws" || canonicalPath == LauncherDashboardLocalAutoLoginPath ||
+		strings.HasPrefix(canonicalPath, "/media/") {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -318,8 +320,7 @@ func rejectLauncherDashboardAuth(w http.ResponseWriter, r *http.Request, canonic
 	http.Redirect(w, r, "/launcher-login", http.StatusFound)
 }
 
-// CrossSiteLauncherRequest checks browser provenance without granting trust to
-// arbitrary forwarding headers on the directly exposed launcher listener.
+// CrossSiteLauncherRequest checks browser provenance for the launcher origin.
 func CrossSiteLauncherRequest(r *http.Request) bool {
 	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
 		return true
@@ -338,9 +339,20 @@ func CrossSiteLauncherRequest(r *http.Request) bool {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return true
 	}
-	scheme := "http"
+	return !strings.EqualFold(u.Scheme, launcherRequestScheme(r)) || !strings.EqualFold(u.Host, r.Host)
+}
+
+func launcherRequestScheme(r *http.Request) string {
 	if r.TLS != nil {
-		scheme = "https"
+		return "https"
 	}
-	return !strings.EqualFold(u.Scheme, scheme) || !strings.EqualFold(u.Host, r.Host)
+	if proto := strings.TrimSpace(
+		strings.SplitN(r.Header.Get("X-Forwarded-Proto"), ",", 2)[0],
+	); strings.EqualFold(
+		proto,
+		"https",
+	) {
+		return "https"
+	}
+	return "http"
 }

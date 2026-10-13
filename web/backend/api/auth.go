@@ -13,7 +13,7 @@ import (
 )
 
 // PasswordStore is the interface for dashboard password persistence.
-// Implemented by dashboardauth.Store and launcherconfig.PasswordStore.
+// Implemented by dashboardauth.Store.
 type PasswordStore interface {
 	IsInitialized(ctx context.Context) (bool, error)
 	SetPassword(ctx context.Context, plain string) error
@@ -143,17 +143,6 @@ func (h *launcherAuthHandlers) handleLogin(w http.ResponseWriter, r *http.Reques
 
 func (h *launcherAuthHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		_, _ = w.Write([]byte(`{"error":"method not allowed"}`))
-		return
-	}
-	ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
-	if !strings.HasPrefix(ct, "application/json") {
-		w.WriteHeader(http.StatusUnsupportedMediaType)
-		_, _ = w.Write([]byte(`{"error":"Content-Type must be application/json"}`))
-		return
-	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, logoutBodyMaxBytes))
 	if err := dec.Decode(&struct{}{}); err != nil && err != io.EOF {
 		w.WriteHeader(http.StatusBadRequest)
@@ -205,22 +194,6 @@ func (h *launcherAuthHandlers) handleSetup(w http.ResponseWriter, r *http.Reques
 	h.passwordMu.Lock()
 	defer h.passwordMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-
-	if middleware.CrossSiteLauncherRequest(r) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"error":"cross-site setup request rejected"}`))
-		return
-	}
-
-	if h.store == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		if h.storeErr != nil {
-			writeErrorf(w, "password store unavailable: %v", h.storeErr)
-		} else {
-			_, _ = w.Write([]byte(`{"error":"password store not configured"}`))
-		}
-		return
-	}
 
 	initialized, initErr := h.isStoreInitialized(r.Context())
 	if initErr != nil {

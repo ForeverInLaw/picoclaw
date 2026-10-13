@@ -12,6 +12,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/web/backend/api"
+	"github.com/sipeed/picoclaw/web/backend/dashboardauth"
 	"github.com/sipeed/picoclaw/web/backend/launcherconfig"
 	"github.com/sipeed/picoclaw/web/backend/middleware"
 	"github.com/sipeed/picoclaw/web/backend/utils"
@@ -42,7 +44,8 @@ var (
 	serverAddr string
 	apiHandler *api.Handler
 
-	noBrowser *bool
+	noBrowser      *bool
+	localAutoLogin *middleware.LauncherDashboardLocalAutoLogin
 )
 
 func main() {
@@ -161,11 +164,35 @@ func main() {
 	apiHandler = api.NewHandler(absPath)
 	apiHandler.SetServerOptions(portNum, effectivePublic, explicitPublic, launcherCfg.AllowedCIDRs)
 	apiHandler.RegisterRoutes(mux)
+	sessions := middleware.NewLauncherDashboardSessions()
+	defer sessions.RevokeAll()
+	authStore, authErr := dashboardauth.New(filepath.Dir(absPath))
+	authOpts := api.LauncherAuthRouteOpts{Sessions: sessions, StoreError: authErr}
+	if authErr != nil {
+		logger.ErrorC("web", fmt.Sprintf("Dashboard password storage unavailable: %v", authErr))
+	} else {
+		defer authStore.Close()
+		authOpts.PasswordStore = authStore
+		initialized, authQueryErr := authStore.IsInitialized(context.Background())
+		if authQueryErr != nil {
+			logger.ErrorC("web", fmt.Sprintf("Dashboard password storage unreadable: %v", authQueryErr))
+		} else if initialized && !*noBrowser {
+			localAutoLogin, err = middleware.NewLauncherDashboardLocalAutoLogin(5 * time.Minute)
+			if err != nil {
+				logger.ErrorC("web", fmt.Sprintf("Dashboard bootstrap unavailable: %v", err))
+			}
+		}
+	}
+	api.RegisterLauncherAuthRoutes(mux, authOpts)
 
 	// Frontend Embedded Assets
 	registerEmbedRoutes(mux)
 
-	accessControlledMux, err := middleware.IPAllowlist(launcherCfg.AllowedCIDRs, mux)
+	authenticatedMux := middleware.LauncherDashboardAuth(middleware.LauncherDashboardAuthConfig{
+		Sessions:       sessions,
+		LocalAutoLogin: localAutoLogin,
+	}, mux)
+	accessControlledMux, err := middleware.IPAllowlist(launcherCfg.AllowedCIDRs, authenticatedMux)
 	if err != nil {
 		logger.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
