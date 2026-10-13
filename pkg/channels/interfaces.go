@@ -20,6 +20,12 @@ type MessageEditor interface {
 	EditMessage(ctx context.Context, chatID string, messageID string, content string) error
 }
 
+// ReplyEditor preserves the final outbound envelope when editing a placeholder,
+// so multipart recovery remains associated with its originating request.
+type ReplyEditor interface {
+	EditReply(ctx context.Context, msg bus.OutboundMessage, messageID string) error
+}
+
 // MessageDeleter — channels that can delete a message by ID.
 type MessageDeleter interface {
 	DeleteMessage(ctx context.Context, chatID string, messageID string) error

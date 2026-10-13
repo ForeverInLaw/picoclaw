@@ -336,3 +336,65 @@ func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *te
 		})
 	}
 }
+
+func TestManagerFailedPlaceholderDoesNotCaptureLaterIdenticalAnswer(t *testing.T) {
+	var mu sync.Mutex
+	rejected := false
+	newRequestReplies := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Reply struct {
+				ID int `json:"message_id"`
+			} `json:"reply_parameters"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/sendRichMessage") {
+			if !rejected {
+				rejected = true
+				_, _ = w.Write([]byte(`{"ok":false,"error_code":403,"description":"send forbidden"}`))
+				return
+			}
+			if body.Reply.ID == 77 {
+				newRequestReplies++
+			}
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":100}}`))
+	}))
+	defer server.Close()
+	bot, err := telego.NewBot(
+		testToken,
+		telego.WithAPIServer(server.URL),
+		telego.WithHTTPClient(server.Client()),
+		telego.WithDiscardLogger(),
+	)
+	require.NoError(t, err)
+	cfg := config.DefaultConfig()
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	manager, err := channels.NewManager(cfg, mb, nil)
+	require.NoError(t, err)
+	channel := &TelegramChannel{bot: bot, config: cfg, BaseChannel: channels.NewBaseChannel("telegram", nil, mb, nil)}
+	manager.RegisterChannel("telegram", outboundTelegram{channel})
+	require.NoError(t, manager.StartAll(t.Context()))
+	defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
+	manager.RecordPlaceholder("telegram", "-123/7", "99")
+	msg := bus.OutboundMessage{
+		Channel:          "telegram",
+		ChatID:           "-123/7",
+		ReplyToMessageID: "42",
+		Content:          strings.Repeat("answer paragraph\n", 4500),
+	}
+	require.NoError(t, manager.SendMessage(t.Context(), msg))
+	msg.ReplyToMessageID = "77"
+	require.NoError(t, manager.SendMessage(t.Context(), msg))
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(
+		t,
+		1,
+		newRequestReplies,
+		"recovery for an earlier failed placeholder must not capture an identical answer for a new request",
+	)
+}

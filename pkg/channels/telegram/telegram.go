@@ -307,12 +307,21 @@ func (c *TelegramChannel) StartTyping(ctx context.Context, chatID string) (func(
 }
 
 // EditMessage implements channels.MessageEditor.
-func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messageID string, content string) error {
-	if inlineMessageID, ok := telegramInlineMessageID(chatID); ok {
-		return c.editInlineMessageText(ctx, inlineMessageID, content)
-	}
+func (c *TelegramChannel) EditMessage(ctx context.Context, chatID, messageID, content string) error {
+	return c.EditReply(
+		ctx,
+		bus.OutboundMessage{ChatID: chatID, ReplyToMessageID: "edit:" + messageID, Content: content},
+		messageID,
+	)
+}
 
-	cid, threadID, err := parseTelegramChatID(chatID)
+// EditReply retains request identity when a partial placeholder delivery later
+// falls through to normal manager delivery.
+func (c *TelegramChannel) EditReply(ctx context.Context, msg bus.OutboundMessage, messageID string) error {
+	if inlineMessageID, ok := telegramInlineMessageID(msg.ChatID); ok {
+		return c.editInlineMessageText(ctx, inlineMessageID, msg.Content)
+	}
+	cid, threadID, err := parseTelegramChatID(msg.ChatID)
 	if err != nil {
 		return err
 	}
@@ -320,7 +329,8 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 	if err != nil {
 		return err
 	}
-	return c.editRichReply(ctx, cid, threadID, mid, content)
+	_, _, err = c.deliverReply(ctx, cid, threadID, msg.ReplyToMessageID, msg.Content, mid)
+	return err
 }
 
 func isTelegramMessageNotModified(err error) bool {

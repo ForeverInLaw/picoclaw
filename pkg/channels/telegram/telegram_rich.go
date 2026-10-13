@@ -134,13 +134,3 @@ func (c *TelegramChannel) sendPlainReply(
 	}
 	return first, nil
 }
-
-func (c *TelegramChannel) editRichReply(
-	ctx context.Context,
-	chatID int64,
-	threadID, messageID int,
-	content string,
-) error {
-	_, _, err := c.deliverReply(ctx, chatID, threadID, "edit:"+strconv.Itoa(messageID), content, messageID)
-	return err
-}

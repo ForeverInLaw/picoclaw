@@ -65,18 +65,7 @@ func (c *TelegramChannel) deliverReply(
 		c.pendingReplies = make(map[telegramReplyKey]*telegramReplyDelivery)
 	}
 	delivery := c.pendingReplies[key]
-	// A failed placeholder edit reaches Send through the manager without its
-	// placeholder ID. Preserve its progress when that same answer falls through.
-	if delivery == nil && editID == 0 {
-		for candidate, pending := range c.pendingReplies {
-			if candidate.chatID == chatID && candidate.threadID == threadID && candidate.source == key.source &&
-				strings.HasPrefix(candidate.replyTo, "edit:") {
-				key = candidate
-				delivery = pending
-				break
-			}
-		}
-	}
+
 	if delivery == nil {
 		var retainedBytes int
 		for candidate, pending := range c.pendingReplies {
