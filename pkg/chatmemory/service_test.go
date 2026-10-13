@@ -84,6 +84,54 @@ func TestService_SummarizeRefreshesPartialHoursWithoutDuplicatePersistedRollups(
 	}
 }
 
+func TestService_SummarizeClipsPartialStartWithoutFragmentingPersistedHours(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.sqlite")
+	idx, err := memoryindex.Open(path, memoryindex.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
+	hour := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for _, obs := range []memoryindex.Observation{
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "OUTSIDE_START", CreatedAt: hour.Add(-55 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "INSIDE_START", CreatedAt: hour.Add(-20 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "CURRENT_HOUR", CreatedAt: hour.Add(5 * time.Minute)},
+		{Channel: "telegram", ChatID: "-2", PeerKind: "group", Role: "user", Content: "PRIVATE_NEIGHBOR", CreatedAt: hour.Add(-10 * time.Minute)},
+	} {
+		if err := idx.AddObservation(t.Context(), obs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := config.MemoryIndexConfig{Rollups: config.MemoryRollupConfig{Enabled: true, HourlySampleSize: 8}}
+	req := SummaryRequest{CurrentChannel: "telegram", CurrentChatID: "-1", CurrentPeer: "group", SinceHours: 1}
+	for _, minute := range []int{30, 31, 50, 30} {
+		s := New(idx, settings, nil)
+		now := hour.Add(time.Duration(minute) * time.Minute)
+		s.now = func() time.Time { return now }
+		text, err := s.Summarize(t.Context(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(text, "OUTSIDE_START") || strings.Contains(text, "PRIVATE_NEIGHBOR") || strings.Contains(text, "INSIDE_START") != (minute < 40) || !strings.Contains(text, "CURRENT_HOUR") {
+			t.Fatalf("summary crossed an exact time/chat boundary at minute%d: %s", minute, text)
+		}
+		rows, err := idx.ListChatRollups(t.Context(), memoryindex.ChatScope{Channel: "telegram", ChatID: "-1"}, memoryindex.TimeWindow{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 2 || !rows[0].WindowStart.Equal(hour.Add(-time.Hour)) {
+			t.Fatalf("request-local partial starts fragmented canonical hours: %+v", rows)
+		}
+		if err = idx.Close(); err != nil {
+			t.Fatal(err)
+		}
+		idx, err = memoryindex.Open(path, memoryindex.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestService_Summarize_ResolvesAccessibleGroupByLabel(t *testing.T) {
 	idx, err := memoryindex.Open(t.TempDir()+"\\index.sqlite", memoryindex.Config{
 		MaxResults:      5,

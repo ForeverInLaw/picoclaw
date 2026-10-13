@@ -207,6 +207,27 @@ func (s *Service) Summarize(ctx context.Context, req SummaryRequest) (string, er
 	if err != nil {
 		return "", err
 	}
+	// Cached hours have stable starts. Only boundary summaries are rebuilt for
+	// this request, so exact windows neither leak older excerpts nor add cache keys.
+	clipped := rollups[:0]
+	for _, rollup := range rollups {
+		if rollup.WindowStart.Before(window.Start) || rollup.WindowEnd.After(window.End) {
+			rollup.WindowStart = maxTime(rollup.WindowStart, window.Start)
+			rollup.WindowEnd = minTime(rollup.WindowEnd, window.End)
+			hits, readErr := s.index.ListObservationsInWindow(ctx, scope, memoryindex.TimeWindow{
+				Start: rollup.WindowStart, End: rollup.WindowEnd,
+			}, 0)
+			if readErr != nil {
+				return "", readErr
+			}
+			if len(hits) == 0 {
+				continue
+			}
+			rollup.Summary = buildRollupSummary(hits, s.cfg.Rollups.HourlySampleSize)
+		}
+		clipped = append(clipped, rollup)
+	}
+	rollups = clipped
 	participants, _ := s.index.ListChatParticipants(ctx, scope)
 
 	var searchHits []memoryindex.Hit
@@ -259,6 +280,20 @@ func (s *Service) Summarize(ctx context.Context, req SummaryRequest) (string, er
 		}
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 func (s *Service) resolveScopes(
