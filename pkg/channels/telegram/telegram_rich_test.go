@@ -47,6 +47,40 @@ func TestRichRepliesPreserveFormattingFormulasAndTopicReply(t *testing.T) {
 	)
 }
 
+func TestInboundPlaceholderRepliesToOriginalMessageInTopic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	channel := newTestChannel(t, caller)
+	channel.config.Channels.Telegram.Placeholder.Enabled = true
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, mb, nil)
+	manager, err := channels.NewManager(channel.config, mb, nil)
+	require.NoError(t, err)
+	channel.BaseChannel.SetOwner(channel)
+	channel.BaseChannel.SetPlaceholderRecorder(manager)
+	channel.HandleMessage(ctx, bus.Peer{Kind: "group", ID: "-123"}, "42", "7", "-123/9", "question", nil, nil)
+	for _, call := range caller.calls {
+		if !strings.HasSuffix(call.URL, "/sendMessage") {
+			continue
+		}
+		var payload struct {
+			Thread int `json:"message_thread_id"`
+			Reply  struct {
+				MessageID int `json:"message_id"`
+			} `json:"reply_parameters"`
+		}
+		require.NoError(t, json.Unmarshal(call.Data.BodyRaw, &payload))
+		require.Equal(t, 9, payload.Thread)
+		require.Equal(t, 42, payload.Reply.MessageID)
+		return
+	}
+	t.Fatal("inbound request did not create a placeholder")
+}
+
 func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
 		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil

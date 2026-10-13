@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
@@ -303,6 +304,7 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		SessionKey:              sessionKey,
 		Channel:                 channel,
 		ChatID:                  chatID,
+		ReplyToMessageID:        bus.StreamReplyTo(ctx),
 		DefaultResponse:         defaultResponse,
 		EnableSummary:           true,
 		SendResponse:            false,

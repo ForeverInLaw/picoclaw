@@ -132,6 +132,24 @@ func directIngressMessage(content string) bus.InboundMessage {
 	}
 }
 
+func TestRunFinalReplyPreservesInboundMessageAndTopic(t *testing.T) {
+	for _, chatID := range []string{"42", "-123/9"} {
+		t.Run(chatID, func(t *testing.T) {
+			_, mb, provider := startIngressLoop(t)
+			msg := directIngressMessage("reply here")
+			msg.ChatID = chatID
+			msg.MessageID = "31"
+			publishIncoming(t, mb, msg)
+			request := inboundRequest(t, provider)
+			close(request.release)
+			out := finalOutbound(t, mb)
+			if out.ChatID != chatID || out.ReplyToMessageID != "31" {
+				t.Fatalf("final reply target = (%q,%q), want (%q,31)", out.ChatID, out.ReplyToMessageID, chatID)
+			}
+		})
+	}
+}
+
 func TestRunQueuesSelectedInlineRequestsWithTheirOwnTransportAndContext(t *testing.T) {
 	cases := []struct {
 		name          string

@@ -101,9 +101,10 @@ type processOptions struct {
 }
 
 type continuationTarget struct {
-	SessionKey string
-	Channel    string
-	ChatID     string
+	SessionKey       string
+	Channel          string
+	ChatID           string
+	ReplyToMessageID string
 }
 
 const (
@@ -509,7 +510,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			if target == nil {
 				cancelDrain()
 				if finalResponse != "" {
-					al.publishResponseIfNeeded(ctx, msg.Channel, msg.ChatID, finalResponse)
+					al.publishResponseIfNeeded(ctx, msg.Channel, msg.ChatID, finalResponse, msg.MessageID)
 				}
 				return
 			}
@@ -523,7 +524,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 						"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
 					})
 
-				continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
+				continued, continueErr := al.Continue(
+					bus.WithStreamReplyTo(ctx, target.ReplyToMessageID),
+					target.SessionKey,
+					target.Channel,
+					target.ChatID,
+				)
 				if continueErr != nil {
 					logger.WarnCF("agent", "Failed to continue queued steering",
 						map[string]any{
@@ -551,7 +557,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 						"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
 					})
 
-				continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
+				continued, continueErr := al.Continue(
+					bus.WithStreamReplyTo(ctx, target.ReplyToMessageID),
+					target.SessionKey,
+					target.Channel,
+					target.ChatID,
+				)
 				if continueErr != nil {
 					logger.WarnCF("agent", "Failed to continue queued steering after shutdown drain",
 						map[string]any{
@@ -569,7 +580,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 
 			if finalResponse != "" {
-				al.publishResponseIfNeeded(ctx, target.Channel, target.ChatID, finalResponse)
+				al.publishResponseIfNeeded(ctx, target.Channel, target.ChatID, finalResponse, target.ReplyToMessageID)
 			}
 		}()
 	}
@@ -700,9 +711,10 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 	}
 
 	return &continuationTarget{
-		SessionKey: resolveScopeKey(route, msg.SessionKey),
-		Channel:    msg.Channel,
-		ChatID:     msg.ChatID,
+		SessionKey:       resolveScopeKey(route, msg.SessionKey),
+		Channel:          msg.Channel,
+		ChatID:           msg.ChatID,
+		ReplyToMessageID: msg.MessageID,
 	}, nil
 }
 
@@ -1367,7 +1379,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	observeOnly := strings.EqualFold(strings.TrimSpace(msg.Metadata["observe_only"]), "true")
 
 	if hadAudio && !observeOnly && al.channelManager != nil {
-		al.channelManager.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
+		al.channelManager.SendPlaceholder(bus.WithStreamReplyTo(ctx, msg.MessageID), msg.Channel, msg.ChatID)
 	}
 
 	// Route system messages to processSystemMessage

@@ -428,7 +428,8 @@ func TestDrainBusToSteering_RetainsDifferentScopeMessage(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	if len(queued) != 1 || queued[0].Channel != otherMsg.Channel || queued[0].ChatID != otherMsg.ChatID || queued[0].Content != otherMsg.Content {
+	if len(queued) != 1 || queued[0].Channel != otherMsg.Channel || queued[0].ChatID != otherMsg.ChatID ||
+		queued[0].Content != otherMsg.Content {
 		t.Fatalf("deferred request lost: %+v", queued)
 	}
 }
@@ -592,7 +593,6 @@ func (p *blockingDirectProvider) Chat(
 	finalResp := p.finalResp
 	if call == 1 && p.firstStarted != nil {
 		close(p.firstStarted)
-		p.firstStarted = nil
 	}
 	p.mu.Unlock()
 
@@ -842,10 +842,11 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}()
 
 	first := bus.InboundMessage{
-		Channel:  "test",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "first message",
+		MessageID: "original-request",
+		Channel:   "test",
+		SenderID:  "user1",
+		ChatID:    "chat1",
+		Content:   "first message",
 		Peer: bus.Peer{
 			Kind: "direct",
 			ID:   "user1",
@@ -891,6 +892,9 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}
 	if out1.Content != "continued response" {
 		t.Fatalf("expected continued response, got %q", out1.Content)
+	}
+	if out1.ReplyToMessageID != first.MessageID {
+		t.Fatalf("continued response reply = %q, want %q", out1.ReplyToMessageID, first.MessageID)
 	}
 
 	noExtraCtx, cancelNoExtra := context.WithTimeout(context.Background(), 200*time.Millisecond)

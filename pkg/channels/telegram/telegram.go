@@ -365,6 +365,7 @@ func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (s
 
 	phMsg := tu.Message(tu.ID(cid), text)
 	phMsg.MessageThreadID = threadID
+	phMsg.ReplyParameters = replyParameters(bus.StreamReplyTo(ctx))
 	pMsg, err := c.bot.SendMessage(ctx, phMsg)
 	if err != nil {
 		return "", err
