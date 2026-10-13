@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/utils"
 	"github.com/sipeed/picoclaw/pkg/websource"
 )
@@ -81,8 +82,10 @@ func (p *fallbackSearchProvider) Search(ctx context.Context, query string, count
 func isTransientSearchError(err error) bool {
 	var status *searchHTTPError
 	if errors.As(err, &status) {
-		return !status.quota &&
-			(status.status == http.StatusRequestTimeout || status.status == http.StatusTooManyRequests || status.status == http.StatusInternalServerError || status.status == http.StatusBadGateway || status.status == http.StatusServiceUnavailable || status.status == http.StatusGatewayTimeout)
+		if status.quota {
+			return false
+		}
+		err = &protocoltypes.HTTPError{StatusCode: status.status, Wrapped: err}
 	}
 	failure := providers.ClassifyError(err, "", "")
 	return failure != nil && failure.IsTransient()

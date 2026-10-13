@@ -62,7 +62,7 @@ func TestWebSearch_ExaContract(t *testing.T) {
 
 func TestWebSearch_TransientFallback(t *testing.T) {
 	for _, primary := range []string{"", "parallel", "exa"} {
-		for _, status := range []int{200, 400, 401, 402, 429, 503} {
+		for _, status := range []int{200, 400, 401, 402, 429, 501, 503, 505, 521, 524, 529} {
 			t.Run(fmt.Sprintf("primary=%s/status=%d", primary, status), func(t *testing.T) {
 				parallelCalls, exaCalls := 0, 0
 				primaryIsExa := primary == "exa"
@@ -98,7 +98,7 @@ func TestWebSearch_TransientFallback(t *testing.T) {
 					t.Fatal(err)
 				}
 				result := tool.Execute(t.Context(), map[string]any{"query": "native formulas"})
-				wantFallback := status == 429 || status == 503
+				wantFallback := status == 429 || status == 503 || status == 521 || status == 524 || status == 529
 				if result.IsError != (status != 200 && !wantFallback) {
 					t.Fatalf("wrong result: %+v", result)
 				}
