@@ -31,7 +31,7 @@ func (al *AgentLoop) publishResponseWithControls(
 	if scope, agentID, ok := al.resolveSteeringTarget(request); ok {
 		drainCtx, cancel := context.WithCancel(ctx)
 		done := make(chan []bus.InboundMessage, 1)
-		go func() { done <- al.drainBus(drainCtx, scope, agentID, len(*queued), false) }()
+		go func() { done <- al.drainBus(drainCtx, ctx, scope, agentID, len(*queued), false) }()
 		defer func() { cancel(); *queued = append(*queued, (<-done)...) }()
 	}
 	al.publishResponseIfNeeded(ctx, channel, chatID, content, replyID)

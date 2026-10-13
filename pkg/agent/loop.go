@@ -457,7 +457,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			drainCancel = cancel
 			done := make(chan []bus.InboundMessage, 1)
 			drainDone = done
-			go func() { done <- al.drainBusToSteering(drainCtx, activeScope, activeAgentID, len(queued)) }()
+			go func() { done <- al.drainBus(drainCtx, ctx, activeScope, activeAgentID, len(queued), true) }()
 		}
 
 		// Process message
@@ -619,11 +619,11 @@ func (al *AgentLoop) drainBusToSteering(
 	if len(inherited) > 0 {
 		pending = inherited[0]
 	}
-	return al.drainBus(ctx, activeScope, activeAgentID, pending, true)
+	return al.drainBus(ctx, ctx, activeScope, activeAgentID, pending, true)
 }
 
 func (al *AgentLoop) drainBus(
-	ctx context.Context,
+	ctx, requestCtx context.Context,
 	activeScope, activeAgentID string,
 	pending int,
 	steer bool,
@@ -641,7 +641,7 @@ func (al *AgentLoop) drainBus(
 			msg = next
 		}
 
-		if al.handleActiveReset(ctx, msg) {
+		if al.handleActiveReset(requestCtx, msg) {
 			continue
 		}
 
@@ -649,7 +649,7 @@ func (al *AgentLoop) drainBus(
 		if !steer || !scopeOK || msgScope != activeScope || isInlineMessage(msg) ||
 			strings.Contains(activeScope, ":telegram:inline:user:") {
 			if pending+len(queued) >= maxPendingRequests {
-				al.rejectBusyRequest(ctx, msg)
+				al.rejectBusyRequest(requestCtx, msg)
 				continue
 			}
 			queued = append(queued, msg)
@@ -657,7 +657,7 @@ func (al *AgentLoop) drainBus(
 		}
 
 		// Transcribe audio if needed before steering, so the agent sees text.
-		msg, _ = al.transcribeAudioInMessage(ctx, msg)
+		msg, _ = al.transcribeAudioInMessage(requestCtx, msg)
 
 		logger.InfoCF("agent", "Redirecting inbound message to steering queue",
 			map[string]any{
