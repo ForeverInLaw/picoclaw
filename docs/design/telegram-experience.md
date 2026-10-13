@@ -2,6 +2,21 @@
 
 Published as [IVO-80](https://linear.app/ivoxygen/issue/IVO-80/feattelegram-rich-replies-inline-memory-tool-activity-and-search), marked `ready-for-agent`.
 
+Implementation tickets (blocking relationships are also set natively in Linear):
+
+| Issue | Slice | Blocked by |
+| --- | --- | --- |
+| [IVO-81](https://linear.app/ivoxygen/issue/IVO-81/fixchannels-keep-progress-separate-from-final-replies) | fix(channels): keep progress separate from final replies | None |
+| [IVO-82](https://linear.app/ivoxygen/issue/IVO-82/fixagent-keep-reasoning-and-tool-commentary-out-of-answers) | fix(agent): keep reasoning and tool commentary out of answers | None |
+| [IVO-83](https://linear.app/ivoxygen/issue/IVO-83/feattelegram-send-rich-replies-with-native-latex) | feat(telegram): send rich replies with native LaTeX | None |
+| [IVO-84](https://linear.app/ivoxygen/issue/IVO-84/fixagent-retry-transient-failures-in-direct-and-inline-requests) | fix(agent): retry transient failures in direct and inline requests | IVO-81 |
+| [IVO-85](https://linear.app/ivoxygen/issue/IVO-85/feattelegram-stream-rich-answers-with-reliable-final-delivery) | feat(telegram): stream rich answers with reliable final delivery | IVO-81, IVO-82, IVO-83 |
+| [IVO-86](https://linear.app/ivoxygen/issue/IVO-86/feattelegram-show-each-tool-action-and-its-result) | feat(telegram): show each tool action and its result | IVO-81, IVO-83 |
+| [IVO-87](https://linear.app/ivoxygen/issue/IVO-87/fixmemory-start-a-fresh-conversation-after-reset) | fix(memory): start a fresh conversation after reset | None |
+| [IVO-88](https://linear.app/ivoxygen/issue/IVO-88/feattelegram-persist-isolated-inline-conversations-with-reset) | feat(telegram): persist isolated inline conversations with reset | IVO-87 |
+| [IVO-89](https://linear.app/ivoxygen/issue/IVO-89/featsearch-add-parallel-to-web-search) | feat(search): add Parallel to web search | None |
+| [IVO-90](https://linear.app/ivoxygen/issue/IVO-90/featsearch-add-exa-with-configurable-provider-fallback) | feat(search): add Exa with configurable provider fallback | IVO-89 |
+
 ## Problem Statement
 
 Telegram users cannot reliably tell what the assistant is doing during a long request. Tool calls and their output are inconsistently visible, intermediate model text can appear and disappear in the answer, and an empty final answer can expose reasoning. Temporary API errors are handled differently across providers and delivery paths.
