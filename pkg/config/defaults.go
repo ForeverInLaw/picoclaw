@@ -485,6 +485,7 @@ func DefaultConfig() *Config {
 					Enabled: true,
 				},
 				PreferNative:    true,
+				Parallel:        ParallelSearchConfig{Enabled: true, MaxResults: 5},
 				Proxy:           "",
 				FetchLimitBytes: 10 * 1024 * 1024, // 10MB by default
 				Format:          "plaintext",

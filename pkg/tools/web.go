@@ -625,6 +625,11 @@ type WebSearchTool struct {
 }
 
 type WebSearchToolOptions struct {
+	PrimaryProvider      string
+	ParallelAPIKeys      []string
+	ParallelBaseURL      string
+	ParallelMaxResults   int
+	ParallelEnabled      bool
 	BraveAPIKeys         []string
 	BraveMaxResults      int
 	BraveEnabled         bool

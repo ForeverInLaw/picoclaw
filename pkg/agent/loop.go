@@ -170,6 +170,11 @@ func registerSharedTools(
 		}
 
 		searchOpts := tools.WebSearchToolOptions{
+			PrimaryProvider:      cfg.Tools.Web.PrimaryProvider,
+			ParallelAPIKeys:      config.MergeAPIKeys(cfg.Tools.Web.Parallel.APIKey, cfg.Tools.Web.Parallel.APIKeys),
+			ParallelBaseURL:      cfg.Tools.Web.Parallel.BaseURL,
+			ParallelMaxResults:   cfg.Tools.Web.Parallel.MaxResults,
+			ParallelEnabled:      cfg.Tools.Web.Parallel.Enabled,
 			BraveAPIKeys:         config.MergeAPIKeys(cfg.Tools.Web.Brave.APIKey, cfg.Tools.Web.Brave.APIKeys),
 			BraveMaxResults:      cfg.Tools.Web.Brave.MaxResults,
 			BraveEnabled:         cfg.Tools.Web.Brave.Enabled,
@@ -1885,6 +1890,8 @@ turnLoop:
 			hasWebSearch = false
 		}
 		useNativeSearch := al.cfg.Tools.Web.PreferNative &&
+			al.cfg.Tools.Web.PrimaryProvider == "" &&
+			!(al.cfg.Tools.Web.Parallel.Enabled && len(config.MergeAPIKeys(al.cfg.Tools.Web.Parallel.APIKey, al.cfg.Tools.Web.Parallel.APIKeys)) > 0) &&
 			hasWebSearch &&
 			func() bool {
 				// Check if provider supports native search

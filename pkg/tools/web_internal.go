@@ -21,6 +21,22 @@ var reTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
 func NewWebSearchProvider(opts WebSearchToolOptions) (SearchProvider, int, error) {
 	maxResults := 5
+	if opts.PrimaryProvider != "" && opts.PrimaryProvider != "parallel" {
+		return nil, 0, fmt.Errorf("unknown primary search provider %q", opts.PrimaryProvider)
+	}
+	if opts.ParallelEnabled && len(opts.ParallelAPIKeys) > 0 {
+		client, err := utils.CreateHTTPClient(opts.Proxy, searchTimeout)
+		if err != nil {
+			return nil, 0, fmt.Errorf("create Parallel HTTP client: %w", err)
+		}
+		if opts.ParallelMaxResults > 0 {
+			maxResults = min(opts.ParallelMaxResults, 10)
+		}
+		return &ParallelSearchProvider{keyPool: NewAPIKeyPool(opts.ParallelAPIKeys), baseURL: opts.ParallelBaseURL, client: client}, maxResults, nil
+	}
+	if opts.PrimaryProvider == "parallel" {
+		return nil, 0, fmt.Errorf("Parallel is selected but enabled credentials are unavailable")
+	}
 	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
 		client, err := utils.CreateHTTPClient(opts.Proxy, perplexityTimeout)
 		if err != nil {

@@ -948,14 +948,24 @@ type GLMSearchConfig struct {
 	MaxResults   int    `json:"max_results"   env:"PICOCLAW_TOOLS_WEB_GLM_MAX_RESULTS"`
 }
 
+type ParallelSearchConfig struct {
+	Enabled    bool     `json:"enabled" env:"PICOCLAW_TOOLS_WEB_PARALLEL_ENABLED"`
+	APIKey     string   `json:"api_key" env:"PICOCLAW_TOOLS_WEB_PARALLEL_API_KEY"`
+	APIKeys    []string `json:"api_keys" env:"PICOCLAW_TOOLS_WEB_PARALLEL_API_KEYS"`
+	BaseURL    string   `json:"base_url,omitempty" env:"PICOCLAW_TOOLS_WEB_PARALLEL_BASE_URL"`
+	MaxResults int      `json:"max_results" env:"PICOCLAW_TOOLS_WEB_PARALLEL_MAX_RESULTS"`
+}
+
 type WebToolsConfig struct {
-	ToolConfig `                 envPrefix:"PICOCLAW_TOOLS_WEB_"`
-	Brave      BraveConfig      `                                json:"brave"`
-	Tavily     TavilyConfig     `                                json:"tavily"`
-	DuckDuckGo DuckDuckGoConfig `                                json:"duckduckgo"`
-	Perplexity PerplexityConfig `                                json:"perplexity"`
-	SearXNG    SearXNGConfig    `                                json:"searxng"`
-	GLMSearch  GLMSearchConfig  `                                json:"glm_search"`
+	ToolConfig      `                 envPrefix:"PICOCLAW_TOOLS_WEB_"`
+	PrimaryProvider string               `json:"primary_provider,omitempty" env:"PICOCLAW_TOOLS_WEB_PRIMARY_PROVIDER"`
+	Parallel        ParallelSearchConfig `json:"parallel"`
+	Brave           BraveConfig          `                                json:"brave"`
+	Tavily          TavilyConfig         `                                json:"tavily"`
+	DuckDuckGo      DuckDuckGoConfig     `                                json:"duckduckgo"`
+	Perplexity      PerplexityConfig     `                                json:"perplexity"`
+	SearXNG         SearXNGConfig        `                                json:"searxng"`
+	GLMSearch       GLMSearchConfig      `                                json:"glm_search"`
 	// PreferNative controls whether to use provider-native web search when
 	// the active LLM supports it (e.g. OpenAI web_search_preview). When true,
 	// the client-side web_search tool is hidden to avoid duplicate search surfaces,

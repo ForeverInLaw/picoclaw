@@ -139,11 +139,16 @@ type IRCSecurity struct {
 }
 
 type WebToolsSecurity struct {
-	Brave       *BraveSecurity       `yaml:"brave,omitempty"`
-	Tavily      *TavilySecurity      `yaml:"tavily,omitempty"`
-	Perplexity  *PerplexitySecurity  `yaml:"perplexity,omitempty"`
-	GLMSearch   *GLMSearchSecurity   `yaml:"glm_search,omitempty"`
-	BaiduSearch *BaiduSearchSecurity `yaml:"baidu_search,omitempty"`
+	Parallel    *ParallelSearchSecurity `yaml:"parallel,omitempty"`
+	Brave       *BraveSecurity          `yaml:"brave,omitempty"`
+	Tavily      *TavilySecurity         `yaml:"tavily,omitempty"`
+	Perplexity  *PerplexitySecurity     `yaml:"perplexity,omitempty"`
+	GLMSearch   *GLMSearchSecurity      `yaml:"glm_search,omitempty"`
+	BaiduSearch *BaiduSearchSecurity    `yaml:"baidu_search,omitempty"`
+}
+
+type ParallelSearchSecurity struct {
+	APIKeys []string `yaml:"api_keys,omitempty"`
 }
 
 type BraveSecurity struct {
