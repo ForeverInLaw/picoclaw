@@ -12,7 +12,7 @@ import (
 
 func TestWebSearch_ExaContract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/search" || r.Header.Get("x-api-key") != "exa-key" {
+		if r.Method != http.MethodPost || r.URL.Path != "/search" || r.Header.Get("X-Api-Key") != "exa-key" {
 			t.Errorf("unexpected Exa request: %s %s", r.Method, r.URL.Path)
 		}
 		var body struct {
@@ -28,18 +28,33 @@ func TestWebSearch_ExaContract(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Query != "native formulas" || body.Type != "auto" || body.NumResults != 1 || body.Contents.Highlights.MaxCharacters != 1500 {
+		if body.Query != "native formulas" || body.Type != "auto" || body.NumResults != 1 ||
+			body.Contents.Highlights.MaxCharacters != 1500 {
 			t.Errorf("unexpected body: %+v", body)
 		}
-		_, _ = w.Write([]byte(`{"results":[{"title":"Formulas","url":"https://example.com/formulas","highlights":["Native mathematics."],"text":"Unused full page."}]}`))
+		_, _ = w.Write(
+			[]byte(
+				`{"results":[{"title":"Formulas","url":"https://example.com/formulas","highlights":["Native mathematics."],"text":"Unused full page."}]}`,
+			),
+		)
 	}))
 	defer server.Close()
-	tool, err := NewWebSearchTool(WebSearchToolOptions{PrimaryProvider: "exa", ExaEnabled: true, ExaAPIKeys: []string{"exa-key"}, ExaBaseURL: server.URL, ExaMaxResults: 1})
+	tool, err := NewWebSearchTool(
+		WebSearchToolOptions{
+			PrimaryProvider: "exa",
+			ExaEnabled:      true,
+			ExaAPIKeys:      []string{"exa-key"},
+			ExaBaseURL:      server.URL,
+			ExaMaxResults:   1,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := tool.Execute(t.Context(), map[string]any{"query": "native formulas"})
-	if result.IsError || !strings.Contains(result.ForLLM, "Native mathematics.") || !strings.Contains(result.ForLLM, "https://example.com/formulas") || strings.Contains(result.ForLLM, "Unused full page") {
+	if result.IsError || !strings.Contains(result.ForLLM, "Native mathematics.") ||
+		!strings.Contains(result.ForLLM, "https://example.com/formulas") ||
+		strings.Contains(result.ForLLM, "Unused full page") {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 }
@@ -57,13 +72,27 @@ func TestWebSearch_TransientFallback(t *testing.T) {
 							w.WriteHeader(status)
 							return
 						}
-						_, _ = w.Write([]byte(`{"results":[{"title":"Formulas","url":"https://example.com/formulas","highlights":["Native mathematics."],"excerpts":["Native mathematics."]}]}`))
+						_, _ = w.Write(
+							[]byte(
+								`{"results":[{"title":"Formulas","url":"https://example.com/formulas","highlights":["Native mathematics."],"excerpts":["Native mathematics."]}]}`,
+							),
+						)
 					}))
 				}
 				parallel, exa := serve("parallel", &parallelCalls), serve("exa", &exaCalls)
 				defer parallel.Close()
 				defer exa.Close()
-				tool, err := NewWebSearchTool(WebSearchToolOptions{PrimaryProvider: primary, ParallelEnabled: true, ParallelAPIKeys: []string{"p-key"}, ParallelBaseURL: parallel.URL, ExaEnabled: true, ExaAPIKeys: []string{"e-key"}, ExaBaseURL: exa.URL})
+				tool, err := NewWebSearchTool(
+					WebSearchToolOptions{
+						PrimaryProvider: primary,
+						ParallelEnabled: true,
+						ParallelAPIKeys: []string{"p-key"},
+						ParallelBaseURL: parallel.URL,
+						ExaEnabled:      true,
+						ExaAPIKeys:      []string{"e-key"},
+						ExaBaseURL:      exa.URL,
+					},
+				)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -104,7 +133,9 @@ func TestWebSearch_TransientFallback(t *testing.T) {
 
 func TestWebSearch_MissingCredentialsAndExhaustedFallback(t *testing.T) {
 	for _, primary := range []string{"parallel", "exa", "unknown"} {
-		if _, err := NewWebSearchTool(WebSearchToolOptions{PrimaryProvider: primary, DuckDuckGoEnabled: true}); err == nil {
+		if _, err := NewWebSearchTool(
+			WebSearchToolOptions{PrimaryProvider: primary, DuckDuckGoEnabled: true},
+		); err == nil {
 			t.Errorf("%s without credentials must fail clearly", primary)
 		}
 	}
@@ -127,10 +158,16 @@ func TestWebSearch_MissingCredentialsAndExhaustedFallback(t *testing.T) {
 				w.WriteHeader(429)
 				_, _ = w.Write([]byte(tc.body))
 			}))
-			backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { backupCalls++; w.WriteHeader(503) }))
+			backup := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { backupCalls++; w.WriteHeader(503) }),
+			)
 			defer primary.Close()
 			defer backup.Close()
-			opts := WebSearchToolOptions{ParallelEnabled: true, ParallelAPIKeys: []string{"key"}, ParallelBaseURL: primary.URL}
+			opts := WebSearchToolOptions{
+				ParallelEnabled: true,
+				ParallelAPIKeys: []string{"key"},
+				ParallelBaseURL: primary.URL,
+			}
 			if tc.backup {
 				opts.ExaEnabled = true
 				opts.ExaAPIKeys = []string{"key"}
@@ -148,7 +185,8 @@ func TestWebSearch_MissingCredentialsAndExhaustedFallback(t *testing.T) {
 			if !result.IsError || primaryCalls != 1 || backupCalls != wantBackup {
 				t.Fatalf("calls=%d/%d result=%+v", primaryCalls, backupCalls, result)
 			}
-			if wantBackup == 1 && (!strings.Contains(result.ForLLM, "Parallel") || !strings.Contains(result.ForLLM, "Exa")) {
+			if wantBackup == 1 &&
+				(!strings.Contains(result.ForLLM, "Parallel") || !strings.Contains(result.ForLLM, "Exa")) {
 				t.Fatalf("both failures must be visible: %s", result.ForLLM)
 			}
 		})

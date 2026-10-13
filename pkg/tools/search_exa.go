@@ -63,7 +63,15 @@ func (p *ExaSearchProvider) Search(ctx context.Context, query string, count int)
 		if strings.TrimSpace(snippet) == "" {
 			snippet = result.Text
 		}
-		hits = append(hits, websource.SearchHit{Title: result.Title, URL: result.URL, Snippet: boundedSearchExcerpt(snippet), Provider: p.ProviderName()})
+		hits = append(
+			hits,
+			websource.SearchHit{
+				Title:    result.Title,
+				URL:      result.URL,
+				Snippet:  boundedSearchExcerpt(snippet),
+				Provider: p.ProviderName(),
+			},
+		)
 		if len(hits) == count {
 			break
 		}

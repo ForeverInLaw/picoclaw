@@ -132,7 +132,10 @@ func renderWebSearchResults(query string, provider SearchProvider, hits []websou
 	}
 	lines = append(lines, header)
 	for i, hit := range hits {
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, strings.TrimSpace(hit.Title), strings.TrimSpace(hit.URL)))
+		lines = append(
+			lines,
+			fmt.Sprintf("%d. %s\n   %s", i+1, strings.TrimSpace(hit.Title), strings.TrimSpace(hit.URL)),
+		)
 		if snippet := strings.TrimSpace(hit.Snippet); snippet != "" {
 			lines = append(lines, fmt.Sprintf("   %s", snippet))
 		}

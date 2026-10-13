@@ -949,26 +949,26 @@ type GLMSearchConfig struct {
 }
 
 type ParallelSearchConfig struct {
-	Enabled    bool     `json:"enabled" env:"PICOCLAW_TOOLS_WEB_PARALLEL_ENABLED"`
-	APIKey     string   `json:"api_key" env:"PICOCLAW_TOOLS_WEB_PARALLEL_API_KEY"`
-	APIKeys    []string `json:"api_keys" env:"PICOCLAW_TOOLS_WEB_PARALLEL_API_KEYS"`
+	Enabled    bool     `json:"enabled"            env:"PICOCLAW_TOOLS_WEB_PARALLEL_ENABLED"`
+	APIKey     string   `json:"api_key"            env:"PICOCLAW_TOOLS_WEB_PARALLEL_API_KEY"`
+	APIKeys    []string `json:"api_keys"           env:"PICOCLAW_TOOLS_WEB_PARALLEL_API_KEYS"`
 	BaseURL    string   `json:"base_url,omitempty" env:"PICOCLAW_TOOLS_WEB_PARALLEL_BASE_URL"`
-	MaxResults int      `json:"max_results" env:"PICOCLAW_TOOLS_WEB_PARALLEL_MAX_RESULTS"`
+	MaxResults int      `json:"max_results"        env:"PICOCLAW_TOOLS_WEB_PARALLEL_MAX_RESULTS"`
 }
 
 type ExaSearchConfig struct {
-	Enabled    bool     `json:"enabled" env:"PICOCLAW_TOOLS_WEB_EXA_ENABLED"`
-	APIKey     string   `json:"api_key" env:"PICOCLAW_TOOLS_WEB_EXA_API_KEY"`
-	APIKeys    []string `json:"api_keys" env:"PICOCLAW_TOOLS_WEB_EXA_API_KEYS"`
+	Enabled    bool     `json:"enabled"            env:"PICOCLAW_TOOLS_WEB_EXA_ENABLED"`
+	APIKey     string   `json:"api_key"            env:"PICOCLAW_TOOLS_WEB_EXA_API_KEY"`
+	APIKeys    []string `json:"api_keys"           env:"PICOCLAW_TOOLS_WEB_EXA_API_KEYS"`
 	BaseURL    string   `json:"base_url,omitempty" env:"PICOCLAW_TOOLS_WEB_EXA_BASE_URL"`
-	MaxResults int      `json:"max_results" env:"PICOCLAW_TOOLS_WEB_EXA_MAX_RESULTS"`
+	MaxResults int      `json:"max_results"        env:"PICOCLAW_TOOLS_WEB_EXA_MAX_RESULTS"`
 }
 
 type WebToolsConfig struct {
-	ToolConfig      `                 envPrefix:"PICOCLAW_TOOLS_WEB_"`
-	PrimaryProvider string               `json:"primary_provider,omitempty" env:"PICOCLAW_TOOLS_WEB_PRIMARY_PROVIDER"`
-	Parallel        ParallelSearchConfig `json:"parallel"`
-	Exa             ExaSearchConfig      `json:"exa"`
+	ToolConfig      `                     envPrefix:"PICOCLAW_TOOLS_WEB_"`
+	PrimaryProvider string               `                                json:"primary_provider,omitempty" env:"PICOCLAW_TOOLS_WEB_PRIMARY_PROVIDER"`
+	Parallel        ParallelSearchConfig `                                json:"parallel"`
+	Exa             ExaSearchConfig      `                                json:"exa"`
 	Brave           BraveConfig          `                                json:"brave"`
 	Tavily          TavilyConfig         `                                json:"tavily"`
 	DuckDuckGo      DuckDuckGoConfig     `                                json:"duckduckgo"`

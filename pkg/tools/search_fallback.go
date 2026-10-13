@@ -40,7 +40,11 @@ func newPreferredSearchProvider(opts WebSearchToolOptions) (SearchProvider, int,
 	}
 	var parallel, exa SearchProvider
 	if parallelAvailable {
-		parallel = &ParallelSearchProvider{keyPool: NewAPIKeyPool(opts.ParallelAPIKeys), baseURL: opts.ParallelBaseURL, client: client}
+		parallel = &ParallelSearchProvider{
+			keyPool: NewAPIKeyPool(opts.ParallelAPIKeys),
+			baseURL: opts.ParallelBaseURL,
+			client:  client,
+		}
 	}
 	if exaAvailable {
 		exa = &ExaSearchProvider{keyPool: NewAPIKeyPool(opts.ExaAPIKeys), baseURL: opts.ExaBaseURL, client: client}
@@ -81,7 +85,8 @@ func (p *fallbackSearchProvider) Search(ctx context.Context, query string, count
 func isTransientSearchError(err error) bool {
 	var status *searchHTTPError
 	if errors.As(err, &status) {
-		return !status.quota && (status.status == http.StatusRequestTimeout || status.status == http.StatusTooManyRequests || status.status == http.StatusInternalServerError || status.status == http.StatusBadGateway || status.status == http.StatusServiceUnavailable || status.status == http.StatusGatewayTimeout)
+		return !status.quota &&
+			(status.status == http.StatusRequestTimeout || status.status == http.StatusTooManyRequests || status.status == http.StatusInternalServerError || status.status == http.StatusBadGateway || status.status == http.StatusServiceUnavailable || status.status == http.StatusGatewayTimeout)
 	}
 	// url.Error itself implements net.Error even for permanent TLS/protocol errors.
 	var requestError *url.Error

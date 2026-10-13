@@ -57,7 +57,15 @@ func (p *ParallelSearchProvider) Search(ctx context.Context, query string, count
 	if !ok {
 		return nil, fmt.Errorf("Parallel credentials are unavailable")
 	}
-	if err := searchJSON(ctx, p.client, baseURL+"/v1/search", apiKey, p.ProviderName(), request, &response); err != nil {
+	if err := searchJSON(
+		ctx,
+		p.client,
+		baseURL+"/v1/search",
+		apiKey,
+		p.ProviderName(),
+		request,
+		&response,
+	); err != nil {
 		return nil, err
 	}
 	hits := make([]websource.SearchHit, 0, min(count, len(response.Results)))
@@ -65,7 +73,15 @@ func (p *ParallelSearchProvider) Search(ctx context.Context, query string, count
 		if strings.TrimSpace(result.URL) == "" {
 			continue
 		}
-		hits = append(hits, websource.SearchHit{Title: result.Title, URL: result.URL, Snippet: boundedSearchExcerpt(strings.Join(result.Excerpts, "\n")), Provider: p.ProviderName()})
+		hits = append(
+			hits,
+			websource.SearchHit{
+				Title:    result.Title,
+				URL:      result.URL,
+				Snippet:  boundedSearchExcerpt(strings.Join(result.Excerpts, "\n")),
+				Provider: p.ProviderName(),
+			},
+		)
 		if len(hits) == count {
 			break
 		}
@@ -87,7 +103,12 @@ func (e *searchHTTPError) Error() string {
 	return fmt.Sprintf("%s search returned HTTP %d", e.provider, e.status)
 }
 
-func searchJSON(ctx context.Context, client *http.Client, endpoint, apiKey, provider string, payload, result any) error {
+func searchJSON(
+	ctx context.Context,
+	client *http.Client,
+	endpoint, apiKey, provider string,
+	payload, result any,
+) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode %s request: %w", provider, err)
@@ -97,7 +118,7 @@ func searchJSON(ctx context.Context, client *http.Client, endpoint, apiKey, prov
 		return fmt.Errorf("create %s request: %w", provider, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("X-Api-Key", apiKey)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("%s search: %w", provider, err)
