@@ -19,7 +19,9 @@ func TestCodexPreservesAnswerPhaseAndExcludesCommentary(t *testing.T) {
 			t.Errorf("assistant history lost phase: %v", input)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, `data: {"type":"response.output_item.added","output_index":0,"item":{"id":"m1","type":"message","role":"assistant","status":"in_progress","phase":"commentary","content":[]}}
+		fmt.Fprint(
+			w,
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"m1","type":"message","role":"assistant","status":"in_progress","phase":"commentary","content":[]}}
 
 data: {"type":"response.output_text.delta","item_id":"m1","output_index":0,"content_index":0,"delta":"Checking things"}
 
@@ -29,20 +31,29 @@ data: {"type":"response.output_text.delta","item_id":"m2","output_index":1,"cont
 
 data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[{"id":"m1","type":"message","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"Checking things"}]},{"id":"m2","type":"message","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"Answer"}]}]}}
 
-`)
+`,
+		)
 	}))
 	defer server.Close()
 	p := NewCodexProvider("test-token", "")
 	p.client = createOpenAITestClient(server.URL, "test-token", "")
 	var updates []StreamContent
-	response, err := p.ChatStreamContent(t.Context(), []Message{{Role: "assistant", Content: "Earlier commentary", ContentPhase: ContentPhaseCommentary}}, nil, "gpt-4o", nil, func(update StreamContent) { updates = append(updates, update) })
+	response, err := p.ChatStreamContent(
+		t.Context(),
+		[]Message{{Role: "assistant", Content: "Earlier commentary", ContentPhase: ContentPhaseCommentary}},
+		nil,
+		"gpt-4o",
+		nil,
+		func(update StreamContent) { updates = append(updates, update) },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if response.Content != "Answer" || response.ContentPhase != ContentPhaseAnswer {
 		t.Fatalf("response=%+v", response)
 	}
-	if len(updates) != 2 || updates[0].Phase != ContentPhaseCommentary || updates[1].Phase != ContentPhaseAnswer || updates[1].Content != "Answer" {
+	if len(updates) != 2 || updates[0].Phase != ContentPhaseCommentary || updates[1].Phase != ContentPhaseAnswer ||
+		updates[1].Content != "Answer" {
 		t.Fatalf("updates=%+v", updates)
 	}
 }

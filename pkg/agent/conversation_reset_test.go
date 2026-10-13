@@ -17,20 +17,33 @@ import (
 func TestConversationResetSurvivesRestartAndRetainsOnlySavedFacts(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
-	agent := al.GetRegistry().GetDefaultAgent()
 	// Enable archive retrieval independently: reset must also hold when it is
 	// enabled, although the deployed symptom does not require retrieval at all.
 	al.Close()
-	cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{Enabled: true, MaxResults: 5, MaxSnippetChars: 500, MinQueryChars: 3}
+	cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{
+		Enabled:         true,
+		MaxResults:      5,
+		MaxSnippetChars: 500,
+		MinQueryChars:   3,
+	}
 	al = NewAgentLoop(cfg, bus.NewMessageBus(), &recordingProvider{})
-	agent = al.GetRegistry().GetDefaultAgent()
-	if err := agent.ContextBuilder.memory.WriteLongTerm("# Saved facts\n\nMy bicycle is blue.\n\n# Temporary notes\n\nOLD_MEMORY_NOTE"); err != nil {
+	agent := al.GetRegistry().GetDefaultAgent()
+	if err := agent.ContextBuilder.memory.WriteLongTerm(
+		"# Saved facts\n\nMy bicycle is blue.\n\n# Temporary notes\n\nOLD_MEMORY_NOTE",
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := agent.ContextBuilder.memory.AppendToday("OLD_DAILY_NOTE"); err != nil {
 		t.Fatal(err)
 	}
-	msg := bus.InboundMessage{Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Sender: bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"}, Peer: bus.Peer{Kind: "direct", ID: "42"}, Content: "OLD_DIALOG bicycle"}
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Sender:   bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"},
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "OLD_DIALOG bicycle",
+	}
 	if _, err := al.processMessage(t.Context(), msg); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +52,19 @@ func TestConversationResetSurvivesRestartAndRetainsOnlySavedFacts(t *testing.T) 
 		t.Fatal(routeErr)
 	}
 	key := route.SessionKey
-	if err := agent.MemoryIndex.AddObservation(t.Context(), memoryindex.Observation{SessionKey: key, Channel: "telegram", ChatID: "42", PeerKind: "direct", Role: "user", SenderID: "telegram:42", Content: "OLD_ARCHIVE bicycle", CreatedAt: time.Now()}); err != nil {
+	if err := agent.MemoryIndex.AddObservation(
+		t.Context(),
+		memoryindex.Observation{
+			SessionKey: key,
+			Channel:    "telegram",
+			ChatID:     "42",
+			PeerKind:   "direct",
+			Role:       "user",
+			SenderID:   "telegram:42",
+			Content:    "OLD_ARCHIVE bicycle",
+			CreatedAt:  time.Now(),
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	agent.Sessions.SetSummary(key, "OLD_SUMMARY")
@@ -56,8 +81,8 @@ func TestConversationResetSurvivesRestartAndRetainsOnlySavedFacts(t *testing.T) 
 	reopened := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	defer reopened.Close()
 	msg.Content = "What do you know about my bicycle?"
-	if _, err := reopened.processMessage(t.Context(), msg); err != nil {
-		t.Fatal(err)
+	if _, operationErr := reopened.processMessage(t.Context(), msg); operationErr != nil {
+		t.Fatal(operationErr)
 	}
 	input := conversationInput(provider.lastMessages)
 	for _, old := range []string{"OLD_DIALOG", "OLD_SUMMARY", "OLD_MEMORY_NOTE", "OLD_DAILY_NOTE", "OLD_ARCHIVE"} {
@@ -102,25 +127,50 @@ type archiveRecallProvider struct {
 
 func (p *archiveRecallProvider) GetDefaultModel() string { return "mock-model" }
 
-func (p *archiveRecallProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+func (p *archiveRecallProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
 	p.calls++
 	p.messages = append([]providers.Message(nil), messages...)
 	if p.calls == 1 {
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "archive-call", Name: "chat_memory", Arguments: map[string]any{"mode": "search", "chat": "current", "query": "bicycle"}}}}, nil
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:        "archive-call",
+					Name:      "chat_memory",
+					Arguments: map[string]any{"mode": "search", "chat": "current", "query": "bicycle"},
+				},
+			},
+		}, nil
 	}
 	return &providers.LLMResponse{Content: "Retrieved archived discussion"}, nil
 }
 
 func TestConversationResetReportsPersistenceFailureAndRetainsConversation(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, messageBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	defer messageBus.Close()
 	defer al.Close()
-	msg := bus.InboundMessage{Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Peer: bus.Peer{Kind: "direct", ID: "42"}, Content: "keep this conversation"}
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "keep this conversation",
+	}
 	if _, err := al.processMessage(t.Context(), msg); err != nil {
 		t.Fatal(err)
 	}
 	agent := al.GetRegistry().GetDefaultAgent()
-	if err := os.WriteFile(filepath.Join(agent.Workspace, "sessions", "boundaries"), []byte("unwritable directory"), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(agent.Workspace, "sessions", "boundaries"),
+		[]byte("unwritable directory"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	msg.Content = "/clear"
@@ -140,13 +190,20 @@ func TestConversationResetReportsPersistenceFailureAndRetainsConversation(t *tes
 }
 
 func TestConversationResetCannotBeRepopulatedByActiveTurn(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, messageBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	defer messageBus.Close()
 	defer al.Close()
 	provider := &resetRaceProvider{started: make(chan struct{}), release: make(chan struct{})}
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.Provider = provider
-	msg := bus.InboundMessage{Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Peer: bus.Peer{Kind: "direct", ID: "42"}, Content: "OLD_IN_FLIGHT"}
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "OLD_IN_FLIGHT",
+	}
 	finished := make(chan error, 1)
 	go func() { _, err := al.processMessage(t.Context(), msg); finished <- err }()
 	select {
@@ -174,7 +231,10 @@ func TestConversationResetCannotBeRepopulatedByActiveTurn(t *testing.T) {
 	if _, err := al.processMessage(t.Context(), msg); err != nil {
 		t.Fatal(err)
 	}
-	if input := conversationInput(nextProvider.lastMessages); strings.Contains(input, "OLD_IN_FLIGHT") || strings.Contains(input, "OLD_LATE_ANSWER") {
+	if input := conversationInput(
+		nextProvider.lastMessages,
+	); strings.Contains(input, "OLD_IN_FLIGHT") ||
+		strings.Contains(input, "OLD_LATE_ANSWER") {
 		t.Fatalf("late turn restored reset history: %s", input)
 	}
 }
@@ -185,7 +245,14 @@ type resetRaceProvider struct {
 }
 
 func (p *resetRaceProvider) GetDefaultModel() string { return "mock-model" }
-func (p *resetRaceProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+
+func (p *resetRaceProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
 	close(p.started)
 	<-p.release // Simulate an API that finishes after cancellation.
 	return &providers.LLMResponse{Content: "OLD_LATE_ANSWER"}, nil

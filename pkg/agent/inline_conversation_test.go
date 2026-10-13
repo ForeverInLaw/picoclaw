@@ -21,10 +21,20 @@ func TestSelectedInlineConversationContinuesAcrossDestinationsAndRestart(t *test
 	if err := agent.ContextBuilder.memory.AppendToday("PRIVATE_DAILY_NOTE"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(agent.Workspace, "USER.md"), []byte("PRIVATE_USER_PROFILE"), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(agent.Workspace, "USER.md"),
+		[]byte("PRIVATE_USER_PROFILE"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
-	direct := bus.InboundMessage{Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Peer: bus.Peer{Kind: "direct", ID: "42"}, Content: "PRIVATE_DIRECT_DIALOG"}
+	direct := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "PRIVATE_DIRECT_DIALOG",
+	}
 	if _, err := al.processMessage(t.Context(), direct); err != nil {
 		t.Fatal(err)
 	}
@@ -68,22 +78,37 @@ func selectedInlineMessage(uid, destination, content string) bus.InboundMessage 
 }
 
 func TestClearInlineResetsOnlyInvokingUsersInlineConversationFromDirectChat(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, messageBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	defer messageBus.Close()
 	defer al.Close()
-	direct := bus.InboundMessage{Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Sender: bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"}, Peer: bus.Peer{Kind: "direct", ID: "42"}, Content: "DIRECT_RETAINED"}
+	direct := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Sender:   bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"},
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "DIRECT_RETAINED",
+	}
 	for _, msg := range []bus.InboundMessage{direct, selectedInlineMessage("42", "first", "INLINE_RESET_ME"), selectedInlineMessage("43", "other", "OTHER_INLINE_RETAINED")} {
 		if _, err := al.processMessage(t.Context(), msg); err != nil {
 			t.Fatal(err)
 		}
 	}
 	direct.Content = "/clear_inline"
-	if response, err := al.processMessage(t.Context(), direct); err != nil || !strings.Contains(response, "Inline conversation reset") {
+	if response, err := al.processMessage(
+		t.Context(),
+		direct,
+	); err != nil ||
+		!strings.Contains(response, "Inline conversation reset") {
 		t.Fatalf("inline reset = %q, %v", response, err)
 	}
 	provider := &recordingProvider{}
 	al.GetRegistry().GetDefaultAgent().Provider = provider
-	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "new-destination", "Start fresh")); err != nil {
+	if _, err := al.processMessage(
+		t.Context(),
+		selectedInlineMessage("42", "new-destination", "Start fresh"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(conversationInput(provider.lastMessages), "INLINE_RESET_ME") {
@@ -106,14 +131,21 @@ func TestClearInlineResetsOnlyInvokingUsersInlineConversationFromDirectChat(t *t
 	group.ChatID = "-1001"
 	group.Peer = bus.Peer{Kind: "group", ID: "-1001"}
 	group.Content = "/clear_inline"
-	if response, err := al.processMessage(t.Context(), group); err != nil || !strings.Contains(response, "unavailable") {
+	if response, err := al.processMessage(
+		t.Context(),
+		group,
+	); err != nil ||
+		!strings.Contains(response, "unavailable") {
 		t.Fatalf("group inline reset = %q, %v", response, err)
 	}
 	direct.Content = "/clear"
 	if response, err := al.processMessage(t.Context(), direct); err != nil || !strings.Contains(response, "cleared") {
 		t.Fatalf("direct reset = %q, %v", response, err)
 	}
-	if _, err := al.processMessage(t.Context(), selectedInlineMessage("43", "after-direct-reset", "Continue again")); err != nil {
+	if _, err := al.processMessage(
+		t.Context(),
+		selectedInlineMessage("43", "after-direct-reset", "Continue again"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(conversationInput(provider.lastMessages), "OTHER_INLINE_RETAINED") {
@@ -122,18 +154,36 @@ func TestClearInlineResetsOnlyInvokingUsersInlineConversationFromDirectChat(t *t
 }
 
 func TestClearInlineReportsPersistenceFailure(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, messageBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	defer messageBus.Close()
 	defer al.Close()
-	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "first", "INLINE_RETAIN_ON_FAILURE")); err != nil {
+	if _, err := al.processMessage(
+		t.Context(),
+		selectedInlineMessage("42", "first", "INLINE_RETAIN_ON_FAILURE"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	agent := al.GetRegistry().GetDefaultAgent()
-	if err := os.WriteFile(filepath.Join(agent.Workspace, "sessions", "boundaries"), []byte("unwritable directory"), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(agent.Workspace, "sessions", "boundaries"),
+		[]byte("unwritable directory"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
-	msg := bus.InboundMessage{Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Peer: bus.Peer{Kind: "direct", ID: "42"}, Content: "/clear_inline"}
-	if response, err := al.processMessage(t.Context(), msg); err != nil || !strings.Contains(response, "Failed to reset inline") {
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "/clear_inline",
+	}
+	if response, err := al.processMessage(
+		t.Context(),
+		msg,
+	); err != nil ||
+		!strings.Contains(response, "Failed to reset inline") {
 		t.Fatalf("failed inline reset = %q, %v", response, err)
 	}
 	provider := &recordingProvider{}
@@ -147,14 +197,18 @@ func TestClearInlineReportsPersistenceFailure(t *testing.T) {
 }
 
 func TestInlineHistoryIsCompressedBeforeItExceedsModelContext(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, messageBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	defer messageBus.Close()
 	defer al.Close()
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.ContextWindow = 100000
 	agent.SummarizeMessageThreshold = 100000
 	for i := 0; i < 12; i++ {
-		if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "destination", strings.Repeat("x", 1000))); err != nil {
+		if _, err := al.processMessage(
+			t.Context(),
+			selectedInlineMessage("42", "destination", strings.Repeat("x", 1000)),
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -162,7 +216,10 @@ func TestInlineHistoryIsCompressedBeforeItExceedsModelContext(t *testing.T) {
 	agent.MaxTokens = 256
 	provider := &recordingProvider{}
 	agent.Provider = provider
-	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "another-destination", "Continue compactly")); err != nil {
+	if _, err := al.processMessage(
+		t.Context(),
+		selectedInlineMessage("42", "another-destination", "Continue compactly"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	// The model has fewer than 4k input tokens available. Even the project's
@@ -180,9 +237,19 @@ func TestInlineConversationIsolatesAgentsAndAllAutomaticPrivateContext(t *testin
 	defer cleanup()
 	al.Close()
 	workspace := cfg.Agents.Defaults.Workspace
-	cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{Enabled: true, MaxResults: 5, MaxSnippetChars: 500, MinQueryChars: 3}
-	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true, Workspace: workspace}, {ID: "other", Workspace: workspace}}
-	cfg.Bindings = []config.AgentBinding{{AgentID: "other", Match: config.BindingMatch{Channel: "telegram", AccountID: "other-bot"}}}
+	cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{
+		Enabled:         true,
+		MaxResults:      5,
+		MaxSnippetChars: 500,
+		MinQueryChars:   3,
+	}
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true, Workspace: workspace},
+		{ID: "other", Workspace: workspace},
+	}
+	cfg.Bindings = []config.AgentBinding{
+		{AgentID: "other", Match: config.BindingMatch{Channel: "telegram", AccountID: "other-bot"}},
+	}
 	provider := &recordingProvider{}
 	al = NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	defer al.Close()
@@ -208,7 +275,10 @@ func TestInlineConversationIsolatesAgentsAndAllAutomaticPrivateContext(t *testin
 	if strings.Contains(conversationInput(provider.lastMessages), "MAIN_INLINE_BICYCLE") {
 		t.Fatal("same user received another agent's inline history")
 	}
-	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "main-again", "Recall inline bicycle")); err != nil {
+	if _, err := al.processMessage(
+		t.Context(),
+		selectedInlineMessage("42", "main-again", "Recall inline bicycle"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	input := conversationInput(provider.lastMessages)

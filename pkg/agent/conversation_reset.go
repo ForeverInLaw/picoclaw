@@ -3,7 +3,7 @@ package agent
 import "fmt"
 
 func (al *AgentLoop) resetConversation(agent *AgentInstance, key string) error {
-	store, ok := agent.Sessions.(interface{ ResetConversation(string) error })
+	store, ok := agent.Sessions.(interface{ ResetConversation(key string) error })
 	if !ok {
 		return fmt.Errorf("session backend does not support conversation reset")
 	}

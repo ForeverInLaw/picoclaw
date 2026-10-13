@@ -48,7 +48,8 @@ func TestBuildTelegramInlineQueryResult_UsesConfiguredPlaceholderAndButton(t *te
 	if content.ParseMode != telego.ModeHTML {
 		t.Fatalf("content.ParseMode = %q", content.ParseMode)
 	}
-	if article.ReplyMarkup == nil || len(article.ReplyMarkup.InlineKeyboard) != 1 || len(article.ReplyMarkup.InlineKeyboard[0]) != 1 {
+	if article.ReplyMarkup == nil || len(article.ReplyMarkup.InlineKeyboard) != 1 ||
+		len(article.ReplyMarkup.InlineKeyboard[0]) != 1 {
 		t.Fatal("expected single technical inline button")
 	}
 	if article.ReplyMarkup.InlineKeyboard[0][0].CallbackData != telegramInlineCallbackData {

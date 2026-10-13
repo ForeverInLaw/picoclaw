@@ -2,8 +2,9 @@ package agent
 
 import (
 	"context"
-	"github.com/sipeed/picoclaw/pkg/bus"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
 func TestTelegramToolProgressAndFinalReplyAreIndependent(t *testing.T) {
@@ -15,7 +16,19 @@ func TestTelegramToolProgressAndFinalReplyAreIndependent(t *testing.T) {
 			a := al.registry.GetDefaultAgent()
 			a.Provider = provider
 			al.RegisterTool(&mockCustomTool{})
-			response, err := al.runAgentLoop(context.Background(), a, processOptions{SessionKey: "progress-" + peer, Channel: "telegram", ChatID: "-100:4", PeerKind: peer, ReplyToMessageID: "19", UserMessage: "run tool", SendResponse: true})
+			response, err := al.runAgentLoop(
+				context.Background(),
+				a,
+				processOptions{
+					SessionKey:       "progress-" + peer,
+					Channel:          "telegram",
+					ChatID:           "-100:4",
+					PeerKind:         peer,
+					ReplyToMessageID: "19",
+					UserMessage:      "run tool",
+					SendResponse:     true,
+				},
+			)
 			if err != nil || response != "done" {
 				t.Fatalf("response=%q err=%v", response, err)
 			}
@@ -36,13 +49,17 @@ func TestTelegramToolProgressAndFinalReplyAreIndependent(t *testing.T) {
 			if start.Progress == nil || end.Progress == nil || answer.Progress != nil {
 				t.Fatalf("progress must be separate from answer: %+v", delivered)
 			}
-			if start.Progress.State != bus.ProgressStarted || end.Progress.State != bus.ProgressCompleted || end.Progress.Result == "" {
+			if start.Progress.State != bus.ProgressStarted || end.Progress.State != bus.ProgressCompleted ||
+				end.Progress.Result == "" {
 				t.Fatalf("missing start/outcome: %+v %+v", start.Progress, end.Progress)
 			}
-			if start.Progress.RequestID == "" || start.Progress.ActionID == "" || start.Progress.RequestID != end.Progress.RequestID || start.Progress.ActionID != end.Progress.ActionID {
+			if start.Progress.RequestID == "" || start.Progress.ActionID == "" ||
+				start.Progress.RequestID != end.Progress.RequestID ||
+				start.Progress.ActionID != end.Progress.ActionID {
 				t.Fatal("tool invocation identity was not preserved")
 			}
-			if start.ChatID != "-100:4" || start.ReplyToMessageID != "19" || end.ReplyToMessageID != "19" || answer.Content != "done" {
+			if start.ChatID != "-100:4" || start.ReplyToMessageID != "19" || end.ReplyToMessageID != "19" ||
+				answer.Content != "done" {
 				t.Fatalf("lost routing or answer: %+v", delivered)
 			}
 		})

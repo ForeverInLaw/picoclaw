@@ -469,11 +469,14 @@ func (c *TelegramChannel) publishAggregatedBatch(ctx context.Context, batch *tel
 	metadata["batch_ended_at"] = batch.endedAt.UTC().Format(time.RFC3339Nano)
 
 	c.publishInboundCandidate(ctx, telegramInboundCandidate{
-		peer:             batch.peer,
-		messageID:        batch.messageID,
-		senderID:         batch.senderID,
-		chatID:           batch.chatID,
-		content:          strings.Join(normalizeTelegramBatchContents(batch.contents, batch.mediaGroupID != ""), "\n\n"),
+		peer:      batch.peer,
+		messageID: batch.messageID,
+		senderID:  batch.senderID,
+		chatID:    batch.chatID,
+		content: strings.Join(
+			normalizeTelegramBatchContents(batch.contents, batch.mediaGroupID != ""),
+			"\n\n",
+		),
 		media:            append([]string(nil), batch.media...),
 		metadata:         metadata,
 		sender:           batch.sender,

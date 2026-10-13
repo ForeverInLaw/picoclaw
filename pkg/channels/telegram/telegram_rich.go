@@ -102,7 +102,12 @@ func replyParameters(replyTo string) *telego.ReplyParameters {
 // sendRichReply keeps rich content intact up to Telegram's native rich limit,
 // and delivers every remaining chunk. Formatting rejection falls back to plain
 // Markdown, without changing the reply or topic destination.
-func (c *TelegramChannel) sendRichReply(ctx context.Context, chatID int64, threadID int, replyTo, content string) (int, error) {
+func (c *TelegramChannel) sendRichReply(
+	ctx context.Context,
+	chatID int64,
+	threadID int,
+	replyTo, content string,
+) (int, error) {
 	if strings.TrimSpace(content) == "" {
 		return 0, nil
 	}
@@ -126,7 +131,12 @@ func (c *TelegramChannel) sendRichReply(ctx context.Context, chatID int64, threa
 	return firstID, nil
 }
 
-func (c *TelegramChannel) sendPlainReply(ctx context.Context, chatID int64, threadID int, replyTo, content string) (*telego.Message, error) {
+func (c *TelegramChannel) sendPlainReply(
+	ctx context.Context,
+	chatID int64,
+	threadID int,
+	replyTo, content string,
+) (*telego.Message, error) {
 	var first *telego.Message
 	for _, chunk := range channels.SplitMessage(content, telegramInlineMessageLimit) {
 		params := tu.Message(tu.ID(chatID), chunk)
@@ -144,7 +154,12 @@ func (c *TelegramChannel) sendPlainReply(ctx context.Context, chatID int64, thre
 	return first, nil
 }
 
-func (c *TelegramChannel) editRichReply(ctx context.Context, chatID int64, threadID, messageID int, content string) error {
+func (c *TelegramChannel) editRichReply(
+	ctx context.Context,
+	chatID int64,
+	threadID, messageID int,
+	content string,
+) error {
 	chunks := channels.SplitMessage(normalizeRichMarkdown(content), telegramRichMessageLimit)
 	if len(chunks) == 0 {
 		return nil

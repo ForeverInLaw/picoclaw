@@ -43,7 +43,8 @@ type streamDelegateGetter interface {
 }
 
 func newPartialReplyUpdater(manager placeholderUpdater, channel, chatID string) *partialReplyUpdater {
-	if isNilPlaceholderUpdater(manager) || channel != "telegram" || chatID == "" || constants.IsInternalChannel(channel) {
+	if isNilPlaceholderUpdater(manager) || channel != "telegram" || chatID == "" ||
+		constants.IsInternalChannel(channel) {
 		return nil
 	}
 	return &partialReplyUpdater{
@@ -162,7 +163,12 @@ func offerStreamingContent(ctx context.Context, streamer streamingSink, updater 
 	}
 }
 
-func finalizeStreamingContent(ctx context.Context, streamer streamingSink, updater *partialReplyUpdater, content string) error {
+func finalizeStreamingContent(
+	ctx context.Context,
+	streamer streamingSink,
+	updater *partialReplyUpdater,
+	content string,
+) error {
 	if streamer != nil {
 		return streamer.Finalize(ctx, content)
 	}

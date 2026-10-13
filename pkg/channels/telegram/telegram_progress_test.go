@@ -45,7 +45,10 @@ func TestToolActivityUpdatesEachInvocationIndependentlyOfTheAnswer(t *testing.T)
 				require.NoError(t, channel.SendProgress(context.Background(), message))
 				require.NoError(t, channel.SendProgress(context.Background(), message))
 			}
-			require.NoError(t, channel.Send(context.Background(), bus.OutboundMessage{ChatID: chat, Content: "Final answer $x^2$"}))
+			require.NoError(
+				t,
+				channel.Send(context.Background(), bus.OutboundMessage{ChatID: chat, Content: "Final answer $x^2$"}),
+			)
 			require.Equal(t, 5, created, "each tool and the final answer must have their own message")
 			require.Len(t, caller.calls, 9, "repeated completion delivery must not duplicate results")
 			for i := 0; i < 4; i++ {
@@ -73,13 +76,26 @@ func TestToolActivityEditRetryKeepsOneMessageAndFinalAnswer(t *testing.T) {
 		if strings.HasSuffix(url, "/editMessageText") {
 			edits++
 			if edits == 1 {
-				return &ta.Response{Ok: false, Error: &ta.Error{ErrorCode: 500, Description: "temporary Telegram failure"}}, nil
+				return &ta.Response{
+					Ok:    false,
+					Error: &ta.Error{ErrorCode: 500, Description: "temporary Telegram failure"},
+				}, nil
 			}
 		}
 		return successResponse(t), nil
 	}}
 	channel := newTestChannel(t, caller)
-	message := bus.OutboundMessage{ChatID: "123", Progress: &bus.ProgressMessage{RequestID: "request", ActionID: "call", Kind: bus.ProgressTool, State: bus.ProgressStarted, Tool: "exec", Arguments: map[string]any{"command": "echo done"}}}
+	message := bus.OutboundMessage{
+		ChatID: "123",
+		Progress: &bus.ProgressMessage{
+			RequestID: "request",
+			ActionID:  "call",
+			Kind:      bus.ProgressTool,
+			State:     bus.ProgressStarted,
+			Tool:      "exec",
+			Arguments: map[string]any{"command": "echo done"},
+		},
+	}
 	require.NoError(t, channel.SendProgress(context.Background(), message))
 	message.Progress.State = bus.ProgressCompleted
 	message.Progress.Result = "done"

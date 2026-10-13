@@ -40,7 +40,11 @@ func TestRichRepliesPreserveFormattingFormulasAndTopicReply(t *testing.T) {
 	require.Equal(t, int64(-123), payload.ChatID)
 	require.Equal(t, 9, payload.ThreadID)
 	require.Equal(t, 42, payload.Reply.MessageID)
-	require.Equal(t, "# Results\n\n| Value | Formula |\n| --- | --- |\n| one | $x^2$ |\n\n- item\n\n```go\nfmt.Println(\"ok\")\n```\n\n$$E = mc^2$$", payload.Rich.Markdown)
+	require.Equal(
+		t,
+		"# Results\n\n| Value | Formula |\n| --- | --- |\n| one | $x^2$ |\n\n- item\n\n```go\nfmt.Println(\"ok\")\n```\n\n$$E = mc^2$$",
+		payload.Rich.Markdown,
+	)
 }
 
 func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
@@ -52,9 +56,12 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 	channel.config.Channels.Telegram.Inline.Enabled = true
 	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, bus.NewMessageBus(), nil)
 	channel.SetRunning(true)
-	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(context.Background()), telego.ChosenInlineResult{
-		ResultID: "generate", InlineMessageID: "published-result", Query: "long answer", From: telego.User{ID: 42},
-	}))
+	require.NoError(
+		t,
+		channel.handleChosenInlineResult((&th.Context{}).WithContext(context.Background()), telego.ChosenInlineResult{
+			ResultID: "generate", InlineMessageID: "published-result", Query: "long answer", From: telego.User{ID: 42},
+		}),
+	)
 	caller.calls = nil
 	content := strings.Repeat("first paragraph\n\n", 2300) + "LAST ANSWER LINE"
 	require.NoError(t, channel.Send(context.Background(), bus.OutboundMessage{
@@ -77,10 +84,32 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 
 	reopened := newTestChannel(t, caller)
 	reopened.config = channel.config
-	require.NoError(t, reopened.handleInlineCallbackQuery((&th.Context{}).WithContext(context.Background()), telego.CallbackQuery{ID: "callback", InlineMessageID: "published-result", Data: first.Markup.Buttons[0][0].Data, From: telego.User{ID: 7}}))
+	require.NoError(
+		t,
+		reopened.handleInlineCallbackQuery(
+			(&th.Context{}).WithContext(context.Background()),
+			telego.CallbackQuery{
+				ID:              "callback",
+				InlineMessageID: "published-result",
+				Data:            first.Markup.Buttons[0][0].Data,
+				From:            telego.User{ID: 7},
+			},
+		),
+	)
 	require.Contains(t, caller.calls[len(caller.calls)-1].URL, "/answerCallbackQuery")
 	require.Len(t, caller.calls, 2, "another user's callback must not edit the published result")
-	require.NoError(t, reopened.handleInlineCallbackQuery((&th.Context{}).WithContext(context.Background()), telego.CallbackQuery{ID: "callback", InlineMessageID: "published-result", Data: first.Markup.Buttons[0][0].Data, From: telego.User{ID: 42}}))
+	require.NoError(
+		t,
+		reopened.handleInlineCallbackQuery(
+			(&th.Context{}).WithContext(context.Background()),
+			telego.CallbackQuery{
+				ID:              "callback",
+				InlineMessageID: "published-result",
+				Data:            first.Markup.Buttons[0][0].Data,
+				From:            telego.User{ID: 42},
+			},
+		),
+	)
 	var last struct {
 		Rich struct {
 			Markdown string `json:"markdown"`
@@ -93,7 +122,10 @@ func TestInlineRichReplyKeepsLongAnswersAvailableAfterRestart(t *testing.T) {
 func TestRichReplyFormattingFailureDeliversAllPlainContent(t *testing.T) {
 	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
 		if strings.HasSuffix(url, "/sendRichMessage") {
-			return &ta.Response{Ok: false, Error: &ta.Error{ErrorCode: 400, Description: "Bad Request: can't parse rich message"}}, nil
+			return &ta.Response{
+				Ok:    false,
+				Error: &ta.Error{ErrorCode: 400, Description: "Bad Request: can't parse rich message"},
+			}, nil
 		}
 		return successResponse(t), nil
 	}}
@@ -118,7 +150,9 @@ func TestRichReplyFormattingFailureDeliversAllPlainContent(t *testing.T) {
 }
 
 func TestRichReplyLongContentAndCodeExamplesRemainComplete(t *testing.T) {
-	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil }}
+	caller := &stubCaller{
+		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil },
+	}
 	channel := newTestChannel(t, caller)
 	content := "```latex\n\\(do not change\\)\n```\n\n" + strings.Repeat("a", 33000) + "END"
 	require.NoError(t, channel.Send(context.Background(), bus.OutboundMessage{ChatID: "123", Content: content}))

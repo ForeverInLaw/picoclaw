@@ -22,17 +22,44 @@ func (al *AgentLoop) toolProgressEnabled(ts *turnState) bool {
 	return al.cfg.Agents.Defaults.ShouldSendToolFeedback(ts.opts.PeerKind, ts.opts.SenderID)
 }
 
-func (al *AgentLoop) publishProgress(ctx context.Context, ts *turnState, progress *bus.ProgressMessage, content string) {
+func (al *AgentLoop) publishProgress(
+	ctx context.Context,
+	ts *turnState,
+	progress *bus.ProgressMessage,
+	content string,
+) {
 	if al.bus == nil || constants.IsInternalChannel(ts.channel) {
 		return
 	}
 	pubCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_ = al.bus.PublishOutbound(pubCtx, bus.OutboundMessage{Channel: ts.channel, ChatID: ts.chatID, ReplyToMessageID: ts.opts.ReplyToMessageID, Content: content, Progress: progress})
+	_ = al.bus.PublishOutbound(
+		pubCtx,
+		bus.OutboundMessage{
+			Channel:          ts.channel,
+			ChatID:           ts.chatID,
+			ReplyToMessageID: ts.opts.ReplyToMessageID,
+			Content:          content,
+			Progress:         progress,
+		},
+	)
 }
 
-func (al *AgentLoop) publishToolProgress(ctx context.Context, ts *turnState, actionID, tool string, args map[string]any, result *tools.ToolResult) {
-	progress := &bus.ProgressMessage{RequestID: ts.turnID, ActionID: actionID, Kind: bus.ProgressTool, State: bus.ProgressStarted, Tool: tool, Arguments: cloneEventArguments(args)}
+func (al *AgentLoop) publishToolProgress(
+	ctx context.Context,
+	ts *turnState,
+	actionID, tool string,
+	args map[string]any,
+	result *tools.ToolResult,
+) {
+	progress := &bus.ProgressMessage{
+		RequestID: ts.turnID,
+		ActionID:  actionID,
+		Kind:      bus.ProgressTool,
+		State:     bus.ProgressStarted,
+		Tool:      tool,
+		Arguments: cloneEventArguments(args),
+	}
 	// Filter payloads before transport, including arguments and silent tool output.
 	encoded, _ := json.Marshal(progress.Arguments)
 	_ = json.Unmarshal([]byte(al.cfg.FilterSensitiveData(string(encoded))), &progress.Arguments)

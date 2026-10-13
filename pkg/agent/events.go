@@ -2,8 +2,9 @@ package agent
 
 import (
 	"fmt"
-	"github.com/sipeed/picoclaw/pkg/providers"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 // EventKind identifies a structured agent-loop event.

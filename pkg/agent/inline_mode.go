@@ -9,11 +9,17 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
-const telegramInlineMetadataKey = "telegram_inline"
-const telegramInlineQueryKey = "inline_query"
+const (
+	telegramInlineMetadataKey = "telegram_inline"
+	telegramInlineQueryKey    = "inline_query"
+)
 
 func telegramUserID(msg bus.InboundMessage) string {
-	raw := firstNonEmpty(msg.Metadata["telegram_user_id"], msg.Sender.PlatformID, strings.TrimPrefix(msg.SenderID, "telegram:"))
+	raw := firstNonEmpty(
+		msg.Metadata["telegram_user_id"],
+		msg.Sender.PlatformID,
+		strings.TrimPrefix(msg.SenderID, "telegram:"),
+	)
 	uid, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || uid <= 0 {
 		return ""

@@ -77,7 +77,14 @@ func (p *CodexProvider) ChatStream(
 	})
 }
 
-func (p *CodexProvider) ChatStreamContent(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any, onUpdate func(StreamContent)) (*LLMResponse, error) {
+func (p *CodexProvider) ChatStreamContent(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onUpdate func(StreamContent),
+) (*LLMResponse, error) {
 	return p.chat(ctx, messages, tools, model, options, onUpdate)
 }
 

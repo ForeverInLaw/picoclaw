@@ -230,7 +230,11 @@ func TestProcessMessage_PersistsDeliveredReply_ForExplicitAgentScopedSessionKey(
 		t.Fatalf("last history message = %+v, want assistant VISIBLE_REPLY", last)
 	}
 
-	sessionPath := filepath.Join(cfg.Agents.Defaults.Workspace, "sessions", "agent_main_telegram_direct_42_memfix-check.jsonl")
+	sessionPath := filepath.Join(
+		cfg.Agents.Defaults.Workspace,
+		"sessions",
+		"agent_main_telegram_direct_42_memfix-check.jsonl",
+	)
 	data, err := os.ReadFile(sessionPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", sessionPath, err)

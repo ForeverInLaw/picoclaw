@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
+	th "github.com/mymmrac/telego/telegohandler"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mymmrac/telego"
-	th "github.com/mymmrac/telego/telegohandler"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 )
@@ -29,7 +29,22 @@ func TestRichDraftPersistsOneFinalReplyAfterPreviewFailureAndProgress(t *testing
 	stream, err := channel.BeginStream(ctx, "123/7")
 	require.NoError(t, err)
 	require.NoError(t, stream.Update(ctx, "Answer \\(x^2\\)"))
-	require.NoError(t, channel.SendProgress(ctx, bus.OutboundMessage{ChatID: "123/7", Content: "Retrying…", Progress: &bus.ProgressMessage{RequestID: "request", ActionID: "retry", Kind: bus.ProgressRetry, State: bus.ProgressStarted}}))
+	require.NoError(
+		t,
+		channel.SendProgress(
+			ctx,
+			bus.OutboundMessage{
+				ChatID:  "123/7",
+				Content: "Retrying…",
+				Progress: &bus.ProgressMessage{
+					RequestID: "request",
+					ActionID:  "retry",
+					Kind:      bus.ProgressRetry,
+					State:     bus.ProgressStarted,
+				},
+			},
+		),
+	)
 	require.NoError(t, stream.Finalize(ctx, "# Answer\n\n\\[E = mc^2\\]"))
 	require.NoError(t, stream.Finalize(ctx, "# Answer\n\n\\[E = mc^2\\]"))
 	require.Len(t, caller.calls, 3, "one failed draft, separate progress, one persisted final")
@@ -55,7 +70,10 @@ func TestInlinePreviewFailureStillDeliversCompleteRichFinalOnce(t *testing.T) {
 		if strings.HasSuffix(url, "/editMessageText") {
 			edits++
 			if edits == 1 {
-				return &ta.Response{Ok: false, Error: &ta.Error{ErrorCode: 500, Description: "preview unavailable"}}, nil
+				return &ta.Response{
+					Ok:    false,
+					Error: &ta.Error{ErrorCode: 500, Description: "preview unavailable"},
+				}, nil
 			}
 		}
 		return &ta.Response{Ok: true, Result: json.RawMessage(`true`)}, nil
@@ -66,7 +84,18 @@ func TestInlinePreviewFailureStillDeliversCompleteRichFinalOnce(t *testing.T) {
 	channel.config.Channels.Telegram.Streaming.Enabled = true
 	channel.BaseChannel = channels.NewBaseChannel("telegram", nil, bus.NewMessageBus(), nil)
 	channel.SetRunning(true)
-	require.NoError(t, channel.handleChosenInlineResult((&th.Context{}).WithContext(context.Background()), telego.ChosenInlineResult{InlineMessageID: "result", ResultID: "generate", Query: "answer", From: telego.User{ID: 42}}))
+	require.NoError(
+		t,
+		channel.handleChosenInlineResult(
+			(&th.Context{}).WithContext(context.Background()),
+			telego.ChosenInlineResult{
+				InlineMessageID: "result",
+				ResultID:        "generate",
+				Query:           "answer",
+				From:            telego.User{ID: 42},
+			},
+		),
+	)
 	caller.calls = nil
 	stream, err := channel.BeginStream(context.Background(), "inline:result")
 	require.NoError(t, err)
@@ -87,7 +116,9 @@ func TestInlinePreviewFailureStillDeliversCompleteRichFinalOnce(t *testing.T) {
 }
 
 func TestCancelledStreamDoesNotPublishAnAnswer(t *testing.T) {
-	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil }}
+	caller := &stubCaller{
+		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil },
+	}
 	channel := newTestChannel(t, caller)
 	channel.config.Channels.Telegram.Streaming.Enabled = true
 	stream, err := channel.BeginStream(context.Background(), "123")
@@ -104,7 +135,10 @@ func TestGroupRichStreamUsesMessageEditsAndKeepsFinalAfterEditFailure(t *testing
 		if strings.HasSuffix(url, "/editMessageText") {
 			edits++
 			if edits == 1 {
-				return &ta.Response{Ok: false, Error: &ta.Error{ErrorCode: 500, Description: "preview update failed"}}, nil
+				return &ta.Response{
+					Ok:    false,
+					Error: &ta.Error{ErrorCode: 500, Description: "preview update failed"},
+				}, nil
 			}
 		}
 		return successResponse(t), nil

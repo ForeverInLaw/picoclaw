@@ -36,13 +36,15 @@ func TestHTTPModelErrorsPreserveRateLimitAdviceAndQuotaMeaning(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", time.Now().Add(8*time.Second).UTC().Format(http.TimeFormat))
 				w.WriteHeader(429)
-				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "message": "retry meaning comes from API code"}})
+				_ = json.NewEncoder(w).
+					Encode(map[string]any{"error": map[string]any{"code": code, "message": "retry meaning comes from API code"}})
 			}))
 			defer server.Close()
 			p := NewHTTPProvider("test-token", server.URL, "")
 			_, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "hello"}}, nil, "model", nil)
 			failure := ClassifyError(err, "openai", "model")
-			if failure == nil || failure.Status != 429 || failure.RetryAfter < 6*time.Second || failure.RetryAfter > 8*time.Second {
+			if failure == nil || failure.Status != 429 || failure.RetryAfter < 6*time.Second ||
+				failure.RetryAfter > 8*time.Second {
 				t.Fatalf("lost HTTP retry metadata: %+v", failure)
 			}
 			if failure.IsTransient() != (code == "rate_limit_exceeded") {

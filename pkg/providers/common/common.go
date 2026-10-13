@@ -371,7 +371,11 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	if LooksLikeHTML(body, contentType) {
 		responseErr = WrapHTMLResponseError(resp.StatusCode, body, contentType, apiBase)
 	} else {
-		responseErr = fmt.Errorf("API request failed:\n  Status: %d\n  Body: %s", resp.StatusCode, ResponsePreview(body, 128))
+		responseErr = fmt.Errorf(
+			"API request failed:\n  Status: %d\n  Body: %s",
+			resp.StatusCode,
+			ResponsePreview(body, 128),
+		)
 	}
 	var details struct {
 		Error struct {
@@ -384,7 +388,12 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	if code == "" {
 		code = details.Error.Type
 	}
-	return &protocoltypes.HTTPError{StatusCode: resp.StatusCode, Code: code, RetryAfter: RetryAfter(resp.Header, time.Now()), Wrapped: responseErr}
+	return &protocoltypes.HTTPError{
+		StatusCode: resp.StatusCode,
+		Code:       code,
+		RetryAfter: RetryAfter(resp.Header, time.Now()),
+		Wrapped:    responseErr,
+	}
 }
 
 // ReadAndParseResponse peeks at the response body to detect HTML errors,

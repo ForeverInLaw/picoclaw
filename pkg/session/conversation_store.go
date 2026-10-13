@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -127,16 +128,25 @@ func (v *conversationView) write(key string, operation func(SessionStore, string
 }
 
 func (v *conversationView) AddMessage(key, role, content string) {
-	v.write(key, func(store SessionStore, resolved string) error { store.AddMessage(resolved, role, content); return nil })
+	v.write(
+		key,
+		func(store SessionStore, resolved string) error { store.AddMessage(resolved, role, content); return nil },
+	)
 }
 
 func (v *conversationView) AddFullMessage(key string, message providers.Message) {
-	v.write(key, func(store SessionStore, resolved string) error { store.AddFullMessage(resolved, message); return nil })
+	v.write(
+		key,
+		func(store SessionStore, resolved string) error { store.AddFullMessage(resolved, message); return nil },
+	)
 }
 
 func (v *conversationView) GetHistory(key string) []providers.Message {
 	history := []providers.Message{}
-	if err := v.apply(key, func(store SessionStore, resolved string) error { history = store.GetHistory(resolved); return nil }); err != nil {
+	if err := v.apply(
+		key,
+		func(store SessionStore, resolved string) error { history = store.GetHistory(resolved); return nil },
+	); err != nil {
 		log.Printf("session: conversation history: %v", err)
 	}
 	return history
@@ -144,7 +154,10 @@ func (v *conversationView) GetHistory(key string) []providers.Message {
 
 func (v *conversationView) GetSummary(key string) string {
 	var summary string
-	if err := v.apply(key, func(store SessionStore, resolved string) error { summary = store.GetSummary(resolved); return nil }); err != nil {
+	if err := v.apply(
+		key,
+		func(store SessionStore, resolved string) error { summary = store.GetSummary(resolved); return nil },
+	); err != nil {
 		log.Printf("session: conversation summary: %v", err)
 	}
 	return summary
@@ -159,7 +172,10 @@ func (v *conversationView) SetHistory(key string, history []providers.Message) {
 }
 
 func (v *conversationView) TruncateHistory(key string, keepLast int) {
-	v.write(key, func(store SessionStore, resolved string) error { store.TruncateHistory(resolved, keepLast); return nil })
+	v.write(
+		key,
+		func(store SessionStore, resolved string) error { store.TruncateHistory(resolved, keepLast); return nil },
+	)
 }
 
 func (v *conversationView) Save(key string) error {

@@ -2,9 +2,10 @@ package agent
 
 import (
 	"context"
-	"github.com/sipeed/picoclaw/pkg/providers"
 	"strings"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 type answerScriptProvider struct {
@@ -14,12 +15,27 @@ type answerScriptProvider struct {
 }
 
 func (p *answerScriptProvider) GetDefaultModel() string { return "answer-script" }
-func (p *answerScriptProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+
+func (p *answerScriptProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
 	r := p.responses[min(p.calls, len(p.responses)-1)]
 	p.calls++
 	return r, nil
 }
-func (p *answerScriptProvider) ChatStream(ctx context.Context, m []providers.Message, t []providers.ToolDefinition, model string, opts map[string]any, update func(string)) (*providers.LLMResponse, error) {
+
+func (p *answerScriptProvider) ChatStream(
+	ctx context.Context,
+	m []providers.Message,
+	t []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+	update func(string),
+) (*providers.LLMResponse, error) {
 	if p.calls < len(p.snapshots) {
 		for _, s := range p.snapshots[p.calls] {
 			update(s)
@@ -29,9 +45,12 @@ func (p *answerScriptProvider) ChatStream(ctx context.Context, m []providers.Mes
 }
 
 func TestEmptyAnswerRecoversWithoutExposingReasoning(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, messageBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
-	p := &answerScriptProvider{responses: []*providers.LLMResponse{{ReasoningContent: "SECRET REASONING"}, {Content: "recovered answer"}}}
+	defer messageBus.Close()
+	p := &answerScriptProvider{
+		responses: []*providers.LLMResponse{{ReasoningContent: "SECRET REASONING"}, {Content: "recovered answer"}},
+	}
 	a := al.registry.GetDefaultAgent()
 	a.Provider = p
 	got, err := al.ProcessDirect(context.Background(), "hello", "empty-recovery")
@@ -50,11 +69,26 @@ func TestAmbiguousToolCommentaryNeverEntersAnswerPreview(t *testing.T) {
 	defer cleanup()
 	sink := &fakeStreamingSink{}
 	mb.SetStreamDelegate(&fakeStreamDelegate{streamer: sink})
-	p := &answerScriptProvider{responses: []*providers.LLMResponse{{Content: "I will inspect a file", ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "mock_custom", Arguments: map[string]any{"task": "ping"}}}}, {Content: "The answer"}}, snapshots: [][]string{{"I will", "I will inspect a file"}, {"The", "The answer"}}}
+	p := &answerScriptProvider{
+		responses: []*providers.LLMResponse{
+			{
+				Content: "I will inspect a file",
+				ToolCalls: []providers.ToolCall{
+					{ID: "call-1", Name: "mock_custom", Arguments: map[string]any{"task": "ping"}},
+				},
+			},
+			{Content: "The answer"},
+		},
+		snapshots: [][]string{{"I will", "I will inspect a file"}, {"The", "The answer"}},
+	}
 	a := al.registry.GetDefaultAgent()
 	a.Provider = p
 	al.RegisterTool(&mockCustomTool{})
-	got, err := al.runAgentLoop(context.Background(), a, processOptions{SessionKey: "stream-answer", Channel: "telegram", ChatID: "42", UserMessage: "inspect"})
+	got, err := al.runAgentLoop(
+		context.Background(),
+		a,
+		processOptions{SessionKey: "stream-answer", Channel: "telegram", ChatID: "42", UserMessage: "inspect"},
+	)
 	if err != nil || got != "The answer" {
 		t.Fatalf("answer=%q err=%v", got, err)
 	}
@@ -69,8 +103,9 @@ func TestAmbiguousToolCommentaryNeverEntersAnswerPreview(t *testing.T) {
 }
 
 func TestEmptyAnswerRecoveryIsBounded(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, messageBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	defer messageBus.Close()
 	p := &answerScriptProvider{responses: []*providers.LLMResponse{{ReasoningContent: "private"}}}
 	al.registry.GetDefaultAgent().Provider = p
 	got, err := al.ProcessDirect(context.Background(), "hello", "empty-exhaustion")
@@ -81,7 +116,14 @@ func TestEmptyAnswerRecoveryIsBounded(t *testing.T) {
 
 type phasedAnswerScriptProvider struct{ answerScriptProvider }
 
-func (p *phasedAnswerScriptProvider) ChatStreamContent(ctx context.Context, m []providers.Message, t []providers.ToolDefinition, model string, opts map[string]any, update func(providers.StreamContent)) (*providers.LLMResponse, error) {
+func (p *phasedAnswerScriptProvider) ChatStreamContent(
+	ctx context.Context,
+	m []providers.Message,
+	t []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+	update func(providers.StreamContent),
+) (*providers.LLMResponse, error) {
 	update(providers.StreamContent{Content: "PRIVATE", Phase: providers.ContentPhaseReasoning})
 	update(providers.StreamContent{Content: "Looking things up", Phase: providers.ContentPhaseCommentary})
 	update(providers.StreamContent{Content: "The", Phase: providers.ContentPhaseAnswer})
@@ -93,10 +135,18 @@ func TestPhasedStreamingShowsOnlyAnswerText(t *testing.T) {
 	defer cleanup()
 	sink := &fakeStreamingSink{}
 	mb.SetStreamDelegate(&fakeStreamDelegate{streamer: sink})
-	p := &phasedAnswerScriptProvider{answerScriptProvider: answerScriptProvider{responses: []*providers.LLMResponse{{Content: "The answer", ContentPhase: providers.ContentPhaseAnswer}}}}
+	p := &phasedAnswerScriptProvider{
+		answerScriptProvider: answerScriptProvider{
+			responses: []*providers.LLMResponse{{Content: "The answer", ContentPhase: providers.ContentPhaseAnswer}},
+		},
+	}
 	a := al.registry.GetDefaultAgent()
 	a.Provider = p
-	got, err := al.runAgentLoop(context.Background(), a, processOptions{SessionKey: "phased-answer", Channel: "telegram", ChatID: "42", UserMessage: "hello"})
+	got, err := al.runAgentLoop(
+		context.Background(),
+		a,
+		processOptions{SessionKey: "phased-answer", Channel: "telegram", ChatID: "42", UserMessage: "hello"},
+	)
 	if err != nil || got != "The answer" {
 		t.Fatalf("answer=%q err=%v", got, err)
 	}

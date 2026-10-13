@@ -625,7 +625,11 @@ func (al *AgentLoop) Stop() {
 	al.running.Store(false)
 }
 
-func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, channel, chatID, response string, replyIDs ...string) {
+func (al *AgentLoop) publishResponseIfNeeded(
+	ctx context.Context,
+	channel, chatID, response string,
+	replyIDs ...string,
+) {
 	if response == "" {
 		return
 	}
@@ -1422,7 +1426,18 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	}
 	if observeOnly {
 		agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
-		recordMemoryObservation(ctx, agent, opts.SessionKey, opts.Channel, opts.ChatID, opts.PeerKind, opts.ChatLabel, "user", opts.SenderID, opts.UserMessage)
+		recordMemoryObservation(
+			ctx,
+			agent,
+			opts.SessionKey,
+			opts.Channel,
+			opts.ChatID,
+			opts.PeerKind,
+			opts.ChatLabel,
+			"user",
+			opts.SenderID,
+			opts.UserMessage,
+		)
 		al.maybeSummarize(agent, opts.SessionKey, al.newTurnEventScope(agent.ID, opts.SessionKey))
 		logger.DebugCF("agent", "Observed message without response",
 			map[string]any{
@@ -1814,7 +1829,18 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			ts.agent.Sessions.AddMessage(ts.sessionKey, rootMsg.Role, rootMsg.Content)
 		}
 		ts.recordPersistedMessage(rootMsg)
-		recordMemoryObservation(ctx, ts.agent, ts.sessionKey, ts.channel, ts.chatID, ts.opts.PeerKind, ts.opts.ChatLabel, "user", ts.opts.SenderID, ts.userMessage)
+		recordMemoryObservation(
+			ctx,
+			ts.agent,
+			ts.sessionKey,
+			ts.channel,
+			ts.chatID,
+			ts.opts.PeerKind,
+			ts.opts.ChatLabel,
+			"user",
+			ts.opts.SenderID,
+			ts.userMessage,
+		)
 	}
 
 	activeProvider, activeCandidates, activeModel := al.selectCandidates(ts.agent, ts.userMessage, messages)
@@ -2887,7 +2913,18 @@ turnLoop:
 			finalMsg := providers.Message{Role: "assistant", Content: finalContent, ContentPhase: finalContentPhase}
 			ts.agent.Sessions.AddFullMessage(ts.sessionKey, finalMsg)
 			ts.recordPersistedMessage(finalMsg)
-			recordMemoryObservation(ctx, ts.agent, ts.sessionKey, ts.channel, ts.chatID, ts.opts.PeerKind, ts.opts.ChatLabel, "assistant", "", finalContent)
+			recordMemoryObservation(
+				ctx,
+				ts.agent,
+				ts.sessionKey,
+				ts.channel,
+				ts.chatID,
+				ts.opts.PeerKind,
+				ts.opts.ChatLabel,
+				"assistant",
+				"",
+				finalContent,
+			)
 		}
 		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
 			turnStatus = TurnEndStatusError
@@ -2964,7 +3001,10 @@ func (al *AgentLoop) selectCandidates(
 				"agent_id":    agent.ID,
 				"image_model": agent.ImageModel,
 			})
-		return agent.ImageProvider, agent.ImageCandidates, resolvedCandidateModel(agent.ImageCandidates, agent.ImageModel)
+		return agent.ImageProvider, agent.ImageCandidates, resolvedCandidateModel(
+			agent.ImageCandidates,
+			agent.ImageModel,
+		)
 	}
 
 	if agent.Router == nil || len(agent.LightCandidates) == 0 {
@@ -2989,7 +3029,10 @@ func (al *AgentLoop) selectCandidates(
 			"score":       score,
 			"threshold":   agent.Router.Threshold(),
 		})
-	return agent.Provider, agent.LightCandidates, resolvedCandidateModel(agent.LightCandidates, agent.Router.LightModel())
+	return agent.Provider, agent.LightCandidates, resolvedCandidateModel(
+		agent.LightCandidates,
+		agent.Router.LightModel(),
+	)
 }
 
 func messageHasRichMediaInput(messages []providers.Message) bool {
@@ -3039,7 +3082,11 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey string, tur
 	if store, ok := agent.Sessions.(*session.ConversationStore); ok {
 		turnStore, _, err := store.CaptureTurn(sessionKey)
 		if err != nil {
-			logger.WarnCF("agent", "Cannot capture conversation for summarization", map[string]any{"error": err.Error()})
+			logger.WarnCF(
+				"agent",
+				"Cannot capture conversation for summarization",
+				map[string]any{"error": err.Error()},
+			)
 			return
 		}
 		turnAgent := *agent
