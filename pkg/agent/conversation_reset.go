@@ -6,6 +6,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/commands"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func (al *AgentLoop) resetConversation(agent *AgentInstance, key string) error {
@@ -48,7 +49,7 @@ func (al *AgentLoop) handleActiveReset(ctx context.Context, msg bus.InboundMessa
 	}
 	response, handled := al.handleCommand(ctx, msg, agent, &opts)
 	if handled && response != "" {
-		_ = al.bus.PublishOutbound(
+		if err := al.bus.PublishOutbound(
 			ctx,
 			bus.OutboundMessage{
 				Channel:          msg.Channel,
@@ -56,7 +57,13 @@ func (al *AgentLoop) handleActiveReset(ctx context.Context, msg bus.InboundMessa
 				Content:          response,
 				ReplyToMessageID: msg.MessageID,
 			},
-		)
+		); err != nil {
+			logger.WarnCF("agent", "Failed to publish reset command reply", map[string]any{
+				"channel": msg.Channel,
+				"chat_id": msg.ChatID,
+				"error":   err.Error(),
+			})
+		}
 	}
 	return handled
 }
