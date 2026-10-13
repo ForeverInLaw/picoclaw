@@ -9,12 +9,25 @@ import (
 	"net/url"
 	"syscall"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 func TestClassifyError_Nil(t *testing.T) {
 	result := ClassifyError(nil, "openai", "gpt-4")
 	if result != nil {
 		t.Errorf("expected nil for nil error, got %+v", result)
+	}
+}
+
+func TestClassifyError_UnsupportedHTTPStatusIsPermanentDespiteTimeoutText(t *testing.T) {
+	for _, status := range []int{501, 505} {
+		for _, err := range []error{fmt.Errorf("HTTP status: %d temporary timeout", status), &protocoltypes.HTTPError{StatusCode: status, Wrapped: fmt.Errorf("temporary timeout")}} {
+			failure := ClassifyError(err, "openai", "model")
+			if failure == nil || failure.IsTransient() || failure.IsRetriable() {
+				t.Fatalf("unsupported HTTP request must be permanent: %v classified=%+v", err, failure)
+			}
+		}
 	}
 }
 
@@ -121,7 +134,7 @@ func TestClassifyError_BillingPatterns(t *testing.T) {
 		"credits exhausted",
 		"exceeded your current quota",
 		"payment required",
-		"insufficient credits",
+		"billing_hard_limit",
 		"credit balance too low",
 		"plans & billing page",
 		"insufficient balance",
