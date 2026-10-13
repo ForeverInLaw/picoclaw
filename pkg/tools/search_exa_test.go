@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -128,6 +129,34 @@ func TestWebSearch_TransientFallback(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestWebSearch_PermanentEndpointFailuresDoNotCallBackup(t *testing.T) {
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer tlsServer.Close()
+	for _, endpoint := range []string{"http://127.0.0.1:999999", "unsupported://local", tlsServer.URL} {
+		t.Run(endpoint, func(t *testing.T) {
+			var backupCalls atomic.Int32
+			backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				backupCalls.Add(1)
+				_, _ = w.Write(
+					[]byte(`{"results":[{"title":"Backup","url":"https://example.com","highlights":["backup hit"]}]}`),
+				)
+			}))
+			defer backup.Close()
+			tool, err := NewWebSearchTool(WebSearchToolOptions{
+				PrimaryProvider: "parallel", ParallelEnabled: true, ParallelAPIKeys: []string{"p-key"},
+				ParallelBaseURL: endpoint, ExaEnabled: true, ExaAPIKeys: []string{"e-key"}, ExaBaseURL: backup.URL,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := tool.Execute(t.Context(), map[string]any{"query": "configured endpoint"})
+			if !result.IsError || backupCalls.Load() != 0 {
+				t.Fatalf("permanent endpoint failure result=%+v backup calls=%d", result, backupCalls.Load())
+			}
+		})
 	}
 }
 

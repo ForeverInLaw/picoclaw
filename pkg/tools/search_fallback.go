@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/utils"
 	"github.com/sipeed/picoclaw/pkg/websource"
 )
@@ -88,11 +86,6 @@ func isTransientSearchError(err error) bool {
 		return !status.quota &&
 			(status.status == http.StatusRequestTimeout || status.status == http.StatusTooManyRequests || status.status == http.StatusInternalServerError || status.status == http.StatusBadGateway || status.status == http.StatusServiceUnavailable || status.status == http.StatusGatewayTimeout)
 	}
-	// url.Error itself implements net.Error even for permanent TLS/protocol errors.
-	var requestError *url.Error
-	if errors.As(err, &requestError) {
-		err = requestError.Err
-	}
-	var network net.Error
-	return errors.As(err, &network) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	failure := providers.ClassifyError(err, "", "")
+	return failure != nil && failure.IsTransient()
 }

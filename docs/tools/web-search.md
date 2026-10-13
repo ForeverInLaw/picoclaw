@@ -25,6 +25,8 @@ Search requests respect cancellation and the existing HTTP proxy configuration.
 Successful searches call only the selected primary. Network interruptions,
 temporary rate limits and server failures can call the backup once within the
 same timeout budget. Invalid requests, authentication and exhausted credits or
-quota do not trigger the backup. If both fail, the error names both failures.
+quota do not trigger the backup. Invalid endpoint addresses, nonexistent DNS names,
+unsupported protocols, and certificate validation failures also fail without a
+backup request. If both fail, the error names both failures.
 Automated contracts use temporary HTTP servers; no paid service is called by
 the tests. A live check needs an operator's configured search key.
