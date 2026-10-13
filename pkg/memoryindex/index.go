@@ -256,6 +256,10 @@ func scanHits(rows *sql.Rows, maxSnippetChars int) ([]Hit, error) {
 }
 
 func appendSearchFilters(whereParts []string, args []any, req SearchRequest) ([]string, []any) {
+	if req.ExactSessionKey != "" {
+		whereParts = append(whereParts, "o.session_key = ?")
+		args = append(args, req.ExactSessionKey)
+	}
 	scopes := compactScopes(req)
 	if len(scopes) > 0 {
 		clauses := make([]string, 0, len(scopes))

@@ -25,15 +25,18 @@ type SummaryRequest struct {
 }
 
 type SearchRequest struct {
-	RequesterID    string
-	CurrentChannel string
-	CurrentChatID  string
-	CurrentPeer    string
-	Target         string
-	Query          string
-	SinceHours     int
-	UntilHours     int
-	Limit          int
+	// Automatic recall may restrict sources to the captured conversation generation.
+	ExactSessionKey string
+	Since           time.Time
+	RequesterID     string
+	CurrentChannel  string
+	CurrentChatID   string
+	CurrentPeer     string
+	Target          string
+	Query           string
+	SinceHours      int
+	UntilHours      int
+	Limit           int
 }
 
 type Service struct {
@@ -75,15 +78,19 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		return nil, err
 	}
 	window := s.resolveWindow(req.SinceHours, req.UntilHours)
+	if req.Since.After(window.Start) {
+		window.Start = req.Since
+	}
 	limit := resolveSearchLimit(req.Limit, s.cfg.MaxResults)
 	lexicalHits, err := s.index.Search(ctx, memoryindex.SearchRequest{
-		Query:      req.Query,
-		Channel:    req.CurrentChannel,
-		ChatID:     req.CurrentChatID,
-		ChatScopes: scopes,
-		Since:      window.Start,
-		Until:      window.End,
-		Limit:      limit,
+		ExactSessionKey: req.ExactSessionKey,
+		Query:           req.Query,
+		Channel:         req.CurrentChannel,
+		ChatID:          req.CurrentChatID,
+		ChatScopes:      scopes,
+		Since:           window.Start,
+		Until:           window.End,
+		Limit:           limit,
 	})
 	if err != nil {
 		return nil, err
@@ -108,6 +115,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]memoryindex.
 		window.Start,
 		window.End,
 		512,
+		req.ExactSessionKey,
 	)
 	if err != nil {
 		embeddingRows = nil

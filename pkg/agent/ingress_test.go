@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/memoryindex"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
@@ -370,5 +372,56 @@ func TestRunStopWakesIdleLoop(t *testing.T) {
 		cancel()
 		<-done
 		t.Fatal("Stop left Run blocked on an idle bus")
+	}
+}
+
+func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
+	initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	initial.Close()
+	cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{Enabled: true, MaxResults: 5, MaxSnippetChars: 500, MinQueryChars: 3}
+	run := func() (*AgentLoop, *bus.MessageBus, *ingressProvider, func()) {
+		mb := bus.NewMessageBus()
+		p := &ingressProvider{requests: make(chan ingressRequest, 10)}
+		al := NewAgentLoop(cfg, mb, p)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- al.Run(ctx) }()
+		return al, mb, p, func() { cancel(); <-done; al.Close(); mb.Close() }
+	}
+	al, mb, p, stop := run()
+	msg := directIngressMessage("OLD_DIALOG bicycle")
+	msg.SessionKey = "agent:main:fresh-retrieval"
+	publishIncoming(t, mb, msg)
+	request := inboundRequest(t, p)
+	close(request.release)
+	_ = finalOutbound(t, mb)
+	msg.Content = "/clear"
+	publishIncoming(t, mb, msg)
+	_ = finalOutbound(t, mb)
+	agent := al.registry.GetDefaultAgent()
+	if err := agent.MemoryIndex.AddObservation(t.Context(), memoryindex.Observation{SessionKey: msg.SessionKey, Channel: "telegram", ChatID: "42", PeerKind: "direct", Role: "user", Content: "OLD_LATE_WRITE bicycle", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	msg.Content = "FRESH_RETRIEVAL bicycle"
+	publishIncoming(t, mb, msg)
+	request = inboundRequest(t, p)
+	close(request.release)
+	_ = finalOutbound(t, mb)
+	agent.Sessions.SetHistory(msg.SessionKey, nil)
+	if err := agent.Sessions.Save(msg.SessionKey); err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	_, mb, p, stop = run()
+	defer stop()
+	msg.Content = "bicycle"
+	publishIncoming(t, mb, msg)
+	request = inboundRequest(t, p)
+	input := conversationInput(request.messages)
+	close(request.release)
+	_ = finalOutbound(t, mb)
+	if !strings.Contains(input, "RETRIEVED_MEMORY") || !strings.Contains(input, "FRESH_RETRIEVAL") || strings.Contains(input, "OLD_DIALOG") || strings.Contains(input, "OLD_LATE_WRITE") {
+		t.Fatalf("fresh conversation retrieval did not preserve its generation boundary across restart: %s", input)
 	}
 }

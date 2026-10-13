@@ -36,4 +36,6 @@ type SessionStore interface {
 type ConversationTurn interface {
 	SessionStore
 	IsCurrent() (bool, error)
+	// ConversationKey identifies observations captured by this turn generation.
+	ConversationKey(key string) string
 }

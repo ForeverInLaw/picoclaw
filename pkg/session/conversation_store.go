@@ -116,6 +116,20 @@ func (v *conversationView) IsCurrent() (bool, error) {
 	return err == nil && boundary.Generation == v.generation, err
 }
 
+func generationKey(key, generation string) string {
+	if generation != "" {
+		return key + ":generation:" + generation
+	}
+	return key
+}
+
+func (v *conversationView) ConversationKey(key string) string {
+	if v.bound && key == v.key {
+		return generationKey(key, v.generation)
+	}
+	return key
+}
+
 func (v *conversationView) apply(key string, operation func(SessionStore, string) error) error {
 	v.owner.mu.Lock()
 	defer v.owner.mu.Unlock()
@@ -126,9 +140,7 @@ func (v *conversationView) apply(key string, operation func(SessionStore, string
 	if v.bound && key == v.key && boundary.Generation != v.generation {
 		return nil
 	}
-	if boundary.Generation != "" {
-		key += ":generation:" + boundary.Generation
-	}
+	key = generationKey(key, boundary.Generation)
 	return operation(v.owner.store, key)
 }
 

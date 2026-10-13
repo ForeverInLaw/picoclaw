@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
+	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -16,6 +17,10 @@ func recordMemoryObservation(
 ) {
 	if agent == nil || agent.MemoryIndex == nil || strings.TrimSpace(content) == "" {
 		return
+	}
+
+	if view, ok := agent.Sessions.(session.ConversationTurn); ok {
+		sessionKey = view.ConversationKey(sessionKey)
 	}
 
 	_ = agent.MemoryIndex.AddObservation(ctx, memoryindex.Observation{

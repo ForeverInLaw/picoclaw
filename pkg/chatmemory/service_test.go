@@ -623,7 +623,7 @@ func TestService_SearchReturnsEachObservationOnceAcrossLexicalAndSemanticResults
 	defer idx.Close()
 	now := time.Now()
 	for _, sender := range []string{"alice", "bob"} {
-		err := idx.AddObservation(t.Context(), memoryindex.Observation{Channel: "telegram", ChatID: "-1", PeerKind: "group", SenderID: sender, Role: "user", Content: "bicycle " + strings.Repeat("long shared paragraph ", 20), CreatedAt: now.Add(-time.Minute)})
+		err := idx.AddObservation(t.Context(), memoryindex.Observation{SessionKey: "generation:" + sender, Channel: "telegram", ChatID: "-1", PeerKind: "group", SenderID: sender, Role: "user", Content: "bicycle " + strings.Repeat("long shared paragraph ", 20), CreatedAt: now.Add(-time.Minute)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -637,5 +637,13 @@ func TestService_SearchReturnsEachObservationOnceAcrossLexicalAndSemanticResults
 	}
 	if len(hits) != 2 || hits[0].SenderID == hits[1].SenderID {
 		t.Fatalf("same observation appeared twice or distinct observations were lost: %+v", hits)
+	}
+	fresh, err := service.Search(t.Context(), SearchRequest{CurrentChannel: "telegram", CurrentChatID: "-1", CurrentPeer: "group", ExactSessionKey: "generation:bob", Query: "bicycle", Limit: 5})
+	if err != nil || len(fresh) != 1 || fresh[0].SenderID != "bob" {
+		t.Fatalf("generation restriction leaked lexical or semantic sources: %+v, %v", fresh, err)
+	}
+	future, err := service.Search(t.Context(), SearchRequest{CurrentChannel: "telegram", CurrentChatID: "-1", CurrentPeer: "group", ExactSessionKey: "generation:bob", Since: now, Query: "bicycle", Limit: 5})
+	if err != nil || len(future) != 0 {
+		t.Fatalf("time restriction leaked lexical or semantic sources: %+v, %v", future, err)
 	}
 }

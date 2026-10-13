@@ -83,6 +83,7 @@ func (i *Index) LoadObservationEmbeddings(
 	since time.Time,
 	until time.Time,
 	limit int,
+	exactSessionKeys ...string,
 ) ([]EmbeddingRow, error) {
 	if i == nil || i.db == nil || strings.TrimSpace(modelName) == "" {
 		return nil, nil
@@ -92,6 +93,10 @@ func (i *Index) LoadObservationEmbeddings(
 		JOIN observations o ON o.id = e.observation_id
 		WHERE e.model_name = ?`
 	args := []any{modelName}
+	if len(exactSessionKeys) > 0 && exactSessionKeys[0] != "" {
+		query += " AND o.session_key = ?"
+		args = append(args, exactSessionKeys[0])
+	}
 	if len(scopes) > 0 {
 		clauses := make([]string, 0, len(scopes))
 		for _, scope := range scopes {

@@ -48,8 +48,9 @@ type ContextBuilder struct {
 // ConversationContext controls automatic workspace context, independently of
 // the transcript. Inline replies may be published outside a private chat.
 type ConversationContext struct {
-	Inline bool
-	Reset  bool
+	Inline  bool
+	Reset   bool
+	ResetAt time.Time
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {

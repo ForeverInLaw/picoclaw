@@ -1643,6 +1643,7 @@ func (al *AgentLoop) runAgentLoop(
 		turnAgent.Sessions = turnStore
 		agent = &turnAgent
 		opts.ConversationContext.Reset = !resetAt.IsZero()
+		opts.ConversationContext.ResetAt = resetAt
 	}
 	if opts.ConversationContext.Inline {
 		turnAgent := *agent
@@ -1818,7 +1819,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	if !ts.opts.NoHistory {
 		history = ts.agent.Sessions.GetHistory(ts.sessionKey)
 		summary = ts.agent.Sessions.GetSummary(ts.sessionKey)
-		if !ts.opts.ConversationContext.Reset && !ts.opts.ConversationContext.Inline {
+		if !ts.opts.ConversationContext.Inline {
 			retrievedMemory = lookupRetrievedMemories(
 				ctx,
 				ts.agent,
@@ -1828,6 +1829,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.opts.PeerKind,
 				ts.opts.SenderID,
 				ts.opts.UserMessage,
+				ts.opts.ConversationContext,
 			)
 		}
 	}
