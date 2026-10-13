@@ -403,7 +403,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	data := probe[:min(int64(n), length)]
 
 	if len(data) == 0 {
-		return NewToolResult("[END OF FILE - no content at this offset]")
+		return NewToolResult("[END OF FILE - no content at this offset]").WithActivity("End of file.")
 	}
 
 	// Build metadata header.
@@ -444,7 +444,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			"has_more":   hasMore,
 		})
 
-	return NewToolResult(header + "\n\n" + string(data))
+	return NewToolResult(header + "\n\n" + string(data)).WithActivity(header + "\n\n" + string(data))
 }
 
 // getInt64Arg extracts an integer argument from the args map, returning the
@@ -544,7 +544,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(err.Error())
 	}
 
-	return SilentResult(fmt.Sprintf("File written: %s", path))
+	return SilentResult(fmt.Sprintf("File written: %s", path)).WithActivity(fmt.Sprintf("File written: %s", path))
 }
 
 type ListDirTool struct {
@@ -602,7 +602,7 @@ func formatDirEntries(entries []os.DirEntry) *ToolResult {
 			result.WriteString("FILE: " + entry.Name() + "\n")
 		}
 	}
-	return NewToolResult(result.String())
+	return NewToolResult(result.String()).WithActivity(result.String())
 }
 
 // fileSystem abstracts reading, writing, and listing files, allowing both

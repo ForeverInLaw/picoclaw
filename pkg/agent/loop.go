@@ -2646,6 +2646,7 @@ turnLoop:
 				if result == nil {
 					return
 				}
+				result = al.normalizeToolResult(result)
 				if progressEnabled {
 					al.publishToolProgress(context.Background(), ts, actionID, asyncToolName, toolArgs, result)
 				}
@@ -2773,6 +2774,7 @@ turnLoop:
 				toolResult = tools.ErrorResult("hook returned nil tool result")
 			}
 
+			toolResult = al.normalizeToolResult(toolResult)
 			if progressEnabled && !toolResult.Async {
 				al.publishToolProgress(turnCtx, ts, actionID, toolName, toolArgs, toolResult)
 			}

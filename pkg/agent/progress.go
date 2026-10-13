@@ -60,22 +60,25 @@ func (al *AgentLoop) publishToolProgress(
 		Tool:      tool,
 		Arguments: cloneEventArguments(args),
 	}
-	// Filter payloads before transport, including arguments and silent tool output.
+	// Filter explicitly public payloads before transport. LLM-only output stays private.
 	encoded, _ := json.Marshal(progress.Arguments)
 	_ = json.Unmarshal([]byte(al.cfg.FilterSensitiveData(string(encoded))), &progress.Arguments)
 	content := fmt.Sprintf("%s: %s", tool, al.cfg.FilterSensitiveData(string(encoded)))
 	if result != nil {
 		progress.State = bus.ProgressCompleted
-		progress.Result = result.ForUser
+		progress.Result = result.ForActivity
+		if progress.Result == "" && !result.Silent {
+			progress.Result = result.ForUser
+		}
 		if progress.Result == "" {
-			progress.Result = result.ForLLM
+			progress.Result = "Done."
 		}
 		if result.IsError || result.Err != nil {
 			progress.State = bus.ProgressFailed
-			progress.Error = progress.Result
-			if result.Err != nil {
-				progress.Error = result.Err.Error()
+			if progress.Result == "Done." {
+				progress.Result = "Tool failed."
 			}
+			progress.Error = progress.Result
 		}
 		progress.Result = al.cfg.FilterSensitiveData(progress.Result)
 		progress.Error = al.cfg.FilterSensitiveData(progress.Error)
@@ -85,4 +88,15 @@ func (al *AgentLoop) publishToolProgress(
 		}
 	}
 	al.publishProgress(ctx, ts, progress, content)
+}
+
+func (al *AgentLoop) normalizeToolResult(result *tools.ToolResult) *tools.ToolResult {
+	if result == nil {
+		return nil
+	}
+	clone := *result
+	clone.ForLLM = al.cfg.FilterSensitiveData(clone.ForLLM)
+	clone.ForUser = al.cfg.FilterSensitiveData(clone.ForUser)
+	clone.ForActivity = al.cfg.FilterSensitiveData(clone.ForActivity)
+	return &clone
 }

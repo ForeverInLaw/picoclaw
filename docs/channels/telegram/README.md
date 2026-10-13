@@ -90,3 +90,5 @@ Updating that row leaves answer text and formulas intact. The row is cleared
 when recovery completes or fails, and final delivery replaces it with any
 required page navigation. Queued retry updates cannot restore status after the
 answer has already been finalized.
+
+Tool activity shows each action and a concise completion. Tools may supply explicit public activity detail (`ForActivity`); file operations, searches, and shell commands retain their intended public output. LLM-only results such as archived context stay private. Activity detail passes through the configured sensitive-data filter and does not create extra standalone messages on other channels.
