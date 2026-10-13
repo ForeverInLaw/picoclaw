@@ -108,27 +108,8 @@ func (c *TelegramChannel) sendRichReply(
 	threadID int,
 	replyTo, content string,
 ) (int, error) {
-	if strings.TrimSpace(content) == "" {
-		return 0, nil
-	}
-	var firstID int
-	for _, chunk := range channels.SplitMessage(normalizeRichMarkdown(content), telegramRichMessageLimit) {
-		message, err := c.bot.SendRichMessage(ctx, &telego.SendRichMessageParams{
-			ChatID: tu.ID(chatID), MessageThreadID: threadID,
-			ReplyParameters: replyParameters(replyTo), RichMessage: tu.RichMessageMarkdown(chunk),
-		})
-		if isTelegramFormattingError(err) {
-			message, err = c.sendPlainReply(ctx, chatID, threadID, replyTo, chunk)
-		}
-		if err != nil {
-			return firstID, telegramDeliveryError(err)
-		}
-		if firstID == 0 && message != nil {
-			firstID = message.MessageID
-		}
-		replyTo = ""
-	}
-	return firstID, nil
+	firstID, _, err := c.deliverReply(ctx, chatID, threadID, replyTo, content, 0)
+	return firstID, err
 }
 
 func (c *TelegramChannel) sendPlainReply(
@@ -160,32 +141,6 @@ func (c *TelegramChannel) editRichReply(
 	threadID, messageID int,
 	content string,
 ) error {
-	chunks := channels.SplitMessage(normalizeRichMarkdown(content), telegramRichMessageLimit)
-	if len(chunks) == 0 {
-		return nil
-	}
-	rich := tu.RichMessageMarkdown(chunks[0])
-	_, err := c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
-		ChatID: tu.ID(chatID), MessageID: messageID, RichMessage: &rich,
-	})
-	if isTelegramFormattingError(err) {
-		plainChunks := channels.SplitMessage(chunks[0], telegramInlineMessageLimit)
-		_, err = c.bot.EditMessageText(ctx, tu.EditMessageText(tu.ID(chatID), messageID, plainChunks[0]))
-		if err == nil || isTelegramMessageNotModified(err) {
-			for _, chunk := range plainChunks[1:] {
-				if _, err = c.sendPlainReply(ctx, chatID, threadID, "", chunk); err != nil {
-					break
-				}
-			}
-		}
-	}
-	if err != nil && !isTelegramMessageNotModified(err) {
-		return telegramDeliveryError(err)
-	}
-	for _, chunk := range chunks[1:] {
-		if _, err = c.sendRichReply(ctx, chatID, threadID, "", chunk); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, _, err := c.deliverReply(ctx, chatID, threadID, "edit:"+strconv.Itoa(messageID), content, messageID)
+	return err
 }

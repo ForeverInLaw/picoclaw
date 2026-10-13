@@ -304,7 +304,7 @@ func TestSend_RichFormattingFallback(t *testing.T) {
 	assert.Equal(t, 2, len(caller.calls), "should have HTML attempt + plain text fallback")
 }
 
-func TestSend_TransientErrorDoesNotRetryAsPlainText(t *testing.T) {
+func TestSend_AmbiguousTransportErrorDoesNotRetry(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 			return nil, errors.New("send failed")
@@ -318,7 +318,7 @@ func TestSend_TransientErrorDoesNotRetryAsPlainText(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, channels.ErrTemporary), "error should wrap ErrTemporary")
+	assert.ErrorIs(t, err, channels.ErrSendFailed, "an unacknowledged new send must stop automatic retries")
 	assert.Len(t, caller.calls, 1, "transport errors must not create a duplicate plain answer")
 }
 

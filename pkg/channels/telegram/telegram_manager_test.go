@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,4 +171,98 @@ func TestManagerInlineFormattingFallbackPreservesLaterSourcePosition(t *testing.
 	lastPage := strconv.Itoa(count - 1)
 	require.NoError(t, channel.handleInlineCallbackQuery((&th.Context{}).WithContext(t.Context()), telego.CallbackQuery{ID: "last", InlineMessageID: "result", From: telego.User{ID: 42}, Data: telegramInlinePagePrefix + lastPage}))
 	require.Contains(t, plain, "LAST_POSITION")
+}
+
+func TestManagerMultipartFinalizeResumesWithoutRepeatingAcknowledgedChunks(t *testing.T) {
+	for _, mode := range []string{"rejected_send", "ambiguous_send", "deleted_preview"} {
+		t.Run(mode, func(t *testing.T) {
+			var mu sync.Mutex
+			sends := 0
+			edits := 0
+			acknowledged := map[string]int{}
+			tailDelivered := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Thread int `json:"message_thread_id"`
+					Rich   struct {
+						Markdown string `json:"markdown"`
+					} `json:"rich_message"`
+				}
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				mu.Lock()
+				defer mu.Unlock()
+				if strings.HasSuffix(r.URL.Path, "/editMessageText") {
+					edits++
+					if mode == "deleted_preview" && edits == 1 {
+						_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"message to edit not found"}`))
+						return
+					}
+					tailDelivered = tailDelivered || strings.Contains(body.Rich.Markdown, "TAIL_MARKER")
+				}
+				if strings.HasSuffix(r.URL.Path, "/sendRichMessage") {
+					sends++
+					require.Equal(t, 7, body.Thread)
+					if sends == 3 && mode == "rejected_send" {
+						_, _ = w.Write([]byte(`{"ok":false,"error_code":500,"description":"temporary rejected send"}`))
+						return
+					}
+					acknowledged[body.Rich.Markdown]++
+					tailDelivered = tailDelivered || strings.Contains(body.Rich.Markdown, "TAIL_MARKER")
+					if sends == 3 && mode == "ambiguous_send" {
+						conn, _, err := w.(http.Hijacker).Hijack()
+						require.NoError(t, err)
+						_ = conn.Close()
+						return
+					}
+				}
+				_, _ = fmt.Fprintf(w, `{"ok":true,"result":{"message_id":%d}}`, sends)
+			}))
+			defer server.Close()
+			bot, err := telego.NewBot(testToken, telego.WithAPIServer(server.URL), telego.WithHTTPClient(server.Client()), telego.WithDiscardLogger())
+			require.NoError(t, err)
+			cfg := config.DefaultConfig()
+			cfg.Channels.Telegram.Streaming.Enabled = true
+			mb := bus.NewMessageBus()
+			defer mb.Close()
+			manager, err := channels.NewManager(cfg, mb, nil)
+			require.NoError(t, err)
+			channel := &TelegramChannel{bot: bot, config: cfg, BaseChannel: channels.NewBaseChannel("telegram", nil, mb, nil)}
+			manager.RegisterChannel("telegram", outboundTelegram{channel})
+			require.NoError(t, manager.StartAll(t.Context()))
+			defer func() { require.NoError(t, manager.StopAll(t.Context())) }()
+			ctx := bus.WithStreamReplyTo(t.Context(), "42")
+			stream, ok := manager.GetStreamer(ctx, "telegram", "-123/7")
+			require.True(t, ok)
+			require.NoError(t, stream.Update(ctx, "PREVIEW_MARKER"))
+			var source strings.Builder
+			for n := 0; n < 1800; n++ {
+				fmt.Fprintf(&source, "ROW%04d %s\n", n, strings.Repeat("value ", 10))
+			}
+			source.WriteString("TAIL_MARKER")
+			content := source.String()
+			finalizeErr := stream.Finalize(ctx, content)
+			msg := bus.OutboundMessage{Channel: "telegram", ChatID: "-123/7", ReplyToMessageID: "42", Content: content}
+			require.NoError(t, manager.SendMessage(ctx, msg))
+			if mode != "ambiguous_send" {
+				require.NoError(t, stream.Finalize(ctx, content))
+				require.NoError(t, manager.SendMessage(ctx, msg))
+			}
+			mu.Lock()
+			for body, count := range acknowledged {
+				require.Equal(t, 1, count, "acknowledged overflow was repeated: %q", body[:min(len(body), 40)])
+			}
+			count := sends
+			tail := tailDelivered
+			mu.Unlock()
+			if mode == "ambiguous_send" {
+				require.Error(t, finalizeErr)
+				require.Equal(t, 3, count, "an ambiguous new send must not be retried or followed by a complete resend")
+				require.False(t, tail)
+				require.ErrorIs(t, channel.Send(ctx, msg), channels.ErrSendFailed)
+			} else {
+				require.True(t, tail, "remaining source must remain deliverable after a rejected send or deleted preview")
+				require.GreaterOrEqual(t, count, 4, "fixture must exercise at least three complete answer chunks")
+			}
+		})
+	}
 }

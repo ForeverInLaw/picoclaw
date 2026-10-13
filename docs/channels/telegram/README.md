@@ -92,3 +92,5 @@ required page navigation. Queued retry updates cannot restore status after the
 answer has already been finalized.
 
 Tool activity shows each action and a concise completion. Tools may supply explicit public activity detail (`ForActivity`); file operations, searches, and shell commands retain their intended public output. LLM-only results such as archived context stay private. Activity detail passes through the configured sensitive-data filter and does not create extra standalone messages on other channels.
+
+Multipart final replies track each acknowledged part across stream finalization and manager delivery. Recovery resumes the remaining parts; it retries edits by their stable message ID. If a new send loses its acknowledgement, delivery reports an unknown outcome and stops automatic resends. Pending recovery state is bounded and remains local to the running process.
