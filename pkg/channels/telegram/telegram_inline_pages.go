@@ -217,13 +217,22 @@ func (c *TelegramChannel) editInlinePage(
 	if isTelegramFormattingError(err) && !pages.Plain {
 		// Formatting rejection can occur below the character limit (e.g. too
 		// many blocks). Repage the full source using Telegram's plain limit.
+		richChunks := channels.SplitMessageWithOffsets(pages.Content, telegramRichMessageLimit-64)
+		sourceOffset := richChunks[page].SourceOffset
 		pages.Plain = true
+		plainPage := 0
+		for n, chunk := range channels.SplitMessageWithOffsets(pages.Content, telegramInlineMessageLimit-64) {
+			if chunk.SourceOffset > sourceOffset {
+				break
+			}
+			plainPage = n
+		}
 		if len([]rune(pages.Content)) > telegramInlineMessageLimit-64 {
 			if err = c.saveInlinePages(inlineMessageID, pages); err != nil {
 				return err
 			}
 		}
-		return c.editInlinePage(ctx, inlineMessageID, pages, 0)
+		return c.editInlinePage(ctx, inlineMessageID, pages, plainPage)
 	}
 	if isTelegramMessageNotModified(err) {
 		err = nil

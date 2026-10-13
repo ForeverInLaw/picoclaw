@@ -64,6 +64,22 @@ func TestRichDraftPersistsOneFinalReplyAfterPreviewFailureAndProgress(t *testing
 	require.Equal(t, "# Answer\n\n$$E = mc^2$$", final.Rich.Markdown)
 }
 
+func TestDraftGrowthCountsCharactersForNonASCIIAnswers(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) { return successResponse(t), nil },
+	}
+	channel := newTestChannel(t, caller)
+	channel.config.Channels.Telegram.Streaming.Enabled = true
+	channel.config.Channels.Telegram.Streaming.ThrottleSeconds = 60
+	channel.config.Channels.Telegram.Streaming.MinGrowthChars = 4
+	stream, err := channel.BeginStream(t.Context(), "42")
+	require.NoError(t, err)
+	for _, text := range []string{"А", "АБВ", "АБВГД"} {
+		require.NoError(t, stream.Update(t.Context(), text))
+	}
+	require.Len(t, caller.calls, 2, "two added Cyrillic characters must remain throttled; four must update the draft")
+}
+
 func TestInlinePreviewFailureStillDeliversCompleteRichFinalOnce(t *testing.T) {
 	edits := 0
 	caller := &stubCaller{callFn: func(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {

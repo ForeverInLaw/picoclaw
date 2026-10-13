@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -54,6 +55,7 @@ type telegramStreamer struct {
 	inlineMessageID  string
 	draftID          int
 	previewMessageID int
+	delivery         *telegramReplyDelivery
 	throttleInterval time.Duration
 	minGrowth        int
 	lastLen          int
@@ -74,7 +76,8 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 		return nil
 	}
 	now := time.Now()
-	if s.lastLen > 0 && now.Sub(s.lastAt) < s.throttleInterval && len(content)-s.lastLen < s.minGrowth {
+	if s.lastLen > 0 && now.Sub(s.lastAt) < s.throttleInterval &&
+		utf8.RuneCountInString(content)-s.lastLen < s.minGrowth {
 		return nil
 	}
 	preview := richAnswerPreview(content, telegramRichMessageLimit)
@@ -124,7 +127,7 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 		s.previewFailed = true
 		return nil
 	}
-	s.lastLen = len(content)
+	s.lastLen = utf8.RuneCountInString(content)
 	s.lastAt = now
 	return nil
 }
@@ -167,28 +170,28 @@ func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
 	if s.finalized {
 		return nil
 	}
+	s.channel.deliveryMu.Lock()
+	completed := s.delivery != nil && s.delivery.next == len(s.delivery.parts)
+	terminalErr := error(nil)
+	if s.delivery != nil {
+		terminalErr = s.delivery.terminalErr
+	}
+	s.channel.deliveryMu.Unlock()
+	if completed {
+		s.finalized = true
+		return nil
+	}
+	if terminalErr != nil {
+		return terminalErr
+	}
 	var err error
 	switch {
 	case s.inlineMessageID != "":
 		err = safeFinalEdit(ctx, func() error { return s.channel.sendInlineAnswer(ctx, s.inlineMessageID, content) })
 	case s.previewMessageID != 0:
-		err = safeFinalEdit(
-			ctx,
-			func() error { return s.channel.editRichReply(ctx, s.chatID, s.threadID, s.previewMessageID, content) },
-		)
-		if err != nil && ctx.Err() == nil {
-			// Editing can become unavailable (e.g. the preview was deleted).
-			// Send a complete new reply while retaining its request association.
-			_, err = s.channel.sendRichReply(ctx, s.chatID, s.threadID, s.replyTo, content)
-			if err == nil {
-				_ = s.channel.bot.DeleteMessage(
-					ctx,
-					&telego.DeleteMessageParams{ChatID: tu.ID(s.chatID), MessageID: s.previewMessageID},
-				)
-			}
-		}
+		_, s.delivery, err = s.channel.deliverReply(ctx, s.chatID, s.threadID, s.replyTo, content, s.previewMessageID)
 	default:
-		_, err = s.channel.sendRichReply(ctx, s.chatID, s.threadID, s.replyTo, content)
+		_, s.delivery, err = s.channel.deliverReply(ctx, s.chatID, s.threadID, s.replyTo, content, 0)
 	}
 	if err != nil {
 		return fmt.Errorf("telegram finalize: %w", err)

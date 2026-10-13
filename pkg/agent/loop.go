@@ -108,6 +108,7 @@ type continuationTarget struct {
 }
 
 const (
+	maxPendingRequests        = 64
 	defaultResponse           = "The model returned an empty response. This may indicate a provider error or token limit."
 	toolLimitResponse         = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
 	sessionKeyAgentPrefix     = "agent:"
@@ -456,7 +457,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			drainCancel = cancel
 			done := make(chan []bus.InboundMessage, 1)
 			drainDone = done
-			go func() { done <- al.drainBusToSteering(drainCtx, activeScope, activeAgentID) }()
+			go func() { done <- al.drainBusToSteering(drainCtx, activeScope, activeAgentID, len(queued)) }()
 		}
 
 		// Process message
@@ -591,8 +592,16 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 // drainBusToSteering consumes inbound messages and redirects messages from the
 // active scope into the steering queue. Other requests retain their complete
 // transport envelope in FIFO order until the active turn completes.
-func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, activeAgentID string) []bus.InboundMessage {
+func (al *AgentLoop) drainBusToSteering(
+	ctx context.Context,
+	activeScope, activeAgentID string,
+	inherited ...int,
+) []bus.InboundMessage {
 	var queued []bus.InboundMessage
+	pending := 0
+	if len(inherited) > 0 {
+		pending = inherited[0]
+	}
 	for {
 		var msg bus.InboundMessage
 		select {
@@ -612,6 +621,10 @@ func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, active
 		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
 		if !scopeOK || msgScope != activeScope || isInlineMessage(msg) ||
 			strings.Contains(activeScope, ":telegram:inline:user:") {
+			if pending+len(queued) >= maxPendingRequests {
+				al.rejectBusyRequest(ctx, msg)
+				continue
+			}
 			queued = append(queued, msg)
 			continue
 		}
@@ -638,6 +651,25 @@ func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, active
 					"channel": msg.Channel,
 				})
 		}
+	}
+}
+
+func (al *AgentLoop) rejectBusyRequest(ctx context.Context, msg bus.InboundMessage) {
+	if strings.EqualFold(msg.Metadata["observe_only"], "true") || constants.IsInternalChannel(msg.Channel) {
+		return
+	}
+	// A congested answer channel must not keep reset commands behind busy replies.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
+		Channel: msg.Channel, ChatID: msg.ChatID, ReplyToMessageID: msg.MessageID,
+		Content: "The assistant is busy. Please try again shortly.",
+	}); err != nil {
+		logger.WarnCF(
+			"agent",
+			"Failed to deliver busy reply",
+			map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "error": err.Error()},
+		)
 	}
 }
 
@@ -1448,6 +1480,11 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, nil
 	}
 	if observeOnly {
+		observedAgent, _, captureErr := captureConversationAgent(agent, opts.SessionKey)
+		if captureErr != nil {
+			return "", captureErr
+		}
+		agent = observedAgent
 		agent.Sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 		recordMemoryObservation(
 			ctx,
@@ -1602,16 +1639,16 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts processOptions,
 ) (string, error) {
-	if store, ok := agent.Sessions.(*session.ConversationStore); ok {
-		turnStore, resetAt, err := store.CaptureTurn(opts.SessionKey)
-		if err != nil {
-			return "", err
-		}
-		turnAgent := *agent
-		turnAgent.Sessions = turnStore
-		agent = &turnAgent
-		opts.ConversationContext.Reset = !resetAt.IsZero()
+	captured, resetAt, err := captureConversationAgent(agent, opts.SessionKey)
+	if err != nil {
+		return "", err
 	}
+	agent = captured
+	if !resetAt.IsZero() {
+		opts.ConversationContext.Reset = true
+		opts.ConversationContext.ResetAt = resetAt
+	}
+
 	if opts.ConversationContext.Inline {
 		turnAgent := *agent
 		turnAgent.MemoryIndex = nil
@@ -1623,11 +1660,11 @@ func (al *AgentLoop) runAgentLoop(
 		!constants.IsInternalChannel(opts.Channel) &&
 		!(opts.Channel == "telegram" && strings.HasPrefix(strings.TrimSpace(opts.ChatID), "inline:")) {
 		channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
-		if err := al.RecordLastChannel(channelKey); err != nil {
+		if recordErr := al.RecordLastChannel(channelKey); recordErr != nil {
 			logger.WarnCF(
 				"agent",
 				"Failed to record last channel",
-				map[string]any{"error": err.Error()},
+				map[string]any{"error": recordErr.Error()},
 			)
 		}
 	}
@@ -1639,6 +1676,12 @@ func (al *AgentLoop) runAgentLoop(
 	}
 	if result.status == TurnEndStatusAborted {
 		return "", nil
+	}
+	if view, ok := agent.Sessions.(session.ConversationTurn); ok {
+		current, err := view.IsCurrent()
+		if err != nil || !current {
+			return "", err
+		}
 	}
 
 	for _, followUp := range result.followUps {
@@ -1750,6 +1793,19 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		)
 	}()
 
+	if view, ok := ts.agent.Sessions.(session.ConversationTurn); ok {
+		current, err := view.IsCurrent()
+		if err != nil {
+			turnStatus = TurnEndStatusError
+			return turnResult{}, err
+		}
+		if !current {
+			ts.requestHardAbort()
+			turnStatus = TurnEndStatusAborted
+			return al.abortTurn(ts)
+		}
+	}
+
 	al.emitEvent(
 		EventKindTurnStart,
 		ts.eventMeta("runTurn", "turn.start"),
@@ -1767,7 +1823,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	if !ts.opts.NoHistory {
 		history = ts.agent.Sessions.GetHistory(ts.sessionKey)
 		summary = ts.agent.Sessions.GetSummary(ts.sessionKey)
-		if !ts.opts.ConversationContext.Reset && !ts.opts.ConversationContext.Inline {
+		if !ts.opts.ConversationContext.Inline {
 			retrievedMemory = lookupRetrievedMemories(
 				ctx,
 				ts.agent,
@@ -1777,6 +1833,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.opts.PeerKind,
 				ts.opts.SenderID,
 				ts.opts.UserMessage,
+				ts.opts.ConversationContext,
 			)
 		}
 	}
@@ -1860,6 +1917,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 
 	activeProvider, activeCandidates, activeModel := al.selectCandidates(ts.agent, ts.userMessage, messages)
+	resolveCandidateProvider := candidateProviderResolver(al.cfg, ts.agent.Workspace, activeProvider, activeCandidates)
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
 	var finalContentPhase providers.ContentPhase
@@ -2102,7 +2160,7 @@ turnLoop:
 				streamer, streamUpdater = selectStreamingTargets(providerCtx, al.bus, al.channelManager, ts.channel, ts.chatID)
 			}
 
-			callProvider := func(ctx context.Context, model string) (reply *providers.LLMResponse, requestErr error) {
+			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
 				defer func() {
 					if requestErr != nil {
 						lastProviderError = requestErr
@@ -2167,7 +2225,7 @@ turnLoop:
 					}
 					return response, nil
 				}
-				return activeProvider.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
+				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
 			}
 
 			if len(activeCandidates) > 1 && al.fallback != nil {
@@ -2177,7 +2235,11 @@ turnLoop:
 						retryAnnounced = true
 						al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
 					}
-					response, err := callProvider(ctx, model)
+					client, err := resolveCandidateProvider(provider, model)
+					if err != nil {
+						return nil, err
+					}
+					response, err := callProvider(ctx, client, model)
 					lastCandidateFailure = providers.ClassifyError(err, provider, model)
 					return response, err
 				}
@@ -2201,7 +2263,7 @@ turnLoop:
 				}
 				return fbResult.Response, nil
 			}
-			return callProvider(providerCtx, llmModel)
+			return callProvider(providerCtx, activeProvider, llmModel)
 		}
 
 		var response *providers.LLMResponse
@@ -2588,6 +2650,7 @@ turnLoop:
 				if result == nil {
 					return
 				}
+				result = al.normalizeToolResult(result)
 				if progressEnabled {
 					al.publishToolProgress(context.Background(), ts, actionID, asyncToolName, toolArgs, result)
 				}
@@ -2715,6 +2778,7 @@ turnLoop:
 				toolResult = tools.ErrorResult("hook returned nil tool result")
 			}
 
+			toolResult = al.normalizeToolResult(toolResult)
 			if progressEnabled && !toolResult.Async {
 				al.publishToolProgress(turnCtx, ts, actionID, toolName, toolArgs, toolResult)
 			}

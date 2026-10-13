@@ -186,6 +186,9 @@ func TestClearInlineReportsPersistenceFailure(t *testing.T) {
 		!strings.Contains(response, "Failed to reset inline") {
 		t.Fatalf("failed inline reset = %q, %v", response, err)
 	}
+	if err := os.Remove(filepath.Join(agent.Workspace, "sessions", "boundaries")); err != nil {
+		t.Fatal(err)
+	}
 	provider := &recordingProvider{}
 	agent.Provider = provider
 	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "second", "Continue")); err != nil {

@@ -30,26 +30,29 @@ type ChatScope struct {
 }
 
 type SearchRequest struct {
-	Query      string
-	SessionKey string
-	Channel    string
-	ChatID     string
-	ChatScopes []ChatScope
-	Since      time.Time
-	Until      time.Time
-	Limit      int
+	Query string
+	// ExactSessionKey restricts sources instead of merely boosting their rank.
+	ExactSessionKey string
+	SessionKey      string
+	Channel         string
+	ChatID          string
+	ChatScopes      []ChatScope
+	Since           time.Time
+	Until           time.Time
+	Limit           int
 }
 
 type Hit struct {
-	SessionKey string
-	Channel    string
-	ChatID     string
-	PeerKind   string
-	ChatLabel  string
-	Role       string
-	SenderID   string
-	Content    string
-	CreatedAt  time.Time
+	ObservationID int64
+	SessionKey    string
+	Channel       string
+	ChatID        string
+	PeerKind      string
+	ChatLabel     string
+	Role          string
+	SenderID      string
+	Content       string
+	CreatedAt     time.Time
 }
 
 type ChatCatalogEntry struct {

@@ -440,7 +440,7 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 		switch item.Type {
 		case "message":
 			phase := codexMessagePhase(item)
-			if phase == ContentPhaseCommentary || phase == ContentPhaseReasoning {
+			if phase != ContentPhaseUnknown && phase != ContentPhaseAnswer {
 				continue
 			}
 			if phase != "" {

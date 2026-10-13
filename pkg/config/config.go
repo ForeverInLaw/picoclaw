@@ -1131,29 +1131,28 @@ func LoadConfig(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
 	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
-		}
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 
-	// Pre-scan the JSON to check how many model_list entries the user provided.
-	// Go's JSON decoder reuses existing slice backing-array elements rather than
-	// zero-initializing them, so fields absent from the user's JSON (e.g. api_base)
-	// would silently inherit values from the DefaultConfig template at the same
-	// index position. We only reset cfg.ModelList when the user actually provides
-	// entries; when count is 0 we keep DefaultConfig's built-in list as fallback.
-	var tmp Config
-	if decodeErr := json.Unmarshal(data, &tmp); decodeErr != nil {
-		return nil, decodeErr
-	}
-	if len(tmp.ModelList) > 0 {
-		cfg.ModelList = nil
-	}
+	if err == nil {
+		// Pre-scan the JSON to check how many model_list entries the user provided.
+		// Go's JSON decoder reuses existing slice backing-array elements rather than
+		// zero-initializing them, so fields absent from the user's JSON (e.g. api_base)
+		// would silently inherit values from the DefaultConfig template at the same
+		// index position. We only reset cfg.ModelList when the user actually provides
+		// entries; when count is 0 we keep DefaultConfig's built-in list as fallback.
+		var tmp Config
+		if decodeErr := json.Unmarshal(data, &tmp); decodeErr != nil {
+			return nil, decodeErr
+		}
+		if len(tmp.ModelList) > 0 {
+			cfg.ModelList = nil
+		}
 
-	if decodeErr := json.Unmarshal(data, cfg); decodeErr != nil {
-		return nil, decodeErr
+		if decodeErr := json.Unmarshal(data, cfg); decodeErr != nil {
+			return nil, decodeErr
+		}
 	}
 
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {

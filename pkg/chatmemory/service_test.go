@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,76 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/memoryindex"
 )
+
+func TestService_SummarizeRefreshesPartialHoursWithoutDuplicatePersistedRollups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.sqlite")
+	idx, err := memoryindex.Open(path, memoryindex.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = idx.Close() }()
+	hour := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for _, observation := range []memoryindex.Observation{
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "PREVIOUS_HOUR", CreatedAt: hour.Add(-50 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "EARLY_MARKER", CreatedAt: hour.Add(5 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "LATE_MARKER", CreatedAt: hour.Add(40 * time.Minute)},
+		{Channel: "telegram", ChatID: "-1", PeerKind: "group", Role: "user", Content: "FUTURE_MARKER", CreatedAt: hour.Add(65 * time.Minute)},
+		{Channel: "telegram", ChatID: "private-neighbor", PeerKind: "direct", Role: "user", Content: "PRIVATE_MARKER", CreatedAt: hour.Add(10 * time.Minute)},
+	} {
+		if err := idx.AddObservation(t.Context(), observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := SummaryRequest{
+		RequesterID:    "telegram:42",
+		CurrentChannel: "telegram",
+		CurrentChatID:  "-1",
+		CurrentPeer:    "group",
+		SinceHours:     2,
+	}
+	settings := config.MemoryIndexConfig{
+		Enabled: true,
+		Rollups: config.MemoryRollupConfig{Enabled: true, HourlySampleSize: 6},
+	}
+	for _, minute := range []int{30, 31, 45, 30} {
+		service := New(idx, settings, nil)
+		now := hour.Add(time.Duration(minute) * time.Minute)
+		service.now = func() time.Time { return now }
+		summary, err := service.Summarize(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(summary, "EARLY_MARKER") != 1 || !strings.Contains(summary, "PREVIOUS_HOUR") ||
+			strings.Contains(
+				summary,
+				"LATE_MARKER",
+			) != (minute > 40) || strings.Contains(summary, "FUTURE_MARKER") || strings.Contains(summary, "PRIVATE_MARKER") {
+			t.Fatalf(
+				"summary at minute%d duplicated an hour or crossed the request's time/chat boundary: %s",
+				minute,
+				summary,
+			)
+		}
+		rows, err := idx.ListChatRollups(
+			t.Context(),
+			memoryindex.ChatScope{Channel: "telegram", ChatID: "-1"},
+			memoryindex.TimeWindow{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 2 || !rows[1].WindowEnd.Equal(now) {
+			t.Fatalf("persisted rollups at minute%d=%+v", minute, rows)
+		}
+		if err = idx.Close(); err != nil {
+			t.Fatal(err)
+		}
+		idx, err = memoryindex.Open(path, memoryindex.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestService_Summarize_ResolvesAccessibleGroupByLabel(t *testing.T) {
 	idx, err := memoryindex.Open(t.TempDir()+"\\index.sqlite", memoryindex.Config{
@@ -527,4 +598,97 @@ func TestService_StartupBackfill_SkipsShortRecentMessagesAndContinues(t *testing
 	}
 
 	t.Fatal("startup backfill did not reach older eligible observations")
+}
+
+func TestService_SearchReturnsEachObservationOnceAcrossLexicalAndSemanticResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+			return
+		}
+		data := make([]map[string]any, len(payload.Input))
+		for n := range data {
+			data[n] = map[string]any{"embedding": []float32{1, 0}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer server.Close()
+	idx, err := memoryindex.Open(filepath.Join(t.TempDir(), "index.sqlite"), memoryindex.Config{MaxSnippetChars: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	now := time.Now()
+	for _, sender := range []string{"alice", "bob"} {
+		err = idx.AddObservation(
+			t.Context(),
+			memoryindex.Observation{
+				SessionKey: "generation:" + sender,
+				Channel:    "telegram",
+				ChatID:     "-1",
+				PeerKind:   "group",
+				SenderID:   sender,
+				Role:       "user",
+				Content:    "bicycle " + strings.Repeat("long shared paragraph ", 20),
+				CreatedAt:  now.Add(-time.Minute),
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	embeddingCfg := config.MemoryEmbeddingConfig{Enabled: true, MinContentChars: 1, MaxBatch: 8}
+	embedder := NewEmbedder(
+		&config.ModelConfig{ModelName: "embed", Model: "embed", APIKey: "test", APIBase: server.URL},
+		embeddingCfg,
+	)
+	service := New(idx, config.MemoryIndexConfig{Enabled: true, MaxResults: 5, Embeddings: embeddingCfg}, embedder)
+	hits, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel: "telegram",
+			CurrentChatID:  "-1",
+			CurrentPeer:    "group",
+			Query:          "bicycle",
+			Limit:          5,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 || hits[0].SenderID == hits[1].SenderID {
+		t.Fatalf("same observation appeared twice or distinct observations were lost: %+v", hits)
+	}
+	fresh, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel:  "telegram",
+			CurrentChatID:   "-1",
+			CurrentPeer:     "group",
+			ExactSessionKey: "generation:bob",
+			Query:           "bicycle",
+			Limit:           5,
+		},
+	)
+	if err != nil || len(fresh) != 1 || fresh[0].SenderID != "bob" {
+		t.Fatalf("generation restriction leaked lexical or semantic sources: %+v, %v", fresh, err)
+	}
+	future, err := service.Search(
+		t.Context(),
+		SearchRequest{
+			CurrentChannel:  "telegram",
+			CurrentChatID:   "-1",
+			CurrentPeer:     "group",
+			ExactSessionKey: "generation:bob",
+			Since:           now,
+			Query:           "bicycle",
+			Limit:           5,
+		},
+	)
+	if err != nil || len(future) != 0 {
+		t.Fatalf("time restriction leaked lexical or semantic sources: %+v, %v", future, err)
+	}
 }

@@ -12,7 +12,7 @@ Reset commands are handled immediately while a request is active, including
 `/clear_inline` sent from a private chat during an inline request. Queued steering
 for the reset conversation is cleared, and the command receives its own reply.
 
-After reset, automatic archive retrieval and shared daily notes are excluded.
+After reset, automatic retrieval excludes observations from earlier conversation generations and shared daily notes. New observations belong to the fresh generation and remain available for automatic retrieval after restart; late writes from an older turn stay in its archived generation.
 Unclassified content in `memory/MEMORY.md` is also excluded: writing to that
 file alone does not establish that its content is intentionally retained.
 Saved facts are the content under an explicit `Saved facts` Markdown heading

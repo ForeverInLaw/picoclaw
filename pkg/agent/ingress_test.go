@@ -2,13 +2,20 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/memoryindex"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/session"
 )
 
 type ingressRequest struct {
@@ -150,6 +157,90 @@ func TestRunFinalReplyPreservesInboundMessageAndTopic(t *testing.T) {
 	}
 }
 
+func TestRunRejectsCapturedConversationResetBeforeTurnRegistration(t *testing.T) {
+	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	defer mb.Close()
+	agent := al.registry.GetDefaultAgent()
+	store := agent.Sessions.(*session.ConversationStore)
+	msg := directIngressMessage("stale captured request")
+	msg.SessionKey = "agent:main:registration-gap"
+	captured, _, err := store.CaptureTurn(msg.SessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResetConversation(msg.SessionKey); err != nil {
+		t.Fatal(err)
+	}
+	agent.Sessions = captured
+	provider := &retryScriptProvider{}
+	agent.Provider = provider
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- al.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	publishIncoming(t, mb, msg)
+	for {
+		select {
+		case event := <-sub.C:
+			if event.Kind != EventKindTurnEnd {
+				continue
+			}
+			payload := event.Payload.(TurnEndPayload)
+			if payload.Status != TurnEndStatusAborted || provider.calls != 0 {
+				t.Fatalf("stale captured turn status=%s model calls=%d", payload.Status, provider.calls)
+			}
+			select {
+			case reply := <-mb.OutboundChan():
+				t.Fatalf("stale captured turn replied: %+v", reply)
+			default:
+			}
+			return
+		case <-time.After(2 * time.Second):
+			t.Fatal("stale captured turn did not terminate")
+		}
+	}
+}
+
+func TestRunBoundsAggregatePendingRequestsAndKeepsResetResponsive(t *testing.T) {
+	_, mb, provider := startIngressLoop(t)
+	publishIncoming(t, mb, directIngressMessage("blocked private turn"))
+	_ = inboundRequest(t, provider)
+	for n := 0; n < 64; n++ {
+		publishIncoming(t, mb, selectedInlineMessage("42", fmt.Sprintf("accepted-%d", n), "queued selection"))
+	}
+	awaitInboundDrain(t, mb)
+	overflow := selectedInlineMessage("42", "rejected-first", "overflow")
+	overflow.MessageID = "overflow-ref"
+	publishIncoming(t, mb, overflow)
+	busy := finalOutbound(t, mb)
+	if busy.ChatID != overflow.ChatID || busy.ReplyToMessageID != overflow.MessageID ||
+		!strings.Contains(strings.ToLower(busy.Content), "busy") {
+		t.Fatalf("overflow must finish its original publication: %+v", busy)
+	}
+	publishIncoming(t, mb, directIngressMessage("/clear"))
+	reset := finalOutbound(t, mb)
+	if !strings.Contains(strings.ToLower(reset.Content), "clear") {
+		t.Fatalf("full queue blocked reset: %+v", reset)
+	}
+	_ = inboundRequest(t, provider)
+	publishIncoming(t, mb, selectedInlineMessage("42", "accepted-next", "new selection"))
+	publishIncoming(t, mb, selectedInlineMessage("42", "rejected-second", "new overflow"))
+	busy = finalOutbound(t, mb)
+	if busy.ChatID != "inline:rejected-second" || !strings.Contains(strings.ToLower(busy.Content), "busy") {
+		t.Fatalf("inherited queue and drainer must share one capacity: %+v", busy)
+	}
+	publishIncoming(t, mb, directIngressMessage("/clear_inline"))
+	reset = finalOutbound(t, mb)
+	if reset.ChatID != "42" || !strings.Contains(strings.ToLower(reset.Content), "reset") {
+		t.Fatalf("inline reset did not remain responsive: %+v", reset)
+	}
+}
+
 func TestRunQueuesSelectedInlineRequestsWithTheirOwnTransportAndContext(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -285,5 +376,303 @@ func TestRunStopWakesIdleLoop(t *testing.T) {
 		cancel()
 		<-done
 		t.Fatal("Stop left Run blocked on an idle bus")
+	}
+}
+
+func TestRunRetrievesFreshConversationAfterResetAndRestart(t *testing.T) {
+	for _, passive := range []bool{false, true} {
+		t.Run(fmt.Sprintf("passiveGroup=%t", passive), func(t *testing.T) {
+			initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+			defer cleanup()
+			initial.Close()
+			cfg.Agents.Defaults.MemoryIndex = config.MemoryIndexConfig{
+				Enabled:         true,
+				MaxResults:      5,
+				MaxSnippetChars: 500,
+				MinQueryChars:   3,
+			}
+			run := func() (*AgentLoop, *bus.MessageBus, *ingressProvider, func()) {
+				mb := bus.NewMessageBus()
+				p := &ingressProvider{requests: make(chan ingressRequest, 10)}
+				al := NewAgentLoop(cfg, mb, p)
+				ctx, cancel := context.WithCancel(t.Context())
+				done := make(chan error, 1)
+				go func() { done <- al.Run(ctx) }()
+				return al, mb, p, func() { cancel(); <-done; al.Close(); mb.Close() }
+			}
+			al, mb, p, stop := run()
+			msg := directIngressMessage("OLD_DIALOG bicycle")
+			msg.SessionKey = "agent:main:fresh-retrieval"
+			if passive {
+				msg.ChatID = "-123"
+				msg.Peer = bus.Peer{Kind: "group", ID: "-123"}
+			}
+			publishIncoming(t, mb, msg)
+			request := inboundRequest(t, p)
+			close(request.release)
+			_ = finalOutbound(t, mb)
+			msg.Content = "/clear"
+			publishIncoming(t, mb, msg)
+			_ = finalOutbound(t, mb)
+			agent := al.registry.GetDefaultAgent()
+			if err := agent.MemoryIndex.AddObservation(
+				t.Context(),
+				memoryindex.Observation{
+					SessionKey: msg.SessionKey,
+					Channel:    "telegram",
+					ChatID:     msg.ChatID,
+					PeerKind:   "direct",
+					Role:       "user",
+					Content:    "OLD_LATE_WRITE bicycle",
+					CreatedAt:  time.Now(),
+				},
+			); err != nil {
+				t.Fatal(err)
+			}
+			msg.Content = "FRESH_RETRIEVAL bicycle"
+			if passive {
+				msg.Metadata = map[string]string{"observe_only": "true"}
+			}
+			publishIncoming(t, mb, msg)
+			if passive {
+				deadline := time.Now().Add(time.Second)
+				for !strings.Contains(conversationInput(agent.Sessions.GetHistory(msg.SessionKey)), "FRESH_RETRIEVAL") {
+					if time.Now().After(deadline) {
+						t.Fatal("passive group message was not recorded")
+					}
+					time.Sleep(time.Millisecond)
+				}
+
+				for {
+					hits, err := agent.MemoryIndex.Search(
+						t.Context(),
+						memoryindex.SearchRequest{Query: "bicycle", Channel: "telegram", ChatID: msg.ChatID, Limit: 10},
+					)
+					found := false
+					for _, hit := range hits {
+						found = found || strings.Contains(hit.Content, "FRESH_RETRIEVAL")
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if found {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("passive message did not reach retrieval index")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				msg.Metadata = nil
+			} else {
+				request = inboundRequest(t, p)
+				close(request.release)
+				_ = finalOutbound(t, mb)
+			}
+			agent.Sessions.SetHistory(msg.SessionKey, nil)
+			if err := agent.Sessions.Save(msg.SessionKey); err != nil {
+				t.Fatal(err)
+			}
+			stop()
+			_, mb, p, stop = run()
+			defer stop()
+			msg.Content = "bicycle"
+			publishIncoming(t, mb, msg)
+			request = inboundRequest(t, p)
+			input := conversationInput(request.messages)
+			close(request.release)
+			_ = finalOutbound(t, mb)
+			if !strings.Contains(input, "RETRIEVED_MEMORY") || !strings.Contains(input, "FRESH_RETRIEVAL") ||
+				strings.Contains(input, "OLD_DIALOG") ||
+				strings.Contains(input, "OLD_LATE_WRITE") {
+				t.Fatalf(
+					"fresh conversation retrieval did not preserve its generation boundary across restart: %s",
+					input,
+				)
+			}
+		})
+	}
+}
+
+func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
+	for _, reference := range []string{"backup-alias", "anthropic/claude-backup", "claude-backup"} {
+		t.Run(reference, func(t *testing.T) {
+			var primaryCalls, backupCalls atomic.Int32
+			primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				primaryCalls.Add(1)
+				if r.Header.Get("Authorization") != "Bearer primary-key" {
+					t.Error("primary credentials changed")
+				}
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
+			}))
+			defer primary.Close()
+			backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				n := backupCalls.Add(1)
+				var body struct {
+					Model string `json:"model"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if body.Model != "claude-backup" || r.Header.Get("Authorization") != "Bearer backup-key" {
+					t.Errorf("fallback model/auth=%s/%s", body.Model, r.Header.Get("Authorization"))
+				}
+				if n == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
+					return
+				}
+				_, _ = w.Write(
+					[]byte(
+						`{"choices":[{"message":{"role":"assistant","content":"cross-provider recovered"},"finish_reason":"stop"}]}`,
+					),
+				)
+			}))
+			defer backup.Close()
+			initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+			defer cleanup()
+			initial.Close()
+			cfg.Agents.Defaults.Model = "primary-alias"
+			cfg.Agents.Defaults.ModelFallbacks = []string{reference}
+			cfg.ModelList = []config.ModelConfig{
+				{ModelName: "primary-alias", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL},
+				{
+					ModelName: "backup-alias",
+					Model:     "anthropic/claude-backup",
+					APIKey:    "backup-key",
+					APIBase:   backup.URL,
+				},
+			}
+			provider, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			mb := bus.NewMessageBus()
+			defer mb.Close()
+			al := NewAgentLoop(cfg, mb, provider)
+			defer al.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- al.Run(ctx) }()
+			defer func() { cancel(); <-done }()
+			publishIncoming(t, mb, directIngressMessage("recover through backup"))
+			out := finalOutbound(t, mb)
+			if primaryCalls.Load() != 1 || backupCalls.Load() != 2 || out.Content != "cross-provider recovered" {
+				t.Fatalf(
+					"fallback endpoint/attempts primary=%d backup=%d reply=%q",
+					primaryCalls.Load(),
+					backupCalls.Load(),
+					out.Content,
+				)
+			}
+		})
+	}
+}
+
+func TestRunResetControlsRemainResponsiveWithBackpressuredAcknowledgements(t *testing.T) {
+	al, mb, p := startIngressLoop(t)
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+	publishIncoming(t, mb, directIngressMessage("blocked turn"))
+	_ = inboundRequest(t, p)
+	for n := 0; n < 64; n++ {
+		if err := mb.PublishOutbound(
+			t.Context(),
+			bus.OutboundMessage{Channel: "telegram", ChatID: "42", Content: "queued output"},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publishIncoming(t, mb, directIngressMessage("/clear_inline"))
+	publishIncoming(t, mb, directIngressMessage("/clear"))
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case event := <-sub.C:
+			if event.Kind == EventKindTurnEnd && event.Payload.(TurnEndPayload).Status == TurnEndStatusAborted {
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("independent inline-reset acknowledgement blocked the subsequent active reset")
+		}
+	}
+}
+
+func TestRunDuplicateFallbackAliasPreservesSelectedProviderModelAndRetryClient(t *testing.T) {
+	var primaryCalls, firstCalls, secondCalls, mismatches atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryCalls.Add(1)
+		w.WriteHeader(503)
+		_, _ = w.Write([]byte(`{"error":{"message":"unavailable"}}`))
+	}))
+	defer primary.Close()
+	backupHandler := func(expectedModel, expectedKey string, calls *atomic.Int32) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body.Model != expectedModel || r.Header.Get("Authorization") != "Bearer "+expectedKey {
+				mismatches.Add(1)
+			}
+			if calls.Add(1)%2 == 1 {
+				w.WriteHeader(503)
+				_, _ = w.Write([]byte(`{"error":{"message":"unavailable"}}`))
+				return
+			}
+			_, _ = w.Write(
+				[]byte(
+					`{"choices":[{"message":{"role":"assistant","content":"duplicate alias recovered"},"finish_reason":"stop"}]}`,
+				),
+			)
+		}
+	}
+	first := httptest.NewServer(backupHandler("claude-first", "first-key", &firstCalls))
+	defer first.Close()
+	second := httptest.NewServer(backupHandler("gpt-second", "second-key", &secondCalls))
+	defer second.Close()
+	for run := 0; run < 2; run++ {
+		initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+		initial.Close()
+		cfg.Agents.Defaults.Model = "primary"
+		cfg.Agents.Defaults.ModelFallbacks = []string{"duplicated-backup"}
+		cfg.ModelList = []config.ModelConfig{
+			{ModelName: "primary", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL},
+			{ModelName: "duplicated-backup", Model: "anthropic/claude-first", APIKey: "first-key", APIBase: first.URL},
+			{ModelName: "duplicated-backup", Model: "openai/gpt-second", APIKey: "second-key", APIBase: second.URL},
+		}
+		provider, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		mb := bus.NewMessageBus()
+		al := NewAgentLoop(cfg, mb, provider)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- al.Run(ctx) }()
+		publishIncoming(t, mb, directIngressMessage("recover duplicated alias"))
+		out := finalOutbound(t, mb)
+		cancel()
+		<-done
+		al.Close()
+		mb.Close()
+		cleanup()
+		if out.Content != "duplicate alias recovered" || mismatches.Load() != 0 ||
+			primaryCalls.Load() != int32(run+1) ||
+			firstCalls.Load()+secondCalls.Load() != int32(2*(run+1)) {
+			t.Fatalf(
+				"selected alias config drifted: response=%q mismatches=%d calls=%d/%d/%d",
+				out.Content,
+				mismatches.Load(),
+				primaryCalls.Load(),
+				firstCalls.Load(),
+				secondCalls.Load(),
+			)
+		}
+	}
+	if firstCalls.Load() != 2 || secondCalls.Load() != 2 {
+		t.Fatalf("duplicate alias round-robin was not preserved: calls=%d/%d", firstCalls.Load(), secondCalls.Load())
 	}
 }
