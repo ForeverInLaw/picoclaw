@@ -83,9 +83,19 @@ func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*conf
 		return nil, fmt.Errorf("config is nil")
 	}
 
-	modelCfg, err := cfg.GetModelConfig(strings.TrimSpace(modelName))
+	modelName = strings.TrimSpace(modelName)
+	modelCfg, err := cfg.GetModelConfig(modelName)
 	if err != nil {
-		return nil, err
+		for _, candidate := range cfg.ModelList {
+			_, id := providers.ExtractProtocol(candidate.Model)
+			if candidate.Model == modelName || id == modelName {
+				modelCfg, err = cfg.GetModelConfig(candidate.ModelName)
+				break
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	clone := *modelCfg
