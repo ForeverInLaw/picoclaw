@@ -133,7 +133,7 @@ func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, 
 		}
 
 		// Try condensed with forced fanout
-		condensedID, err := e.compactCondensed(ctx, convID)
+		condensedID, err := e.compactCondensed(ctx, convID, true)
 		if err != nil {
 			return result, err
 		}
@@ -215,7 +215,7 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 			chunkEnd = i
 			accumTokens += items[i].TokenCount
 			// Stop accumulating once we reach the token budget
-			if accumTokens >= LeafChunkTokens {
+			if accumTokens >= LeafChunkTokens && chunkEnd-chunkStart+1 >= LeafMinFanout {
 				break
 			}
 		} else {
@@ -328,7 +328,8 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 }
 
 // compactCondensed compresses multiple summaries into one higher-level summary.
-func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64) (*string, error) {
+func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, force ...bool) (*string, error) {
+	forced := len(force) > 0 && force[0]
 	// Try ordinal-aware selection first (respects consecutive ordering)
 	var candidates []Summary
 
@@ -339,7 +340,7 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64) (
 	for _, depth := range depths {
 		var chunkAtDepth []Summary
 		var err2 error
-		chunkAtDepth, err2 = e.selectOldestChunkAtDepth(ctx, convID, depth)
+		chunkAtDepth, err2 = e.selectOldestChunkAtDepth(ctx, convID, depth, forced)
 		if err2 != nil {
 			continue
 		}
@@ -351,7 +352,7 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64) (
 
 	// Fallback to depth-grouping selection
 	if len(candidates) == 0 {
-		candidates, err = e.selectShallowestCondensationCandidate(ctx, convID, false)
+		candidates, err = e.selectShallowestCondensationCandidate(ctx, convID, forced)
 		if err != nil {
 			return nil, err
 		}
@@ -499,6 +500,7 @@ func (e *CompactionEngine) selectShallowestCondensationCandidate(
 
 	minFanout := CondensedMinFanout
 	if forced {
+		tailStartIdx = len(items)
 		minFanout = CondensedMinFanoutHard
 	}
 
@@ -547,7 +549,7 @@ func (e *CompactionEngine) selectShallowestCondensationCandidate(
 // summaries at the given depth. Stops at non-summary items, different depth, fresh tail, or
 // token overflow. Returns contiguous chunk of summaries.
 func (e *CompactionEngine) selectOldestChunkAtDepth(
-	ctx context.Context, convID int64, targetDepth int,
+	ctx context.Context, convID int64, targetDepth int, forced bool,
 ) ([]Summary, error) {
 	items, err := e.store.GetContextItems(ctx, convID)
 	if err != nil {
@@ -559,6 +561,9 @@ func (e *CompactionEngine) selectOldestChunkAtDepth(
 		tailStartIdx = 0
 	}
 
+	if forced {
+		tailStartIdx = len(items)
+	}
 	var chunk []Summary
 	accumTokens := 0
 
@@ -587,10 +592,17 @@ func (e *CompactionEngine) selectOldestChunkAtDepth(
 	// Min tokens check: spec line 808
 	// chunk tokens must be >= max(CondensedTargetTokens, LeafChunkTokens × 0.1) = 2000
 	minTokens := CondensedTargetTokens // 2000
-	if accumTokens < minTokens {
+	if accumTokens < minTokens && !forced {
 		return nil, nil
 	}
 
+	minFanout := CondensedMinFanout
+	if forced {
+		minFanout = CondensedMinFanoutHard
+	}
+	if len(chunk) < minFanout {
+		return nil, nil
+	}
 	return chunk, nil
 }
 
@@ -773,12 +785,15 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) {
 func formatMessagesForSummary(messages []Message) string {
 	var result string
 	for _, m := range messages {
-		ts := m.CreatedAt.Format("2006-01-02 15:04 MST")
+		ts := "unknown time"
+		if !m.CreatedAt.IsZero() {
+			ts = m.CreatedAt.Format("2006-01-02 15:04 MST")
+		}
 		content := m.Content
-		if content == "" && len(m.Parts) > 0 {
+		if len(m.Parts) > 0 {
 			content = partsToReadableContent(m.Parts)
 		}
-		result += fmt.Sprintf("[%s]\n%s\n\n", ts, content)
+		result += fmt.Sprintf("[%s; role=%s]\n%s\n\n", ts, m.Role, content)
 	}
 	return result
 }

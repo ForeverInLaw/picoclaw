@@ -150,12 +150,12 @@ func (t *shortContextTool) Execute(ctx context.Context, args map[string]any) *to
 					return e
 				}
 			}
-			children, e := store.GetSummaryChildren(ctx, id)
+			parents, e := store.GetSummaryParents(ctx, id)
 			if e != nil {
 				return e
 			}
-			for _, child := range children {
-				if e = expandSummary(child, depth+1); e != nil {
+			for _, parent := range parents {
+				if e = expandSummary(parent.SummaryID, depth+1); e != nil {
 					return e
 				}
 			}

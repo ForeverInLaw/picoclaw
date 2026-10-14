@@ -1084,6 +1084,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		}()
 
 		registry = NewAgentRegistry(cfg, provider)
+		if ctx.Err() != nil {
+			registry.Close()
+			registry = nil
+		}
 	}()
 
 	// Wait for completion or context cancellation
@@ -1101,6 +1105,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	// Check context again before proceeding
 	if err := ctx.Err(); err != nil {
+		registry.Close()
 		return fmt.Errorf("context canceled after registry creation: %w", err)
 	}
 
@@ -1124,21 +1129,14 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.hookRuntime.reset(al)
 	configureHookManagerFromConfig(al.hooks, cfg)
 
-	// Close old provider after releasing the lock
-	// This prevents blocking readers while closing
+	// Cancel and join memory workers before closing either their storage or
+	// their owning provider. Old generation views remain frozen during cleanup.
+	if oldRegistry != nil {
+		oldRegistry.Close()
+	}
 	if oldProvider, ok := extractProvider(oldRegistry); ok {
 		if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
-			// Give in-flight requests a moment to complete
-			// Use a reasonable timeout that balances cleanup vs resource usage
-			select {
-			case <-time.After(100 * time.Millisecond):
-				stateful.Close()
-			case <-ctx.Done():
-				// Context canceled, close immediately but log warning
-				logger.WarnCF("agent", "Context canceled during provider cleanup, forcing close",
-					map[string]any{"error": ctx.Err()})
-				stateful.Close()
-			}
+			stateful.Close()
 		}
 	}
 
@@ -2629,6 +2627,7 @@ turnLoop:
 			Content:          response.Content,
 			ContentPhase:     response.ContentPhase,
 			ReasoningContent: response.ReasoningContent,
+			ModelName:        llmModel,
 		}
 		hadToolCalls = true
 		for _, tc := range normalizedToolCalls {
@@ -3328,7 +3327,13 @@ func (al *AgentLoop) maybeSummarize(
 	if manager, ok := agent.ContextManager.(*seahorseContextManager); ok {
 		s := snapshotContext(agent, sessionKey)
 		if requestTokens > agent.ContextWindow*agent.SummarizeTokenPercent/100 {
-			manager.scheduleCompact(ctx, s, max(1, agent.ContextWindow-(requestTokens-estimateTokens(s.History))-512))
+			assembled, err := manager.Assemble(ctx, s, agent.ContextWindow)
+			if err != nil {
+				logger.WarnCF("agent", "Cannot prepare context compaction", map[string]any{"error": err.Error()})
+				return
+			}
+			contributors := max(0, requestTokens-estimateTokens(assembled.History))
+			manager.scheduleCompact(ctx, s, max(1, agent.ContextWindow*agent.SummarizeTokenPercent/100-contributors-512))
 		}
 		return
 	}

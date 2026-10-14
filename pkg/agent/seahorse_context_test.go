@@ -1,11 +1,17 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func TestSeahorseCompactsActiveContextWithoutDeletingCanonicalTranscript(t *testing.T) {
@@ -40,4 +46,348 @@ func TestSeahorseCompactsActiveContextWithoutDeletingCanonicalTranscript(t *test
 	if len(history) != 50 {
 		t.Fatalf("canonical transcript was truncated: %d", len(history))
 	}
+}
+
+// Requests and tool results are observed at the provider boundary, including
+// concurrent maintenance calls; scenarios never inspect manager internals.
+type sourceScenarioProvider struct {
+	mu             sync.Mutex
+	tool           string
+	args           map[string]any
+	grepOutput     string
+	expandOutput   string
+	lastInput      []providers.Message
+	summaryPrompts []string
+}
+
+func (p *sourceScenarioProvider) GetDefaultModel() string { return "test-model" }
+func (p *sourceScenarioProvider) Chat(ctx context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(messages) == 1 && messages[0].Role == "user" {
+		p.summaryPrompts = append(p.summaryPrompts, messages[0].Content)
+		return &providers.LLMResponse{Content: "COMPACT_SUMMARY"}, nil
+	}
+	p.lastInput = append([]providers.Message(nil), messages...)
+	last := messages[len(messages)-1]
+	if last.Role == "user" && last.Content == "query sources" {
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "lookup", Name: p.tool, Arguments: p.args}}}, nil
+	}
+	if last.Role == "tool" {
+		if strings.Contains(last.Content, `"total_messages"`) {
+			p.grepOutput = last.Content
+			var found struct {
+				Messages []struct {
+					ID string `json:"id"`
+				}
+				Summaries []struct {
+					ID string `json:"id"`
+				}
+			}
+			if err := json.Unmarshal([]byte(last.Content), &found); err != nil {
+				return nil, err
+			}
+			ids := []string{}
+			for _, match := range found.Messages {
+				ids = append(ids, match.ID)
+			}
+			for _, match := range found.Summaries {
+				ids = append(ids, match.ID)
+			}
+			if len(ids) > 0 {
+				return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "expand", Name: "short_expand", Arguments: map[string]any{"ids": ids}}}}, nil
+			}
+		} else {
+			p.expandOutput = last.Content
+		}
+	}
+	return &providers.LLMResponse{Content: "answer"}, nil
+}
+func newSeahorseScenarioLoop(t *testing.T, p providers.LLMProvider) (*AgentLoop, *config.Config) {
+	t.Helper()
+	base, cfg, mb, _, cleanup := newTestAgentLoop(t)
+	base.Close()
+	mb.Close()
+	cleanup()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "seahorse"
+	cfg.Agents.Defaults.ContextWindow = 128000
+	cfg.Agents.Defaults.MaxTokens = 256
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), p)
+	t.Cleanup(al.Close)
+	return al, cfg
+}
+func TestSeahorseScopedRetrievalPreservesMixedSourcesAcrossReopen(t *testing.T) {
+	p := &sourceScenarioProvider{tool: "short_grep", args: map[string]any{"pattern": "%probe%", "scope": "message"}}
+	al, cfg := newSeahorseScenarioLoop(t, p)
+	agent := al.GetRegistry().GetDefaultAgent()
+	key := inlineConversationKey("main", "42")
+	original := []providers.Message{
+		{Role: "user", Content: "probe question", SourceID: "telegram:original", CreatedAt: time.Date(2026, 4, 2, 13, 4, 5, 123, time.UTC)},
+		{Role: "assistant", Content: "probe text beside tool", ContentPhase: providers.ContentPhaseCommentary, SourceID: "answer:original", ModelName: "source-model", ReasoningContent: "retained reasoning", ToolCalls: []providers.ToolCall{{ID: "call_1", Type: "function", Name: "read_file", Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"evidence.txt"}`, ThoughtSignature: "opaque-signature"}}}},
+		{Role: "tool", Content: "probe " + strings.Repeat("complete-tool-result ", 500), ToolCallID: "call_1", SourceID: "tool:original"},
+		{Role: "user", Content: "probe media caption", Media: []string{"media://image-reference"}, SourceID: "media:original"},
+	}
+	for _, msg := range original {
+		agent.Sessions.AddFullMessage(key, msg)
+	}
+	if err := agent.Sessions.Save(key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "first", "query sources")); err != nil {
+		t.Fatal(err)
+	}
+	assertExpandedSources(t, p.expandOutput, original)
+	oldID := firstSourceID(t, p.grepOutput)
+	al.Close()
+	p = &sourceScenarioProvider{tool: "short_grep", args: map[string]any{"pattern": "%probe%", "scope": "message"}}
+	al = NewAgentLoop(cfg, bus.NewMessageBus(), p)
+	defer al.Close()
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "second", "query sources")); err != nil {
+		t.Fatal(err)
+	}
+	if firstSourceID(t, p.grepOutput) != oldID {
+		t.Fatal("reopen changed durable source identity")
+	}
+	assertExpandedSources(t, p.expandOutput, original)
+	p.tool = "short_expand"
+	p.args = map[string]any{"ids": []string{oldID}}
+	p.expandOutput = ""
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("99", "foreign", "query sources")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.expandOutput, "outside the captured conversation") {
+		t.Fatalf("foreign source accepted: %s", p.expandOutput)
+	}
+	p.tool = "short_grep"
+	p.args = map[string]any{"pattern": "%probe%", "all_conversations": true}
+	p.expandOutput = ""
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "bypass", "query sources")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.expandOutput, "unsupported scoped retrieval parameter") {
+		t.Fatalf("bypass accepted: %s", p.expandOutput)
+	}
+}
+func firstSourceID(t *testing.T, data string) string {
+	t.Helper()
+	var found struct {
+		Messages []struct {
+			ID string `json:"id"`
+		}
+	}
+	if err := json.Unmarshal([]byte(data), &found); err != nil {
+		t.Fatal(err)
+	}
+	if len(found.Messages) == 0 {
+		t.Fatal("no source matches")
+	}
+	return found.Messages[0].ID
+}
+func assertExpandedSources(t *testing.T, data string, original []providers.Message) {
+	t.Helper()
+	var result struct{ Messages []providers.Message }
+	if err := json.Unmarshal([]byte(data), &result); err != nil {
+		t.Fatalf("expand: %v: %s", err, data)
+	}
+	for _, want := range original {
+		found := false
+		for _, got := range result.Messages {
+			if got.SourceID == want.SourceID {
+				found = true
+				actual, _ := json.Marshal(got)
+				expected, _ := json.Marshal(want)
+				if string(actual) != string(expected) {
+					t.Errorf("source %s changed: got %+v", want.SourceID, got)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("source %s missing", want.SourceID)
+		}
+	}
+}
+
+func TestSeahorseSummaryPromptLabelsUnknownTimestampsAndIncludesMixedParts(t *testing.T) {
+	p := &sourceScenarioProvider{}
+	al, _ := newSeahorseScenarioLoop(t, p)
+	agent := al.GetRegistry().GetDefaultAgent()
+	agent.ContextWindow = 9000
+	key := inlineConversationKey("main", "42")
+	for i := 0; i < 12; i++ {
+		agent.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: strings.Repeat("source evidence ", 1000)})
+		agent.Sessions.AddFullMessage(key, providers.Message{Role: "assistant", Content: "text beside tool", ToolCalls: []providers.ToolCall{{ID: fmt.Sprint(i), Name: "evidence_call", Function: &providers.FunctionCall{Name: "evidence_call", Arguments: `{"path":"mixed-evidence"}`}}}})
+		agent.Sessions.AddFullMessage(key, providers.Message{Role: "tool", ToolCallID: fmt.Sprint(i), Content: "full evidence result"})
+	}
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "compressed", "next")); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.summaryPrompts) == 0 {
+		t.Fatal("compaction did not run")
+	}
+	prompt := strings.Join(p.summaryPrompts, "\n")
+	if strings.Contains(prompt, "0001-01-01") || !strings.Contains(prompt, "unknown time") {
+		t.Fatal("unknown provenance rendered as a historical date")
+	}
+	if !strings.Contains(prompt, "evidence_call") || !strings.Contains(prompt, "mixed-evidence") || !strings.Contains(prompt, "text beside tool") {
+		t.Fatal("mixed text/tool parts missing from summary input")
+	}
+}
+
+type blockedCompactionProvider struct {
+	sourceScenarioProvider
+	started  chan struct{}
+	canceled chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (p *blockedCompactionProvider) Chat(ctx context.Context, messages []providers.Message, defs []providers.ToolDefinition, model string, opts map[string]any) (*providers.LLMResponse, error) {
+	if len(messages) == 1 && messages[0].Role == "user" {
+		p.once.Do(func() { close(p.started) })
+		<-ctx.Done()
+		close(p.canceled)
+		<-p.release
+		return &providers.LLMResponse{Content: "OLD_LATE_SUMMARY"}, nil
+	}
+	return p.sourceScenarioProvider.Chat(ctx, messages, defs, model, opts)
+}
+func TestSeahorseResetCancelsCompactionWithoutWaitingForProviderAndFencesLateSummary(t *testing.T) {
+	p := &blockedCompactionProvider{started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	al, cfg := newSeahorseScenarioLoop(t, p)
+	msg := bus.InboundMessage{Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Sender: bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"}, Peer: bus.Peer{Kind: "direct", ID: "42"}, Content: "OLD_DIALOG"}
+	if _, err := al.processMessage(t.Context(), msg); err != nil {
+		t.Fatal(err)
+	}
+	route, _, err := al.resolveMessageRoute(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := al.GetRegistry().GetDefaultAgent()
+	agent.ContextWindow = 9000
+	for i := 0; i < 20; i++ {
+		agent.Sessions.AddFullMessage(route.SessionKey, providers.Message{Role: "user", Content: strings.Repeat("OLD_SOURCE ", 500)})
+		agent.Sessions.AddFullMessage(route.SessionKey, providers.Message{Role: "assistant", Content: "old answer"})
+	}
+	done := make(chan error, 1)
+	go func() {
+		next := msg
+		next.Content = "trigger compression"
+		_, e := al.processMessage(t.Context(), next)
+		done <- e
+	}()
+	awaitSignal(t, p.started, "compaction start")
+	reset := msg
+	reset.Content = "/clear"
+	response, err := al.processMessage(t.Context(), reset)
+	if err != nil || !strings.Contains(response, "cleared") {
+		t.Fatalf("reset = %q %v", response, err)
+	}
+	awaitSignal(t, p.canceled, "compaction cancellation")
+	close(p.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old turn did not stop")
+	}
+	al.Close()
+	fresh := &sourceScenarioProvider{}
+	al = NewAgentLoop(cfg, bus.NewMessageBus(), fresh)
+	defer al.Close()
+	msg.Content = "new conversation"
+	if _, err = al.processMessage(t.Context(), msg); err != nil {
+		t.Fatal(err)
+	}
+	input := conversationInput(fresh.lastInput)
+	for _, old := range []string{"OLD_DIALOG", "OLD_SOURCE", "OLD_LATE_SUMMARY"} {
+		if strings.Contains(input, old) {
+			t.Errorf("reset leaked %s", old)
+		}
+	}
+}
+func TestSeahorseCloseWaitsForCanceledCompactionBeforeStorageClose(t *testing.T) {
+	p := &blockedCompactionProvider{started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	al, _ := newSeahorseScenarioLoop(t, p)
+	agent := al.GetRegistry().GetDefaultAgent()
+	agent.ContextWindow = 9000
+	key := inlineConversationKey("main", "42")
+	for i := 0; i < 20; i++ {
+		agent.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: strings.Repeat("source ", 1000)})
+		agent.Sessions.AddFullMessage(key, providers.Message{Role: "assistant", Content: "answer"})
+	}
+	turnDone := make(chan struct{})
+	go func() {
+		defer close(turnDone)
+		_, _ = al.processMessage(t.Context(), selectedInlineMessage("42", "close", "next"))
+	}()
+	awaitSignal(t, p.started, "compaction start")
+	closed := make(chan struct{})
+	go func() { al.Close(); close(closed) }()
+	awaitSignal(t, p.canceled, "close cancellation")
+	select {
+	case <-closed:
+		t.Fatal("storage closed while provider worker was still running")
+	default:
+	}
+	close(p.release)
+	awaitSignal(t, closed, "manager close")
+	awaitSignal(t, turnDone, "turn completion")
+}
+func awaitSignal(t *testing.T, ch <-chan struct{}, operation string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", operation)
+	}
+}
+
+func TestSeahorseReloadCancelsAndWaitsForOldWorkers(t *testing.T) {
+	p := &blockedCompactionProvider{started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	al, cfg := newSeahorseScenarioLoop(t, p)
+	agent := al.GetRegistry().GetDefaultAgent()
+	agent.ContextWindow = 9000
+	key := inlineConversationKey("main", "42")
+	for i := 0; i < 20; i++ {
+		agent.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: strings.Repeat("reload source ", 1000)})
+		agent.Sessions.AddFullMessage(key, providers.Message{Role: "assistant", Content: "answer"})
+	}
+	runCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var release sync.Once
+	defer release.Do(func() { close(p.release) })
+	turnDone := make(chan struct{})
+	go func() {
+		defer close(turnDone)
+		_, _ = al.processMessage(runCtx, selectedInlineMessage("42", "reload", "next"))
+	}()
+	awaitSignal(t, p.started, "compaction start")
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- al.ReloadProviderAndConfig(t.Context(), &sourceScenarioProvider{}, cfg) }()
+	select {
+	case <-p.canceled:
+	case err := <-reloaded:
+		cancel()
+		t.Fatalf("reload finished before canceling old workers: %v", err)
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("reload did not cancel old worker")
+	}
+	select {
+	case err := <-reloaded:
+		t.Fatalf("reload finished while old worker was still running: %v", err)
+	default:
+	}
+	release.Do(func() { close(p.release) })
+	select {
+	case err := <-reloaded:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reload did not finish")
+	}
+	awaitSignal(t, turnDone, "old turn completion")
 }

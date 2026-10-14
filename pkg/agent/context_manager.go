@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"errors"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/seahorse"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -203,6 +205,9 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, s ContextSnapshot
 }
 
 func (m *seahorseContextManager) Compact(ctx context.Context, s ContextSnapshot, budget int) error {
+	if err := m.Ingest(ctx, s); err != nil {
+		return err
+	}
 	ctx, done, err := m.begin(ctx, s)
 	if err != nil {
 		return err
@@ -416,5 +421,11 @@ func (m *seahorseContextManager) scheduleCompact(ctx context.Context, s ContextS
 		m.background.Delete(s.ScopeKey)
 		return
 	}
-	go func() { defer done(); defer m.background.Delete(s.ScopeKey); _ = m.Compact(tracked, s, budget) }()
+	go func() {
+		defer done()
+		defer m.background.Delete(s.ScopeKey)
+		if err := m.Compact(tracked, s, budget); err != nil && !errors.Is(err, context.Canceled) {
+			logger.WarnCF("agent", "Context compaction failed", map[string]any{"session_key": s.SessionKey, "error": err.Error()})
+		}
+	}()
 }

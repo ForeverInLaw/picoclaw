@@ -83,7 +83,7 @@ type ContentBlock struct {
 type Message struct {
 	SourceID         string         `json:"source_id,omitempty"`
 	ModelName        string         `json:"model_name,omitempty"`
-	CreatedAt        time.Time      `json:"created_at,omitempty"`
+	CreatedAt        time.Time      `json:"created_at,omitzero"`
 	ContentPhase     ContentPhase   `json:"content_phase,omitempty"`
 	Role             string         `json:"role"`
 	Content          string         `json:"content"`
