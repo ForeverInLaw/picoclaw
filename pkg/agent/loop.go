@@ -1989,7 +1989,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		)
 	}
 
-	activeProvider, activeCandidates, activeModel := al.selectCandidates(ts.agent, ts.userMessage, messages)
+	activeProvider, activeCandidates := ts.agent.Provider, ts.agent.Candidates
+	activeModel := resolvedCandidateModel(activeCandidates, ts.agent.Model)
+	if !cfg.IsChannelType(ts.channel, "pico") || len(ts.media) == 0 {
+		activeProvider, activeCandidates, activeModel = al.selectCandidates(ts.agent, ts.userMessage, messages)
+	}
 	resolveCandidateProvider := candidateProviderResolver(al.cfg, ts.agent.Workspace, activeProvider, activeCandidates)
 	if len(activeCandidates) > 0 {
 		resolvedProvider, err := resolveCandidateProvider(activeCandidates[0])

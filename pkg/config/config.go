@@ -683,16 +683,17 @@ type WeixinConfig struct {
 }
 
 type PicoConfig struct {
-	Enabled         bool                `json:"enabled"                     env:"PICOCLAW_CHANNELS_PICO_ENABLED"`
-	Token           string              `json:"token"                       env:"PICOCLAW_CHANNELS_PICO_TOKEN"`
-	AllowTokenQuery bool                `json:"allow_token_query,omitempty"`
-	AllowOrigins    []string            `json:"allow_origins,omitempty"`
-	PingInterval    int                 `json:"ping_interval,omitempty"`
-	ReadTimeout     int                 `json:"read_timeout,omitempty"`
-	WriteTimeout    int                 `json:"write_timeout,omitempty"`
-	MaxConnections  int                 `json:"max_connections,omitempty"`
-	AllowFrom       FlexibleStringSlice `json:"allow_from"                  env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
-	Placeholder     PlaceholderConfig   `json:"placeholder,omitempty"`
+	Enabled           bool                `json:"enabled"                       env:"PICOCLAW_CHANNELS_PICO_ENABLED"`
+	Token             string              `json:"token"                         env:"PICOCLAW_CHANNELS_PICO_TOKEN"`
+	AllowTokenQuery   bool                `json:"allow_token_query,omitempty"`
+	AllowOrigins      []string            `json:"allow_origins,omitempty"`
+	AllowedImageTypes []string            `json:"allowed_image_types,omitempty"`
+	PingInterval      int                 `json:"ping_interval,omitempty"`
+	ReadTimeout       int                 `json:"read_timeout,omitempty"`
+	WriteTimeout      int                 `json:"write_timeout,omitempty"`
+	MaxConnections    int                 `json:"max_connections,omitempty"`
+	AllowFrom         FlexibleStringSlice `json:"allow_from"                    env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
+	Placeholder       PlaceholderConfig   `json:"placeholder,omitempty"`
 }
 
 type PicoClientConfig struct {

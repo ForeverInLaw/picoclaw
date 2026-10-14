@@ -360,6 +360,9 @@ func (m *Manager) initChannel(name, channelType string, cfg *config.Config) {
 			}
 		}
 		// Inject PlaceholderRecorder if channel supports it
+		if setter, ok := ch.(interface{ SetMaxMediaSize(size int) }); ok {
+			setter.SetMaxMediaSize(cfg.Agents.Defaults.GetMaxMediaSize())
+		}
 		if setter, ok := ch.(interface{ SetPlaceholderRecorder(r PlaceholderRecorder) }); ok {
 			setter.SetPlaceholderRecorder(m)
 		}

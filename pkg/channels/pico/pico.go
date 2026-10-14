@@ -58,13 +58,14 @@ func (pc *picoConn) close() {
 // It serves as the reference implementation for all optional capability interfaces.
 type PicoChannel struct {
 	*channels.BaseChannel
-	config      config.PicoConfig
-	upgrader    websocket.Upgrader
-	connections sync.Map // connID → *picoConn
-	connCount   atomic.Int32
-	ctx         context.Context
-	cancel      context.CancelFunc
-	replay      picoReplay
+	config       config.PicoConfig
+	upgrader     websocket.Upgrader
+	connections  sync.Map // connID → *picoConn
+	connCount    atomic.Int32
+	ctx          context.Context
+	cancel       context.CancelFunc
+	replay       picoReplay
+	maxMediaSize int
 }
 
 // NewPicoChannel creates a new Pico Protocol channel.
@@ -141,6 +142,10 @@ func (c *PicoChannel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/ws" || path == "/ws/":
 		c.handleWebSocket(w, r)
+	case path == "/uploads":
+		c.handleUpload(w, r)
+	case strings.HasPrefix(path, "/media/"):
+		c.handleUploadedMedia(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -487,7 +492,14 @@ func (c *PicoChannel) handleMessage(pc *picoConn, msg PicoMessage) {
 // handleMessageSend processes an inbound message.send from a client.
 func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	content, _ := msg.Payload["content"].(string)
-	if strings.TrimSpace(content) == "" {
+	refs, err := c.inputImages(msg.Payload["media"], pc.sessionID)
+	if err != nil {
+		frame := newError("invalid_media", err.Error())
+		frame.Payload["reply_to_message_id"] = msg.ID
+		_ = pc.writeJSON(frame)
+		return
+	}
+	if strings.TrimSpace(content) == "" && len(refs) == 0 {
 		errMsg := newError("empty_content", "message content is empty")
 		pc.writeJSON(errMsg)
 		return
@@ -496,6 +508,10 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	sessionID := msg.SessionID
 	if sessionID == "" {
 		sessionID = pc.sessionID
+	}
+	if sessionID != pc.sessionID {
+		_ = pc.writeJSON(newError("invalid_session", "message session does not match this connection"))
+		return
 	}
 
 	chatID := "pico:" + sessionID
@@ -526,9 +542,16 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	if msg.ID == "" {
 		msg.ID = uuid.NewString()
 	}
+	refs, err = c.admitImages(refs, sessionID, chatID, msg.ID)
+	if err != nil {
+		frame := newError("invalid_media", "Image is no longer available. Upload it again.")
+		frame.Payload["reply_to_message_id"] = msg.ID
+		_ = pc.writeJSON(frame)
+		return
+	}
 	c.replay.recordRequest(sessionID, msg.ID)
 
-	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, content, nil, metadata, sender)
+	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, content, refs, metadata, sender)
 }
 
 // truncate truncates a string to maxLen runes.

@@ -12,7 +12,7 @@ func TestDashboardProtectsHTTPWebSocketAndMedia(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) { t.Fatal("unauthenticated request reached dashboard") },
 	)
 	h := LauncherDashboardAuth(LauncherDashboardAuthConfig{Sessions: NewLauncherDashboardSessions()}, next)
-	for _, route := range []string{"/api/config", "/pico/ws", "/media/file.png", "/api/media/file.png", "/assets/../api/config"} {
+	for _, route := range []string{"/api/config", "/pico/ws", "/pico/uploads", "/pico/media/file", "/media/file.png", "/api/media/file.png", "/assets/../api/config"} {
 		t.Run(route, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest("GET", route, nil)
