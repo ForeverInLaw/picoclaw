@@ -442,7 +442,7 @@ func TestMCPCLIUpdatePreservesUnspecifiedServerOptionsAndRemoveReopens(t *testin
 	require.Equal(t, ".env.mcp", local.EnvFile)
 	require.True(t, *local.Deferred)
 	require.Equal(t, []string{"-u", "server.py"}, local.Args)
-	output, err = executeMCP(t, "update", "remote", "https://replacement.test/mcp", "--header", "X-Mode=updated")
+	output, err = executeMCP(t, "update", "remote", "https://replacement.test/mcp", "--header", "x-mode=updated")
 	require.NoError(t, err, output)
 	reopened, err = config.LoadConfig(path)
 	require.NoError(t, err)

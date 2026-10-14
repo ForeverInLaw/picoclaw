@@ -3,6 +3,7 @@ package mcp
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -122,6 +123,13 @@ func newAddCommand(update bool) *cobra.Command {
 			server.URL = args[1]
 			values, parseErr := assignments(headers, true)
 			err = parseErr
+			for key := range values {
+				for previous := range server.Headers {
+					if strings.EqualFold(key, previous) {
+						delete(server.Headers, previous)
+					}
+				}
+			}
 			server.Headers = mergeAssignments(server.Headers, values)
 			server.Command, server.Args, server.EnvFile, server.Env = "", nil, "", nil
 		default:
@@ -198,6 +206,7 @@ func assignments(values []string, header bool) (map[string]string, error) {
 			return nil, fmt.Errorf("invalid assignment; use KEY=value for env or Name: Value for headers")
 		}
 		if header {
+			key = http.CanonicalHeaderKey(key)
 			value = strings.TrimSpace(value)
 		}
 		result[key] = value
