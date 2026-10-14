@@ -25,9 +25,9 @@ func TestToolFeedbackStreamsIntoNewMessageAfterActivity(t *testing.T) {
 	channel.config.Channels.Telegram.Streaming.ThrottleSeconds = 0
 	ctx := bus.WithStreamReplyTo(t.Context(), "42")
 	require.NoError(t, channel.SendProgress(ctx, bus.OutboundMessage{
-		ChatID: "123/7", Progress: &bus.ProgressMessage{
+		ChatID: "123/7", ReplyToMessageID: "42", Progress: &bus.ProgressMessage{
 			RequestID: "request", ActionID: "tool", Tool: "web_search",
-			Kind: bus.ProgressTool, State: bus.ProgressCompleted, Result: "Found results",
+			Kind: bus.ProgressTool, State: bus.ProgressStarted,
 		},
 	}))
 	stream, err := channel.BeginStream(ctx, "123/7")

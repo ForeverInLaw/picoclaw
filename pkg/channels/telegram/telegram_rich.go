@@ -10,7 +10,6 @@ import (
 
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
-	tu "github.com/mymmrac/telego/telegoutil"
 
 	"github.com/sipeed/picoclaw/pkg/channels"
 )
@@ -167,27 +166,4 @@ func (c *TelegramChannel) sendRichReply(
 ) (int, error) {
 	firstID, _, err := c.deliverReply(ctx, chatID, threadID, replyTo, content, 0)
 	return firstID, err
-}
-
-func (c *TelegramChannel) sendPlainReply(
-	ctx context.Context,
-	chatID int64,
-	threadID int,
-	replyTo, content string,
-) (*telego.Message, error) {
-	var first *telego.Message
-	for _, chunk := range channels.SplitMessage(content, telegramInlineMessageLimit) {
-		params := tu.Message(tu.ID(chatID), chunk)
-		params.MessageThreadID = threadID
-		params.ReplyParameters = replyParameters(replyTo)
-		message, err := c.bot.SendMessage(ctx, params)
-		if err != nil {
-			return first, err
-		}
-		if first == nil {
-			first = message
-		}
-		replyTo = ""
-	}
-	return first, nil
 }

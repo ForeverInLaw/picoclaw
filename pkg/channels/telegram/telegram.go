@@ -181,6 +181,11 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 func (c *TelegramChannel) Stop(ctx context.Context) error {
 	logger.InfoC("telegram", "Stopping Telegram bot...")
 	c.SetRunning(false)
+	c.progressMu.Lock()
+	for _, entry := range c.activities {
+		entry.resetBubble()
+	}
+	c.progressMu.Unlock()
 	c.flushAllBatches(ctx)
 
 	// Stop the bot handler
@@ -271,6 +276,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 	if err != nil {
 		return fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)
 	}
+	c.finishActivities(ctx, msg.ChatID, msg.ReplyToMessageID, msg.DeliveryID != "")
 	_, err = c.sendRichReply(ctx, chatID, threadID, msg.ReplyToMessageID, msg.Content)
 	return err
 }

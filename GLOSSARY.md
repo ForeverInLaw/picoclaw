@@ -8,7 +8,7 @@ Picoclaw provides assistant conversations through chat channels and Telegram inl
 A Telegram user's ongoing conversation with the assistant through inline calls, shared across the chats where that user invokes the bot. It is separate from the user's direct conversation and from group conversations.
 
 **Tool activity message**:
-A chat message representing one action performed by an assistant tool and its outcome. Actions include shell commands, file operations, web searches, and other tool calls.
+A chat message showing actions performed by assistant tools, such as shell commands, file operations, and web searches. A channel may group consecutive actions into one activity message or show each action and its outcome separately.
 
 **Conversation reset**:
 The start of a new conversation without the previous dialog or its notes being automatically recalled. Saved facts remain available, and archived dialogs remain accessible through an explicit request.
