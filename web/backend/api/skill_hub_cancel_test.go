@@ -25,7 +25,7 @@ func TestSkillHubCanceledDownloadNeverActivatesSkill(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).
-			Encode(map[string]any{"slug": "cancelled", "latestVersion": map[string]string{"version": "1"}})
+			Encode(map[string]any{"slug": "canceled", "latestVersion": map[string]string{"version": "1"}})
 	}))
 	defer registry.Close()
 	cfg := config.DefaultConfig()
@@ -46,7 +46,7 @@ func TestSkillHubCanceledDownloadNeverActivatesSkill(t *testing.T) {
 		ctx,
 		http.MethodPost,
 		server.URL+"/api/skills/hub/install",
-		strings.NewReader(`{"slug":"cancelled","registry":"clawhub"}`),
+		strings.NewReader(`{"slug":"canceled","registry":"clawhub"}`),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestSkillHubCanceledDownloadNeverActivatesSkill(t *testing.T) {
 	}
 	defer res.Body.Close()
 	data, err := io.ReadAll(res.Body)
-	if err != nil || strings.Contains(string(data), `"name":"cancelled"`) {
+	if err != nil || strings.Contains(string(data), `"name":"canceled"`) {
 		t.Fatal("canceled skill activated", err)
 	}
 }
