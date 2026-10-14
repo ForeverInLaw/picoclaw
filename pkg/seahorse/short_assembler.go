@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/tokenizer"
 )
 
 // escapeXML escapes special characters for safe inclusion in XML content.
@@ -25,6 +27,7 @@ type resolvedItem struct {
 	itemType   string // "message" or "summary"
 	message    *Message
 	summary    *Summary
+	summaryXML string
 	tokenCount int
 }
 
@@ -53,6 +56,10 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 		}
 		resolved[i] = r
 	}
+	budget := input.Budget
+	if guidance := summaryGuidance(resolved); guidance != "" {
+		budget = max(0, budget-tokenizer.EstimateMessageTokens(providers.Message{Content: guidance}))
+	}
 
 	// Split into evictable prefix and protected fresh tail
 	tailStart := len(resolved) - FreshTailCount
@@ -72,11 +79,11 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 	// provider-safe boundaries. The rebuild path later sanitizes leading
 	// assistant(tool_calls)/tool messages, so splitting the active turn here can
 	// silently discard the very context we are trying to protect.
-	if freshTailTokens > input.Budget {
+	if freshTailTokens > budget {
 		originalTailCount := len(freshTail)
 		originalFreshTailTokens := freshTailTokens
 		var preservedActiveTurn bool
-		freshTail, freshTailTokens, preservedActiveTurn = trimFreshTailToSafeBudget(freshTail, input.Budget)
+		freshTail, freshTailTokens, preservedActiveTurn = trimFreshTailToSafeBudget(freshTail, budget)
 		logFields := map[string]any{
 			"budget":                input.Budget,
 			"fresh_tail_tokens":     freshTailTokens,
@@ -91,7 +98,7 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 			logger.InfoCF("seahorse", "assemble: trimmed fresh tail to safe boundary", logFields)
 		}
 	}
-	remainingBudget := input.Budget - freshTailTokens
+	remainingBudget := budget - freshTailTokens
 	if remainingBudget < 0 {
 		remainingBudget = 0
 	}
@@ -129,11 +136,9 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 
 	// Build result
 	var messages []Message
-	var summaries []Summary
+	var summaryParts []string
 	var sourceIDs []string
 	totalTokens := 0
-	maxDepth := 0
-	condensedCount := 0
 
 	for _, r := range final {
 		totalTokens += r.tokenCount
@@ -141,49 +146,13 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 			messages = append(messages, *r.message)
 			sourceIDs = append(sourceIDs, fmt.Sprintf("msg:%d", r.message.ID))
 		} else if r.itemType == "summary" && r.summary != nil {
-			summaries = append(summaries, *r.summary)
-			if r.summary.Depth > maxDepth {
-				maxDepth = r.summary.Depth
-			}
-			if r.summary.Kind == SummaryKindCondensed {
-				condensedCount++
+			if r.summaryXML != "" {
+				summaryParts = append(summaryParts, r.summaryXML)
 			}
 		}
 	}
 
-	// Build depth-aware system prompt addition
-	systemPromptAddition := ""
-	if len(summaries) > 0 {
-		if maxDepth >= 2 || condensedCount >= 2 {
-			systemPromptAddition = "Your context has been heavily compressed through multi-level summarization.\n" +
-				"- Do NOT assert specific facts (commands, SHAs, paths, timestamps) from summaries without expanding.\n" +
-				"- When uncertain, use short_expand to recover original detail before making claims.\n" +
-				"- Tool escalation: short_grep → short_expand"
-		} else {
-			systemPromptAddition = "Some earlier messages have been summarized. Use short_expand to recover details if needed."
-		}
-	}
-
-	// Build Summary field: all XML summaries + system prompt addition
-	var summaryParts []string
-	for _, sum := range summaries {
-		if sum.Content == "" {
-			continue
-		}
-		// Load parent IDs for XML formatting
-		parentSummaries, err := a.store.GetSummaryParents(ctx, sum.SummaryID)
-		if err != nil {
-			logger.WarnCF("seahorse", "assemble: get summary parents", map[string]any{
-				"summary_id": sum.SummaryID,
-				"error":      err.Error(),
-			})
-		}
-		var parentIDs []string
-		for _, ps := range parentSummaries {
-			parentIDs = append(parentIDs, ps.SummaryID)
-		}
-		summaryParts = append(summaryParts, FormatSummaryXML(&sum, parentIDs))
-	}
+	systemPromptAddition := summaryGuidance(final)
 	summary := strings.Join(summaryParts, "\n\n")
 	if systemPromptAddition != "" {
 		if summary != "" {
@@ -196,6 +165,30 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 		Messages: messages,
 		Summary:  summary,
 	}, nil
+}
+
+func summaryGuidance(items []resolvedItem) string {
+	count, maxDepth, condensedCount := 0, 0, 0
+	for _, item := range items {
+		if item.summary == nil {
+			continue
+		}
+		count++
+		maxDepth = max(maxDepth, item.summary.Depth)
+		if item.summary.Kind == SummaryKindCondensed {
+			condensedCount++
+		}
+	}
+	if count == 0 {
+		return ""
+	}
+	if maxDepth >= 2 || condensedCount >= 2 {
+		return "Your context has been heavily compressed through multi-level summarization.\n" +
+			"- Do NOT assert specific facts (commands, SHAs, paths, timestamps) from summaries without expanding.\n" +
+			"- When uncertain, use short_expand to recover original detail before making claims.\n" +
+			"- Tool escalation: short_grep → short_expand"
+	}
+	return "Some earlier messages have been summarized. Use short_expand to recover details if needed."
 }
 
 func trimFreshTailToSafeBudget(tail []resolvedItem, budget int) ([]resolvedItem, int, bool) {
@@ -301,10 +294,24 @@ func (a *Assembler) resolveItem(ctx context.Context, item ContextItem) (resolved
 		if tokens == 0 {
 			tokens = sum.TokenCount
 		}
+		var formatted string
+		if sum.Content != "" {
+			parents, err := a.store.GetSummaryParents(ctx, sum.SummaryID)
+			if err != nil {
+				logger.WarnCF("seahorse", "assemble: get summary parents", map[string]any{"summary_id": sum.SummaryID, "error": err.Error()})
+			}
+			var parentIDs []string
+			for _, parent := range parents {
+				parentIDs = append(parentIDs, parent.SummaryID)
+			}
+			formatted = FormatSummaryXML(sum, parentIDs)
+			tokens = max(tokens, tokenizer.EstimateMessageTokens(providers.Message{Content: formatted}))
+		}
 		return resolvedItem{
 			ordinal:    item.Ordinal,
 			itemType:   "summary",
 			summary:    sum,
+			summaryXML: formatted,
 			tokenCount: tokens,
 		}, nil
 	}

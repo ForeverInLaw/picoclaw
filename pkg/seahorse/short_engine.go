@@ -219,6 +219,9 @@ func (e *Engine) initAssemblerOnce() {
 // ClearSession removes all stored data for a session (messages, summaries, context).
 // If the session has no prior seahorse record, it is a no-op.
 func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
+	mu := e.getSessionMutex(sessionKey)
+	mu.Lock()
+	defer mu.Unlock()
 	conv, err := e.store.GetConversationBySessionKey(ctx, sessionKey)
 	if err != nil {
 		return err
