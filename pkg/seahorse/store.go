@@ -894,6 +894,12 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 
 	// Delete in child→parent order. FTS tables (messages_fts, summaries_fts) are
 	// kept in sync by DELETE triggers, so we just delete from the parent tables.
+	if _, err := tx.ExecContext(ctx, "DELETE FROM context_checkpoints WHERE conversation_id = ?", convID); err != nil {
+		return fmt.Errorf("context_checkpoints: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM context_imports WHERE conversation_id = ?", convID); err != nil {
+		return fmt.Errorf("context_imports: %w", err)
+	}
 
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM context_items WHERE conversation_id = ?", convID); err != nil {
