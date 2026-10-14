@@ -1730,8 +1730,8 @@ func generateSummaryID(content string, t time.Time) string {
 }
 
 func isUniqueViolation(err error) bool {
-	return err != nil && (contains(err.Error(), "UNIQUE constraint failed") ||
-		contains(err.Error(), "constraint failed"))
+	return err != nil && (strings.Contains(err.Error(), "UNIQUE constraint failed") ||
+		strings.Contains(err.Error(), "constraint failed"))
 }
 
 func normalizeMessageCreatedAt(createdAt time.Time) time.Time {
@@ -1748,19 +1748,6 @@ func formatSQLiteTime(t time.Time) string {
 func parseSQLiteTime(raw string) time.Time {
 	parsed, _ := time.Parse(sqliteTimeLayout, raw)
 	return parsed
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && searchSubstring(s, sub)
-}
-
-func searchSubstring(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
 
 func nullString(s string) sql.NullString {

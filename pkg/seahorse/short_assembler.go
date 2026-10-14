@@ -157,10 +157,10 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 		if maxDepth >= 2 || condensedCount >= 2 {
 			systemPromptAddition = "Your context has been heavily compressed through multi-level summarization.\n" +
 				"- Do NOT assert specific facts (commands, SHAs, paths, timestamps) from summaries without expanding.\n" +
-				"- When uncertain, use expand to recover original detail before making claims.\n" +
-				"- Tool escalation: grep \xe2\x86\x92 describe \xe2\x86\x92 expand"
+				"- When uncertain, use short_expand to recover original detail before making claims.\n" +
+				"- Tool escalation: short_grep → short_expand"
 		} else {
-			systemPromptAddition = "Some earlier messages have been summarized. Use expand tools to recover details if needed."
+			systemPromptAddition = "Some earlier messages have been summarized. Use short_expand to recover details if needed."
 		}
 	}
 
