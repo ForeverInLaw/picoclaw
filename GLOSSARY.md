@@ -16,6 +16,9 @@ The start of a new conversation without the previous dialog or its notes being a
 **Saved fact**:
 Information intentionally retained beyond a single conversation, distinct from the conversation's messages and temporary notes.
 
+**MCP artifact**:
+A complete tool text result retained behind an explicit reference owned by its agent and base conversation. It survives Conversation reset and restart until an operator explicitly removes it; its contents are recalled only through authorized access.
+
 **Active context**:
 The current conversation evidence prepared for the assistant's next answer, including recent messages and summaries of earlier messages.
 
