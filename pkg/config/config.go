@@ -95,6 +95,7 @@ type Config struct {
 	Heartbeat   HeartbeatConfig `json:"heartbeat"`
 	Devices     DevicesConfig   `json:"devices"`
 	Voice       VoiceConfig     `json:"voice"`
+	Isolation   IsolationConfig `json:"isolation,omitempty" envPrefix:"PICOCLAW_ISOLATION_"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
 
@@ -102,6 +103,21 @@ type Config struct {
 	legacyChannelBaseline map[string]json.RawMessage
 	configuredModels      []ModelConfig
 	runtimeModelBaseline  json.RawMessage
+}
+
+// IsolationConfig applies to Shell and local MCP processes; zero values preserve
+// ordinary execution. Network access is available unless explicitly disabled.
+type IsolationConfig struct {
+	Enabled        bool         `json:"enabled"                   env:"ENABLED"`
+	DisableNetwork bool         `json:"disable_network,omitempty" env:"DISABLE_NETWORK"`
+	EnvAllowlist   []string     `json:"env_allowlist,omitempty"   env:"ENV_ALLOWLIST"`
+	ExposePaths    []ExposePath `json:"expose_paths,omitempty"`
+}
+
+type ExposePath struct {
+	Source string `json:"source"`
+	Target string `json:"target,omitempty"`
+	Mode   string `json:"mode"`
 }
 
 // FilterSensitiveData filters sensitive values from content before sending to LLM.
@@ -694,16 +710,17 @@ type WeixinConfig struct {
 }
 
 type PicoConfig struct {
-	Enabled         bool                `json:"enabled"                     env:"PICOCLAW_CHANNELS_PICO_ENABLED"`
-	Token           string              `json:"token"                       env:"PICOCLAW_CHANNELS_PICO_TOKEN"`
-	AllowTokenQuery bool                `json:"allow_token_query,omitempty"`
-	AllowOrigins    []string            `json:"allow_origins,omitempty"`
-	PingInterval    int                 `json:"ping_interval,omitempty"`
-	ReadTimeout     int                 `json:"read_timeout,omitempty"`
-	WriteTimeout    int                 `json:"write_timeout,omitempty"`
-	MaxConnections  int                 `json:"max_connections,omitempty"`
-	AllowFrom       FlexibleStringSlice `json:"allow_from"                  env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
-	Placeholder     PlaceholderConfig   `json:"placeholder,omitempty"`
+	Enabled           bool                `json:"enabled"                       env:"PICOCLAW_CHANNELS_PICO_ENABLED"`
+	Token             string              `json:"token"                         env:"PICOCLAW_CHANNELS_PICO_TOKEN"`
+	AllowTokenQuery   bool                `json:"allow_token_query,omitempty"`
+	AllowOrigins      []string            `json:"allow_origins,omitempty"`
+	AllowedImageTypes []string            `json:"allowed_image_types,omitempty"`
+	PingInterval      int                 `json:"ping_interval,omitempty"`
+	ReadTimeout       int                 `json:"read_timeout,omitempty"`
+	WriteTimeout      int                 `json:"write_timeout,omitempty"`
+	MaxConnections    int                 `json:"max_connections,omitempty"`
+	AllowFrom         FlexibleStringSlice `json:"allow_from"                    env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
+	Placeholder       PlaceholderConfig   `json:"placeholder,omitempty"`
 }
 
 type PicoClientConfig struct {

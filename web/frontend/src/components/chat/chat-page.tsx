@@ -11,6 +11,7 @@ import { TypingIndicator } from "@/components/chat/typing-indicator"
 import { UserMessage } from "@/components/chat/user-message"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
+import { useChatImages } from "@/hooks/use-chat-images"
 import { useChatModels } from "@/hooks/use-chat-models"
 import { useGateway } from "@/hooks/use-gateway"
 import { usePicoChat } from "@/hooks/use-pico-chat"
@@ -28,7 +29,6 @@ export function ChatPage() {
     connectionState,
     isTyping,
     activeSessionId,
-    sendMessage,
     switchSession,
     newChat,
   } = usePicoChat()
@@ -46,6 +46,7 @@ export function ChatPage() {
     handleSetDefault,
   } = useChatModels({ isConnected: isGatewayRunning })
   const canSend = isChatConnected && Boolean(defaultModelName)
+  const media = useChatImages(isChatConnected)
 
   const {
     sessions,
@@ -79,9 +80,9 @@ export function ChatPage() {
     }
   }, [messages, isTyping, isAtBottom])
 
-  const handleSend = () => {
-    if (!input.trim() || !canSend) return
-    if (sendMessage(input.trim())) {
+  const handleSend = async () => {
+    if ((!input.trim() && media.images.length === 0) || !canSend) return
+    if (await media.send(input.trim())) {
       setInput("")
     }
   }
@@ -147,14 +148,22 @@ export function ChatPage() {
           )}
 
           {messages.map((msg) => (
-            <div key={msg.id} className="flex w-full">
+            <div
+              key={`${msg.role}:${msg.replyToMessageId || msg.id}`}
+              className="flex w-full"
+            >
               {msg.role === "assistant" ? (
                 <AssistantMessage
                   content={msg.content}
                   timestamp={msg.timestamp}
+                  activities={msg.activities}
+                  error={msg.error}
                 />
               ) : (
-                <UserMessage content={msg.content} />
+                <UserMessage
+                  content={msg.content}
+                  attachments={msg.attachments}
+                />
               )}
             </div>
           ))}
@@ -169,6 +178,7 @@ export function ChatPage() {
         onSend={handleSend}
         isConnected={isChatConnected}
         hasDefaultModel={Boolean(defaultModelName)}
+        media={media}
       />
     </div>
   )

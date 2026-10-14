@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -103,26 +104,45 @@ type ServerConnection struct {
 	Client  *mcp.Client
 	Session *mcp.ClientSession
 	Tools   []*mcp.Tool
+
+	command *exec.Cmd
+	config  config.MCPServerConfig
+	cancel  context.CancelFunc
+	stopped atomic.Bool
+}
+
+func (c *ServerConnection) stopProcess() {
+	if c.command != nil && !c.stopped.Swap(true) {
+		c.cancel()
+		_ = isolation.Terminate(c.command)
+	}
 }
 
 // Manager manages multiple MCP server connections
 type Manager struct {
-	servers map[string]*ServerConnection
-	mu      sync.RWMutex
-	closed  atomic.Bool    // changed from bool to atomic.Bool to avoid TOCTOU race
-	wg      sync.WaitGroup // tracks in-flight CallTool calls
+	servers     map[string]*ServerConnection
+	mu          sync.RWMutex
+	closed      atomic.Bool    // changed from bool to atomic.Bool to avoid TOCTOU race
+	wg          sync.WaitGroup // tracks in-flight CallTool calls
+	lifecycleMu sync.Mutex     // serializes connect/reconnect with final shutdown
+	lifetime    context.Context
+	cancel      context.CancelFunc
+	launch      isolation.Options
 }
 
 // NewManager creates a new MCP manager
 func NewManager() *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		servers: make(map[string]*ServerConnection),
+		servers:  make(map[string]*ServerConnection),
+		lifetime: ctx,
+		cancel:   cancel,
 	}
 }
 
 // LoadFromConfig loads MCP servers from configuration
 func (m *Manager) LoadFromConfig(ctx context.Context, cfg *config.Config) error {
-	return m.LoadFromMCPConfig(ctx, cfg.Tools.MCP, cfg.WorkspacePath())
+	return m.LoadFromMCPConfig(ctx, cfg.Tools.MCP, cfg.WorkspacePath(), cfg.Isolation)
 }
 
 // LoadFromMCPConfig loads MCP servers from MCP configuration and workspace path.
@@ -131,7 +151,14 @@ func (m *Manager) LoadFromMCPConfig(
 	ctx context.Context,
 	mcpCfg config.MCPConfig,
 	workspacePath string,
+	policies ...config.IsolationConfig,
 ) error {
+	m.mu.Lock()
+	m.launch.Workspace = workspacePath
+	if len(policies) > 0 {
+		m.launch.Policy = policies[0]
+	}
+	m.mu.Unlock()
 	if !mcpCfg.Enabled {
 		logger.InfoCF("mcp", "MCP integration is disabled", nil)
 		return nil
@@ -242,6 +269,21 @@ func (m *Manager) ConnectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	return m.connectServer(ctx, name, cfg)
+}
+
+func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCPServerConfig) error {
+	if m.closed.Load() {
+		return fmt.Errorf("manager is closed")
+	}
+	// Startup uses the caller's deadline; the established process belongs to the
+	// manager, so completion of the initializing request cannot kill future calls.
+	startupCtx, cancelStartup := context.WithCancel(ctx)
+	stopStartup := context.AfterFunc(m.lifetime, cancelStartup)
+	defer func() { stopStartup(); cancelStartup() }()
+	ctx = startupCtx
 	logger.InfoCF("mcp", "Connecting to MCP server",
 		map[string]any{
 			"server":     name,
@@ -258,6 +300,16 @@ func (m *Manager) ConnectServer(
 	// Create transport based on configuration
 	// Auto-detect transport type if not explicitly specified
 	var transport mcp.Transport
+	var command *exec.Cmd
+	var cancelProcess context.CancelFunc
+	var stopStartupProcess func() bool
+	connected := false
+	defer func() {
+		if !connected && command != nil {
+			cancelProcess()
+			_ = isolation.Terminate(command)
+		}
+	}()
 	transportType := cfg.Type
 
 	// Auto-detect: if URL is provided, use SSE; if command is provided, use stdio
@@ -312,19 +364,9 @@ func (m *Manager) ConnectServer(
 				"server":  name,
 				"command": cfg.Command,
 			})
-		// Create command with context
-		cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
-
 		// Build environment variables with proper override semantics
 		// Use a map to ensure config variables override file variables
 		envMap := make(map[string]string)
-
-		// Start with parent process environment
-		for _, e := range cmd.Environ() {
-			if idx := strings.Index(e, "="); idx > 0 {
-				envMap[e[:idx]] = e[idx+1:]
-			}
-		}
 
 		// Load environment variables from file if specified
 		if cfg.EnvFile != "" {
@@ -348,14 +390,28 @@ func (m *Manager) ConnectServer(
 			envMap[k] = v
 		}
 
-		// Convert map to slice
-		env := make([]string, 0, len(envMap))
-		for k, v := range envMap {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		m.mu.RLock()
+		options := m.launch
+		m.mu.RUnlock()
+		options.DeclaredEnv = envMap
+		if options.Policy.Enabled {
+			options.Dir = options.Workspace
 		}
-		cmd.Env = env
-
-		transport = &mcp.CommandTransport{Command: cmd}
+		processCtx, cancel := context.WithCancel(m.lifetime)
+		cancelProcess = cancel
+		// Startup cancellation also covers the actual namespace capability probe.
+		stopStartupProcess = context.AfterFunc(ctx, cancelProcess)
+		defer stopStartupProcess()
+		var err error
+		command, err = isolation.Command(processCtx, options, cfg.Command, cfg.Args...)
+		if err != nil {
+			cancel()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		transport = &mcp.CommandTransport{Command: command}
 	default:
 		return fmt.Errorf(
 			"unsupported transport type: %s (supported: stdio, sse, http)",
@@ -366,6 +422,12 @@ func (m *Manager) ConnectServer(
 	// Connect to server
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
+		if command != nil {
+			return fmt.Errorf(
+				"local MCP startup failed; check command, isolation runtime and explicit exposed paths: %w",
+				err,
+			)
+		}
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 
@@ -402,14 +464,41 @@ func (m *Manager) ConnectServer(
 	}
 
 	// Store connection
+	if stopStartupProcess != nil && !stopStartupProcess() {
+		cancelProcess()
+		_ = session.Close()
+		return fmt.Errorf("MCP startup canceled: %w", ctx.Err())
+	}
 	m.mu.Lock()
+	if m.closed.Load() || ctx.Err() != nil {
+		m.mu.Unlock()
+		if command != nil {
+			cancelProcess()
+			_ = isolation.Terminate(command)
+		}
+		_ = session.Close()
+		reason := ctx.Err()
+		if reason == nil {
+			reason = context.Canceled
+		}
+		return fmt.Errorf("MCP startup canceled: %w", reason)
+	}
+	previous := m.servers[name]
 	m.servers[name] = &ServerConnection{
 		Name:    name,
 		Client:  client,
 		Session: session,
 		Tools:   tools,
+		command: command,
+		config:  cfg,
+		cancel:  cancelProcess,
 	}
 	m.mu.Unlock()
+	connected = true
+	if previous != nil {
+		previous.stopProcess()
+		_ = previous.Session.Close()
+	}
 
 	return nil
 }
@@ -462,6 +551,20 @@ func (m *Manager) CallTool(
 		return nil, fmt.Errorf("server %s not found", serverName)
 	}
 	defer m.wg.Done()
+	if conn.stopped.Load() {
+		var err error
+		conn, err = m.reconnect(ctx, serverName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reconnect local MCP server: %w", err)
+		}
+	}
+	requestCtx, cancel := context.WithCancel(ctx)
+	stopManager := context.AfterFunc(m.lifetime, cancel)
+	defer func() { stopManager(); cancel() }()
+	// A stdio session cannot identify or kill only one request's descendants.
+	// Stop the owned session; a later independent call reconnects without replay.
+	stopProcess := context.AfterFunc(requestCtx, conn.stopProcess)
+	defer stopProcess()
 
 	// A typed nil map would serialize as null; MCP tool arguments are an object.
 	if arguments == nil {
@@ -472,12 +575,52 @@ func (m *Manager) CallTool(
 		Arguments: arguments,
 	}
 
-	result, err := conn.Session.CallTool(ctx, params)
+	result, err := conn.Session.CallTool(requestCtx, params)
 	if err != nil {
+		requestErr := requestCtx.Err()
+		if requestErr == nil {
+			requestErr = m.lifetime.Err()
+		}
+		if requestErr != nil {
+			conn.stopProcess()
+			if conn.command != nil {
+				return nil, fmt.Errorf(
+					"MCP request canceled; local server stopped and session state may be lost: %w",
+					requestErr,
+				)
+			}
+			return nil, fmt.Errorf("MCP request canceled: %w", requestErr)
+		}
+		if conn.stopped.Load() {
+			return nil, fmt.Errorf("local MCP session interrupted by cancellation; tool was not replayed: %w", err)
+		}
 		return nil, fmt.Errorf("failed to call tool: %w", err)
 	}
 
 	return result, nil
+}
+
+func (m *Manager) reconnect(ctx context.Context, name string) (*ServerConnection, error) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	if m.closed.Load() {
+		return nil, fmt.Errorf("manager is closed")
+	}
+	m.mu.RLock()
+	conn := m.servers[name]
+	m.mu.RUnlock()
+	if conn == nil {
+		return nil, fmt.Errorf("server %s not found", name)
+	}
+	if conn.stopped.Load() {
+		if err := m.connectServer(ctx, name, conn.config); err != nil {
+			return nil, err
+		}
+		m.mu.RLock()
+		conn = m.servers[name]
+		m.mu.RUnlock()
+	}
+	return conn, nil
 }
 
 // Close closes all server connections
@@ -487,10 +630,13 @@ func (m *Manager) Close() error {
 	if m.closed.Swap(true) {
 		return nil // already closed
 	}
+	m.cancel()
 
 	// Wait for all in-flight CallTool calls to finish before closing sessions
 	// After closed=true is set, no new CallTool can start (they check closed first)
 	m.wg.Wait()
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -502,7 +648,12 @@ func (m *Manager) Close() error {
 
 	var errs []error
 	for name, conn := range m.servers {
+		conn.stopProcess()
 		if err := conn.Session.Close(); err != nil {
+			var exitErr *exec.ExitError
+			if conn.command != nil && (errors.As(err, &exitErr) || errors.Is(err, context.Canceled)) {
+				continue // Forced termination is expected for owned local processes.
+			}
 			logger.ErrorCF("mcp", "Failed to close server connection",
 				map[string]any{
 					"server": name,

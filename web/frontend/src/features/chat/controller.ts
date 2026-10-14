@@ -11,6 +11,7 @@ import {
   clearStoredSessionId,
   generateSessionId,
   readStoredSessionId,
+  writeStoredSessionId,
 } from "@/features/chat/state"
 import {
   invalidateSocket,
@@ -18,7 +19,11 @@ import {
   normalizeWsUrlForBrowser,
 } from "@/features/chat/websocket"
 import i18n from "@/i18n"
-import { getChatState, updateChatStore } from "@/store/chat"
+import {
+  type ChatAttachment,
+  getChatState,
+  updateChatStore,
+} from "@/store/chat"
 import { type GatewayState, gatewayAtom } from "@/store/gateway"
 
 const store = getDefaultStore()
@@ -324,7 +329,10 @@ export async function hydrateActiveSession() {
   return hydratePromise
 }
 
-export function sendChatMessage(content: string) {
+export function sendChatMessage(
+  content: string,
+  attachments: ChatAttachment[] = [],
+) {
   if (!wsRef || wsRef.readyState !== WebSocket.OPEN) {
     console.warn("WebSocket not connected")
     return false
@@ -336,7 +344,7 @@ export function sendChatMessage(content: string) {
   updateChatStore((prev) => ({
     messages: [
       ...prev.messages,
-      { id, role: "user", content, timestamp: Date.now() },
+      { id, role: "user", content, timestamp: Date.now(), attachments },
     ],
     isTyping: true,
   }))
@@ -346,9 +354,10 @@ export function sendChatMessage(content: string) {
       JSON.stringify({
         type: "message.send",
         id,
-        payload: { content },
+        payload: { content, media: attachments.map((image) => image.ref) },
       }),
     )
+    writeStoredSessionId(activeSessionIdRef)
     return true
   } catch (error) {
     console.error("Failed to send pico message:", error)

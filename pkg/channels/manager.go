@@ -68,12 +68,14 @@ var channelRateConfig = map[string]float64{
 }
 
 type channelWorker struct {
-	ch         Channel
-	queue      chan bus.OutboundMessage
-	mediaQueue chan bus.OutboundMediaMessage
-	done       chan struct{}
-	mediaDone  chan struct{}
-	limiter    *rate.Limiter
+	queueMu                     sync.RWMutex
+	outboundClosed, mediaClosed bool
+	ch                          Channel
+	queue                       chan bus.OutboundMessage
+	mediaQueue                  chan bus.OutboundMediaMessage
+	done                        chan struct{}
+	mediaDone                   chan struct{}
+	limiter                     *rate.Limiter
 }
 
 type Manager struct {
@@ -358,6 +360,9 @@ func (m *Manager) initChannel(name, channelType string, cfg *config.Config) {
 			}
 		}
 		// Inject PlaceholderRecorder if channel supports it
+		if setter, ok := ch.(interface{ SetMaxMediaSize(size int) }); ok {
+			setter.SetMaxMediaSize(cfg.Agents.Defaults.GetMaxMediaSize())
+		}
 		if setter, ok := ch.(interface{ SetPlaceholderRecorder(r PlaceholderRecorder) }); ok {
 			setter.SetPlaceholderRecorder(m)
 		}
@@ -512,7 +517,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	// Close all worker queues and wait for them to drain
 	for _, w := range m.workers {
 		if w != nil {
-			close(w.queue)
+			closeWorkerQueue(w, w.queue, &w.outboundClosed)
 		}
 	}
 	for _, w := range m.workers {
@@ -523,7 +528,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	// Close all media worker queues and wait for them to drain
 	for _, w := range m.workers {
 		if w != nil {
-			close(w.mediaQueue)
+			closeWorkerQueue(w, w.mediaQueue, &w.mediaClosed)
 		}
 	}
 	for _, w := range m.workers {
@@ -727,7 +732,7 @@ func dispatchLoop[M any](
 			}
 
 			if wExists && w != nil {
-				if !enqueue(ctx, w, msg) {
+				if !enqueue(ctx, w, msg) && ctx.Err() != nil {
 					return
 				}
 			} else if exists {
@@ -743,12 +748,7 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 		m.bus.OutboundChan(),
 		func(msg bus.OutboundMessage) string { return msg.Channel },
 		func(ctx context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
-			select {
-			case w.queue <- msg:
-				return true
-			case <-ctx.Done():
-				return false
-			}
+			return enqueueWorker(ctx, w, w.queue, &w.outboundClosed, msg)
 		},
 		"Outbound dispatcher started",
 		"Outbound dispatcher stopped",
@@ -763,12 +763,7 @@ func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
 		m.bus.OutboundMediaChan(),
 		func(msg bus.OutboundMediaMessage) string { return msg.Channel },
 		func(ctx context.Context, w *channelWorker, msg bus.OutboundMediaMessage) bool {
-			select {
-			case w.mediaQueue <- msg:
-				return true
-			case <-ctx.Done():
-				return false
-			}
+			return enqueueWorker(ctx, w, w.mediaQueue, &w.mediaClosed, msg)
 		},
 		"Outbound media dispatcher started",
 		"Outbound media dispatcher stopped",
@@ -1011,9 +1006,9 @@ func (m *Manager) UnregisterChannel(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if w, ok := m.workers[name]; ok && w != nil {
-		close(w.queue)
+		closeWorkerQueue(w, w.queue, &w.outboundClosed)
 		<-w.done
-		close(w.mediaQueue)
+		closeWorkerQueue(w, w.mediaQueue, &w.mediaClosed)
 		<-w.mediaDone
 	}
 	delete(m.workers, name)
@@ -1070,12 +1065,13 @@ func (m *Manager) SendToChannel(ctx context.Context, channelName, chatID, conten
 	}
 
 	if wExists && w != nil {
-		select {
-		case w.queue <- msg:
+		if enqueueWorker(ctx, w, w.queue, &w.outboundClosed, msg) {
 			return nil
-		case <-ctx.Done():
-			return ctx.Err()
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return ErrNotRunning
 	}
 
 	// Fallback: direct send (should not happen)

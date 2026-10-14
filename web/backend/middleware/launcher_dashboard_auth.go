@@ -306,7 +306,7 @@ func validLauncherDashboardAuth(r *http.Request, cfg LauncherDashboardAuthConfig
 }
 
 func rejectLauncherDashboardAuth(w http.ResponseWriter, r *http.Request, canonicalPath string) {
-	if canonicalPath == "/pico/ws" || canonicalPath == LauncherDashboardLocalAutoLoginPath ||
+	if strings.HasPrefix(canonicalPath, "/pico/") || canonicalPath == LauncherDashboardLocalAutoLoginPath ||
 		strings.HasPrefix(canonicalPath, "/media/") {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

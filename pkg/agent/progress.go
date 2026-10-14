@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -19,7 +20,40 @@ func (al *AgentLoop) toolProgressEnabled(ts *turnState) bool {
 	if al.cfg.IsChannelType(ts.channel, "telegram") {
 		return !strings.HasPrefix(strings.TrimSpace(ts.chatID), "inline:")
 	}
+	if al.webActivityEnabled(ts) {
+		return true
+	}
 	return al.cfg.Agents.Defaults.ShouldSendToolFeedback(ts.opts.PeerKind, ts.opts.SenderID)
+}
+
+func (al *AgentLoop) webActivityEnabled(ts *turnState) bool {
+	if ts.opts.NoHistory || constants.IsInternalChannel(ts.channel) {
+		return false
+	}
+	if al.channelManager != nil {
+		if channel, ok := al.channelManager.GetChannel(ts.channel); ok {
+			web, ok := channel.(channels.ReasoningProgressCapable)
+			return ok && web.SupportsReasoningProgress()
+		}
+	}
+	return al.cfg.IsChannelType(ts.channel, "pico")
+}
+
+func (al *AgentLoop) publishWebReasoning(
+	ctx context.Context,
+	ts *turnState,
+	actionID string,
+	state bus.ProgressState,
+	content string,
+) {
+	if content == "" || !al.webActivityEnabled(ts) {
+		return
+	}
+	content = al.cfg.FilterSensitiveData(content)
+	al.publishProgress(ctx, ts, &bus.ProgressMessage{
+		RequestID: ts.turnID, ActionID: actionID, Kind: bus.ProgressReasoning,
+		State: state, Result: content,
+	}, "")
 }
 
 func (al *AgentLoop) publishProgress(

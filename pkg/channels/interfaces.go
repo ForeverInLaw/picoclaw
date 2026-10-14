@@ -81,6 +81,12 @@ type ProgressCapable interface {
 	SendProgress(ctx context.Context, msg bus.OutboundMessage) error
 }
 
+// ReasoningProgressCapable opts an interactive channel into provider thought
+// snapshots, independently of its public answer delivery protocol.
+type ReasoningProgressCapable interface {
+	SupportsReasoningProgress() bool
+}
+
 // MessageSplittingCapable adapters handle complete answers themselves, including
 // formatting-specific limits and transport-specific pagination.
 type MessageSplittingCapable interface {
