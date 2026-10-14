@@ -95,6 +95,7 @@ type Config struct {
 	Heartbeat   HeartbeatConfig `json:"heartbeat"`
 	Devices     DevicesConfig   `json:"devices"`
 	Voice       VoiceConfig     `json:"voice"`
+	Isolation   IsolationConfig `json:"isolation,omitempty" envPrefix:"PICOCLAW_ISOLATION_"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
 
@@ -102,6 +103,21 @@ type Config struct {
 	legacyChannelBaseline map[string]json.RawMessage
 	configuredModels      []ModelConfig
 	runtimeModelBaseline  json.RawMessage
+}
+
+// IsolationConfig applies to Shell and local MCP processes; zero values preserve
+// ordinary execution. Network access is available unless explicitly disabled.
+type IsolationConfig struct {
+	Enabled        bool         `json:"enabled"                   env:"ENABLED"`
+	DisableNetwork bool         `json:"disable_network,omitempty" env:"DISABLE_NETWORK"`
+	EnvAllowlist   []string     `json:"env_allowlist,omitempty"   env:"ENV_ALLOWLIST"`
+	ExposePaths    []ExposePath `json:"expose_paths,omitempty"`
+}
+
+type ExposePath struct {
+	Source string `json:"source"`
+	Target string `json:"target,omitempty"`
+	Mode   string `json:"mode"`
 }
 
 // FilterSensitiveData filters sensitive values from content before sending to LLM.
