@@ -924,6 +924,10 @@ func (s *Store) ClearConversation(ctx context.Context, convID int64) error {
 		)`, convID); err != nil {
 		return fmt.Errorf("message_parts: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM source_messages WHERE conversation_id = ?", convID); err != nil {
+		return fmt.Errorf("source_messages: %w", err)
+	}
+
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM messages WHERE conversation_id = ?", convID); err != nil {
 		return fmt.Errorf("messages: %w", err)

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -806,5 +807,71 @@ func TestSeahorseRecordsSuccessfulFallbackModelInCanonicalSources(t *testing.T) 
 	history := al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(inlineConversationKey("main", "42"))
 	if history[len(history)-1].ModelName != "backup" {
 		t.Fatalf("fallback source reports model %q", history[len(history)-1].ModelName)
+	}
+}
+
+func TestSeahorseRunResetCancelsIngestionBeforeAcquiringGenerationGate(t *testing.T) {
+	initial, cfg := newSeahorseScenarioLoop(t, &sourceScenarioProvider{})
+	initial.Close()
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	provider := &countingMockProvider{response: "answer"}
+	al := NewAgentLoop(cfg, mb, provider)
+	defer al.Close()
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+	database, err := sql.Open("sqlite", filepath.Join(cfg.WorkspacePath(), "sessions", "seahorse-main.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	connection, err := database.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err = connection.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	defer connection.ExecContext(t.Context(), "ROLLBACK")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- al.Run(ctx) }()
+	msg := directIngressMessage("source ingestion is blocked by external SQLite writer")
+	publishIncoming(t, mb, msg)
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	started := false
+	for !started {
+		select {
+		case event := <-sub.C:
+			started = event.Kind == EventKindTurnStart
+		case <-deadline.C:
+			t.Fatal("turn did not start")
+		}
+	}
+	msg.Content = "/clear"
+	publishIncoming(t, mb, msg)
+	resetDelivered := false
+	for !resetDelivered {
+		select {
+		case out := <-mb.OutboundChan():
+			resetDelivered = strings.Contains(out.Content, "cleared")
+		case <-deadline.C:
+			t.Fatal("reset waited for locked SQLite before canceling source operation")
+		}
+	}
+	// Keep the writer locked until the production reset response is delivered.
+	if _, err = connection.ExecContext(t.Context(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	al.Close()
+	if provider.calls != 0 {
+		t.Fatal("blocked or stale source turn reached answer provider")
 	}
 }

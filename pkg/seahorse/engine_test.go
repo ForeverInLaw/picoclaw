@@ -268,3 +268,45 @@ func TestCanceledIngestionReleasesGenerationGateBeforeSQLiteWriterUnlocks(t *tes
 		t.Fatal("reset did not advance the captured generation")
 	}
 }
+
+func TestGuardedEngineClearCannotDeleteStaleGenerationAndResetsSourceIdentity(t *testing.T) {
+	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.sqlite")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err = engine.SyncSources(
+		t.Context(),
+		"generation",
+		[]seahorse.Message{{Role: "user", Content: "old evidence", TokenCount: 10}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	stale := seahorse.WithCommitGuard(t.Context(), func(func() error) (bool, error) { return false, nil })
+	if err = engine.ClearSession(stale, "generation"); err == nil {
+		t.Fatal("stale clear was accepted")
+	}
+	if err = engine.ClearSession(t.Context(), "generation"); err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.SyncSources(
+		t.Context(),
+		"generation",
+		[]seahorse.Message{{Role: "user", Content: "replacement evidence", TokenCount: 10}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	store := engine.GetRetrieval().Store()
+	conv, err := store.GetConversationBySessionKey(t.Context(), "generation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := engine.GetRetrieval().
+		Grep(t.Context(), seahorse.GrepInput{ConversationID: conv.ConversationID, Pattern: "%evidence%", Scope: "message"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found.Messages) != 1 || !strings.Contains(found.Messages[0].Snippet, "replacement") {
+		t.Fatal("clear retained a stale source identity")
+	}
+}

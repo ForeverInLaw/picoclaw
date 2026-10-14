@@ -207,6 +207,9 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, s ContextSnapshot) 
 	defer done()
 	messages := make([]seahorse.Message, len(s.History))
 	for i, msg := range s.History {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		messages[i] = toSeahorseMessage(msg, s.ScopeKey, i)
 	}
 	return m.engine.SyncSources(ctx, s.ScopeKey, messages)

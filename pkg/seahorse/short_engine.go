@@ -108,19 +108,21 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	dsn := url.URL{
 		Scheme:   "file",
 		Path:     filepath.ToSlash(config.DBPath),
-		RawQuery: "_pragma=busy_timeout%285000%29&_txlock=immediate",
+		RawQuery: "_pragma=busy_timeout%2850%29&_txlock=immediate",
 	}
 	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
+	// Keep each native busy wait short: SQLite can defer context interruption
+	// inside its busy handler. Source writes retry with a cancellable deadline.
 	// Configure SQLite for concurrent access
 	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+	if _, err := db.Exec("PRAGMA busy_timeout = 50;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set busy_timeout: %w", err)
 	}
@@ -394,7 +396,7 @@ func (e *Engine) ClearSession(ctx context.Context, sessionKey string) error {
 	if conv == nil {
 		return nil // session never ingested, nothing to clear
 	}
-	return e.store.ClearConversation(ctx, conv.ConversationID)
+	return commitContext(ctx, func() error { return e.store.ClearConversation(ctx, conv.ConversationID) })
 }
 
 // Bootstrap reconciles a session's messages with the database.
