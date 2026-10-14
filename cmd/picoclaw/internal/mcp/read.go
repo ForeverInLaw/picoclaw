@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -78,7 +79,7 @@ func newProbeCommand(kind string) *cobra.Command {
 			if !ok {
 				return fmt.Errorf("MCP server %q not found", name)
 			}
-			redact := serverRedactor(server)
+			redact := serverRedactor(server, cfg.WorkspacePath())
 			if kind == "show" {
 				cmd.Printf("Server: %s\nTransport: %s\nTarget: %s\nEnabled: %t\nDeferred: %t (explicit: %t)\n", name, config.EffectiveMCPTransportType(server), safeTarget(server), server.Enabled, effectiveDeferred(server, cfg.Tools.MCP.Discovery.Enabled), server.Deferred != nil)
 				cmd.Printf("Env file: %s\nEnv keys: %s\nHeader names: %s\n", redact.Replace(server.EnvFile), strings.Join(sortedKeys(server.Env), ", "), strings.Join(sortedKeys(server.Headers), ", "))
@@ -158,9 +159,18 @@ func safeTarget(server config.MCPServerConfig) string {
 	return u.String()
 }
 
-func serverRedactor(server config.MCPServerConfig) *strings.Replacer {
+func serverRedactor(server config.MCPServerConfig, workspace ...string) *strings.Replacer {
 	var values []string
-	for _, value := range server.Env {
+	env := server.Env
+	if config.EffectiveMCPTransportType(server) == "stdio" && server.EnvFile != "" && len(workspace) > 0 {
+		if !filepath.IsAbs(server.EnvFile) {
+			server.EnvFile = filepath.Join(workspace[0], server.EnvFile)
+		}
+		if declared, err := picomcp.ReadDeclaredEnvironment(server); err == nil {
+			env = declared
+		}
+	}
+	for _, value := range env {
 		values = append(values, value)
 	}
 	for _, value := range server.Headers {

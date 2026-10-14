@@ -365,31 +365,11 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 				"server":  name,
 				"command": cfg.Command,
 			})
-		// Build environment variables with proper override semantics
-		// Use a map to ensure config variables override file variables
-		envMap := make(map[string]string)
-
-		// Load environment variables from file if specified
-		if cfg.EnvFile != "" {
-			envVars, err := loadEnvFile(cfg.EnvFile)
-			if err != nil {
-				return fmt.Errorf("failed to load env file %s: %w", cfg.EnvFile, err)
-			}
-			for k, v := range envVars {
-				envMap[k] = v
-			}
-			m.log(logger.DebugCF, "mcp", "Loaded environment variables from file",
-				map[string]any{
-					"server":    name,
-					"envFile":   cfg.EnvFile,
-					"var_count": len(envVars),
-				})
+		envMap, envErr := ReadDeclaredEnvironment(cfg)
+		if envErr != nil {
+			return fmt.Errorf("failed to load declared environment: %w", envErr)
 		}
-
-		// Environment variables from config override those from file
-		for k, v := range cfg.Env {
-			envMap[k] = v
-		}
+		m.log(logger.DebugCF, "mcp", "Loaded declared environment", map[string]any{"server": name, "var_count": len(envMap)})
 
 		m.mu.RLock()
 		options := m.launch
@@ -699,4 +679,21 @@ func (m *Manager) log(write func(string, string, map[string]any), component, mes
 	if !m.options.QuietDiagnostics {
 		write(component, message, fields)
 	}
+}
+
+// ReadDeclaredEnvironment uses the same env-file parser and override order as
+// local server startup. EnvFile must already be resolved relative to workspace.
+func ReadDeclaredEnvironment(server config.MCPServerConfig) (map[string]string, error) {
+	values := map[string]string{}
+	if server.EnvFile != "" {
+		var err error
+		values, err = loadEnvFile(server.EnvFile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for key, value := range server.Env {
+		values[key] = value
+	}
+	return values, nil
 }

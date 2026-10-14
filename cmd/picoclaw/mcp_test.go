@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,6 +32,69 @@ func executeMCP(t *testing.T, args ...string) (string, error) {
 	cmd.SetArgs(append([]string{"mcp"}, args...))
 	err := cmd.ExecuteContext(t.Context())
 	return output.String(), err
+}
+
+func TestMCPCLIStdioProcess(t *testing.T) {
+	if os.Getenv("CLI_FAKE_STDIO") != "1" {
+		return
+	}
+	observed, _ := json.Marshal([]string{os.Getenv("FROM_FILE"), os.Getenv("OVERRIDE")})
+	if err := os.WriteFile(os.Getenv("OBSERVATION"), observed, 0o600); err != nil {
+		os.Exit(2)
+	}
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "local", Version: "1"}, nil)
+	server.AddTool(&sdkmcp.Tool{Name: "environment_probe", Description: fmt.Sprintf("%s %s", os.Getenv("FROM_FILE"), os.Getenv("OVERRIDE")), InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		_ = os.WriteFile(os.Getenv("TOOL_MARKER"), []byte("called"), 0o600)
+		return &sdkmcp.CallToolResult{}, nil
+	})
+	if err := server.Run(context.Background(), &sdkmcp.StdioTransport{}); err != nil {
+		os.Exit(3)
+	}
+	os.Exit(0)
+}
+
+func TestMCPCLIStdioProbeUsesEnvFileOverridesAndConfiguredIsolation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv(config.EnvConfig, path)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env.mcp"), []byte("CLI_FAKE_STDIO=1\nFROM_FILE=file-only-secret\nOVERRIDE=from-file\n"), 0o600))
+	observed := filepath.Join(dir, "observed.json")
+	marker := filepath.Join(dir, "tool-called")
+	cfg := config.DefaultConfig()
+	cfg.Tools.FilterSensitiveData = false
+	cfg.Agents.Defaults.Workspace = dir
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{"local": {
+		Enabled: false, Command: os.Args[0], Args: []string{"-test.run=^TestMCPCLIStdioProcess$"}, EnvFile: ".env.mcp",
+		Env: map[string]string{"OVERRIDE": "from-config", "OBSERVATION": observed, "TOOL_MARKER": marker},
+	}}
+	require.NoError(t, config.SaveConfig(path, cfg))
+	output, err := executeMCP(t, "test", "local")
+	require.NoError(t, err, output)
+	data, err := os.ReadFile(observed)
+	require.NoError(t, err)
+	require.JSONEq(t, "[\"file-only-secret\",\"from-config\"]", string(data))
+	_, err = os.Stat(marker)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	server := cfg.Tools.MCP.Servers["local"]
+	server.Enabled = true
+	cfg.Tools.MCP.Servers["local"] = server
+	require.NoError(t, config.SaveConfig(path, cfg))
+	output, err = executeMCP(t, "show", "local")
+	require.NoError(t, err, output)
+	require.NotContains(t, output, "file-only-secret")
+	require.NotContains(t, output, "from-config")
+	if runtime.GOOS != "linux" {
+		return
+	}
+	cfg.Isolation.Enabled = true
+	sandboxMarker := filepath.Join(dir, "unisolated-start")
+	cfg.Tools.MCP.Servers["local"] = config.MCPServerConfig{Enabled: true, Command: "/bin/sh", Args: []string{"-c", "touch '" + sandboxMarker + "'"}}
+	require.NoError(t, config.SaveConfig(path, cfg))
+	t.Setenv("PATH", t.TempDir())
+	output, err = executeMCP(t, "test", "local")
+	require.ErrorContains(t, err, "isolation")
+	_, err = os.Stat(sandboxMarker)
+	require.ErrorIs(t, err, os.ErrNotExist, output)
 }
 
 func TestMCPCLIReadOnlyProbesAndRedactedDiagnostics(t *testing.T) {
