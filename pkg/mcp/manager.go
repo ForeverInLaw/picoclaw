@@ -131,9 +131,9 @@ type Manager struct {
 	options     ManagerOptions
 	servers     map[string]*ServerConnection
 	mu          sync.RWMutex
-	closed      atomic.Bool    // changed from bool to atomic.Bool to avoid TOCTOU race
-	wg          sync.WaitGroup // tracks in-flight CallTool calls
-	lifecycleMu sync.Mutex     // serializes connect/reconnect with final shutdown
+	closed      atomic.Bool
+	wg          sync.WaitGroup // operations admitted under mu, drained by Close
+	serverLocks map[string]*sync.Mutex
 	lifetime    context.Context
 	cancel      context.CancelFunc
 	launch      isolation.Options
@@ -147,10 +147,11 @@ func NewManager(options ...ManagerOptions) *Manager {
 		selected = options[0]
 	}
 	return &Manager{
-		options:  selected,
-		servers:  make(map[string]*ServerConnection),
-		lifetime: ctx,
-		cancel:   cancel,
+		options:     selected,
+		servers:     make(map[string]*ServerConnection),
+		serverLocks: make(map[string]*sync.Mutex),
+		lifetime:    ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -283,9 +284,30 @@ func (m *Manager) ConnectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) error {
-	m.lifecycleMu.Lock()
-	defer m.lifecycleMu.Unlock()
+	m.mu.RLock()
+	if m.closed.Load() {
+		m.mu.RUnlock()
+		return fmt.Errorf("manager is closed")
+	}
+	m.wg.Add(1)
+	m.mu.RUnlock()
+	defer m.wg.Done()
+	mu := m.serverLock(name)
+	mu.Lock()
+	defer mu.Unlock()
 	return m.connectServer(ctx, name, cfg)
+}
+
+// Independent servers may handshake concurrently; one server reconnects once.
+func (m *Manager) serverLock(name string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mu := m.serverLocks[name]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		m.serverLocks[name] = mu
+	}
+	return mu
 }
 
 func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCPServerConfig) error {
@@ -598,8 +620,9 @@ func (m *Manager) CallTool(
 }
 
 func (m *Manager) reconnect(ctx context.Context, name string) (*ServerConnection, error) {
-	m.lifecycleMu.Lock()
-	defer m.lifecycleMu.Unlock()
+	mu := m.serverLock(name)
+	mu.Lock()
+	defer mu.Unlock()
 	if m.closed.Load() {
 		return nil, fmt.Errorf("manager is closed")
 	}
@@ -622,18 +645,17 @@ func (m *Manager) reconnect(ctx context.Context, name string) (*ServerConnection
 
 // Close closes all server connections
 func (m *Manager) Close() error {
-	// Use Swap to atomically set closed=true and get the previous value
-	// This prevents TOCTOU race with CallTool's closed check
+	// Seal admission under the same lock that guards wg.Add before waiting.
+	m.mu.Lock()
 	if m.closed.Swap(true) {
+		m.mu.Unlock()
 		return nil // already closed
 	}
+	m.mu.Unlock()
 	m.cancel()
 
-	// Wait for all in-flight CallTool calls to finish before closing sessions
-	// After closed=true is set, no new CallTool can start (they check closed first)
+	// Drain calls and handshakes before closing their sessions.
 	m.wg.Wait()
-	m.lifecycleMu.Lock()
-	defer m.lifecycleMu.Unlock()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
