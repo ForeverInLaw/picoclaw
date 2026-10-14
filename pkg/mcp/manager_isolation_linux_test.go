@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,7 +46,12 @@ func TestIsolationMCPServerProcess(t *testing.T) {
 		func(ctx context.Context, request *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 			outside, _ := os.ReadFile(os.Getenv("MCP_OUTSIDE_FILE"))
 			_, hostProcErr := os.Stat("/proc/" + os.Getenv("MCP_HOST_PID") + "/environ")
+			initEnvironment, _ := os.ReadFile("/proc/1/environ")
 			writeErr := os.WriteFile("workspace-output", []byte("written"), 0o600)
+			runtimeWritable := false
+			if path := os.Getenv("MCP_RUNTIME_WRITE"); path != "" {
+				runtimeWritable = os.WriteFile(path, []byte("written"), 0o600) == nil
+			}
 			networkAvailable := false
 			if endpoint := os.Getenv("MCP_NETWORK_ENDPOINT"); endpoint != "" {
 				client := &http.Client{Timeout: 200 * time.Millisecond}
@@ -60,10 +66,12 @@ func TestIsolationMCPServerProcess(t *testing.T) {
 				"outside": string(
 					outside,
 				),
-				"host_proc_visible": hostProcErr == nil,
-				"workspace_written": writeErr == nil,
-				"arguments":         string(request.Params.Arguments),
-				"network_available": networkAvailable,
+				"host_proc_visible":   hostProcErr == nil,
+				"workspace_written":   writeErr == nil,
+				"runtime_written":     runtimeWritable,
+				"arguments":           string(request.Params.Arguments),
+				"proc_secret_visible": strings.Contains(string(initEnvironment), "UNDECLARED_MCP_SECRET="),
+				"network_available":   networkAvailable,
 			})
 			return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(data)}}}, nil
 		})

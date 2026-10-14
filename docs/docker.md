@@ -4,22 +4,35 @@
 
 ## 🐳 Docker Compose
 
-You can also run PicoClaw using Docker Compose without installing anything locally.
+Build the gateway, full MCP runtime, and web launcher from the checked-out source:
 
 ```bash
-# 1. Clone this repo
-git clone https://github.com/sipeed/picoclaw.git
-cd picoclaw
+make docker-build
+make docker-build-full
+make docker-build-launcher
+```
 
-# 2. First run — auto-generates docker/data/config.json then exits
-#    (only triggers when both config.json and workspace/ are missing)
-docker compose -f docker/docker-compose.yml --profile gateway up
-# The container prints "First-run setup complete." and stops.
+The local tags are `picoclaw:local`, `picoclaw:full-local`, and
+`picoclaw:launcher-local`. Builds reuse `make build` and `make build-launcher`;
+the launcher embeds the UI using the repository's locked pnpm version and
+frozen lockfile. The existing ASR/Riva Go build path remains enabled. Full MCP
+adds Node/npm, Python and distribution-packaged uv/uvx. All three runtimes
+include Bubblewrap and run as UID/GID 1000.
 
-# 3. Set your API keys
-vim docker/data/config.json   # Set provider API keys, bot tokens, etc.
+The state directory is `/data` (`PICOCLAW_HOME`), including `config.json`,
+`launcher-auth.db`, and `workspace/`. For the basic Compose file, prepare its
+bind mount and onboard once:
 
-# 4. Start
+```bash
+mkdir -p docker/data
+# On Linux, make the bind directory writable by the image's UID/GID.
+sudo chown 1000:1000 docker/data
+docker compose -f docker/docker-compose.yml run --rm --entrypoint picoclaw picoclaw-agent onboard
+```
+
+Set provider credentials and channels in `docker/data/config.json`, then start:
+
+```bash
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
@@ -27,25 +40,102 @@ docker compose -f docker/docker-compose.yml --profile gateway up -d
 > **Docker Users**: By default, the Gateway listens on `127.0.0.1` which is not accessible from the host. If you need to access the health endpoints or expose ports, set `PICOCLAW_GATEWAY_HOST=0.0.0.0` in your environment or update `config.json`.
 
 ```bash
-# 5. Check logs
 docker compose -f docker/docker-compose.yml logs -f picoclaw-gateway
 
-# 6. Stop
 docker compose -f docker/docker-compose.yml --profile gateway down
 ```
 
 ### Launcher Mode (Web Console)
 
-The `launcher` image includes all three binaries (`picoclaw`, `picoclaw-launcher`, `picoclaw-launcher-tui`) and starts the web console by default, which provides a browser-based UI for configuration and chat.
+The source launcher image includes `picoclaw` and the web launcher. The release
+launcher image also includes the existing TUI binary. Both start the web
+console and manage their owned gateway process automatically.
 
 ```bash
 docker compose -f docker/docker-compose.yml --profile launcher up -d
 ```
 
-Open http://localhost:18800 in your browser. The launcher manages the gateway process automatically.
+Open http://localhost:18800 and create the dashboard password. The Compose
+ports bind to host loopback. Authentication setup persists in
+`docker/data/launcher-auth.db`; browser sessions expire on restart and require
+login again. Keep the whole state directory writable and persistent. See
+[dashboard authentication](dashboard-auth.md).
 
-> [!WARNING]
-> The web console does not yet support authentication. Avoid exposing it to the public internet.
+### Prepared read-only configuration
+
+Prepare a v3 configuration before mounting it; see
+[configuration migration](configuration-v3.md). Bind the **file** read-only
+inside a writable state directory. Mounting the whole parent read-only prevents
+creation of the authentication database.
+
+For a launcher, override its volumes with this layout:
+
+```yaml
+services:
+  picoclaw-launcher:
+    volumes:
+      - ./data:/data
+      - ./prepared-config.json:/data/config.json:ro
+```
+
+Paths are relative to the first Compose file's directory (`docker/` in the
+examples). Ensure the prepared file exists. Configuration reads, password
+setup, login, restart and workspace writes work with this layout. Dashboard
+configuration edits fail explicitly while the file is read-only.
+
+`docker-compose.full.yml` already combines a writable named state/workspace
+volume with `config/config.json` mounted read-only. Set the prepared config's
+workspace to `/data/workspace`; onboard or copy the workspace templates into
+that volume before relying on its custom instructions. Changing to UID 1000
+requires adjusting ownership of state/workspace volumes from older root-run
+images.
+
+### Optional Linux isolation
+
+Isolation remains disabled by default. Enable `isolation.enabled` in the
+configuration, then opt into the runtime overlay on a host that passes the
+acceptance check:
+
+```bash
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.isolation.yml --profile launcher up -d
+# Full MCP agent/gateway: the full file overrides the basic services.
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.full.yml -f docker/docker-compose.isolation.yml --profile gateway up -d
+```
+
+The verified mode keeps UID 1000, drops all outer capabilities, enables
+no-new-privileges, and uses a vendored Moby seccomp profile with five explicit
+syscall grants for Bubblewrap. It also explicitly relaxes outer AppArmor and
+system-path masks so the child can mount its own `/proc`. It requires neither
+privileged mode nor `SYS_ADMIN`. These policy changes are opt-in; review
+[the profile and its provenance](../docker/ISOLATION.md). A host-specific
+AppArmor profile permitting the same namespace/mount contract may replace the
+unconfined option.
+
+Default Docker restrictions on the verified host deny enabled isolation with
+a Bubblewrap capability error. PicoClaw never retries outside the sandbox.
+Kernel, Docker daemon and LSM policies differ across hosts; installing the
+binary alone does not prove isolation can run. See [isolation](isolation.md)
+for explicit mounts, filtered environment, networking and cancellation.
+
+### Container acceptance
+
+On Linux with Docker Compose, Go and Python 3, build the three local tags above,
+then run:
+
+```bash
+make docker-test-packaging
+# Or select existing image tags explicitly:
+python3 scripts/test-docker-packaging.py --launcher picoclaw:launcher-local --gateway picoclaw:local --full picoclaw:full-local
+```
+
+The script uses temporary state, a local fake HTTP provider and an existing
+fake stdio MCP server. It checks embedded UI, setup/login, persistent auth,
+read-only config, gateway startup/restart/shutdown, fresh workspace templates,
+Compose profile resolution, actual Shell/MCP mount/env/private-proc/network
+behavior, default denied diagnostics, and ordinary unisolated MCP. It prints
+image content IDs, revision labels and the acceptance checkout. Containers
+and test networks are removed; images remain for inspection. No live provider
+or Telegram credentials are needed.
 
 ### Agent Mode (One-shot)
 
@@ -60,7 +150,7 @@ docker compose -f docker/docker-compose.yml run --rm picoclaw-agent
 ### Update
 
 ```bash
-docker compose -f docker/docker-compose.yml pull
+make docker-build docker-build-launcher
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 

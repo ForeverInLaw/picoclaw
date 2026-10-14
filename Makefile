@@ -1,4 +1,5 @@
 .PHONY: all build install uninstall clean help test
+.PHONY: docker-build docker-build-full docker-build-launcher docker-test-packaging
 
 # Build variables
 BINARY_NAME=picoclaw
