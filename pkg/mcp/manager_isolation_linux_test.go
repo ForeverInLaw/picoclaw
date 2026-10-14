@@ -197,11 +197,21 @@ func TestLocalMCPCancellationInterruptsConcurrentCallAndReconnectsOnce(t *testin
 	require.Equal(t, "once\nonce\n", string(executions), "interrupted tools were replayed")
 }
 
-func isolatedMCPConfig(t *testing.T) (*config.Config, string) {
+func requireBubblewrap(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("real Linux isolation requires bubblewrap")
 	}
+}
+
+func isolatedMCPConfig(t *testing.T) (*config.Config, string) {
+	t.Helper()
+	requireBubblewrap(t)
+	return localMCPConfig(t)
+}
+
+func localMCPConfig(t *testing.T) (*config.Config, string) {
+	t.Helper()
 	workspace, outside := t.TempDir(), t.TempDir()
 	self, err := os.Executable()
 	require.NoError(t, err)
@@ -243,6 +253,7 @@ func isolatedMCPConfig(t *testing.T) (*config.Config, string) {
 }
 
 func TestLocalMCPNetworkAndDisabledIsolationPreserveDeclaredPolicy(t *testing.T) {
+	requireBubblewrap(t)
 	var calls atomic.Int32
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -281,6 +292,7 @@ func TestLocalMCPNetworkAndDisabledIsolationPreserveDeclaredPolicy(t *testing.T)
 }
 
 func TestLocalMCPStartupTimeoutStopsItsProcessNamespace(t *testing.T) {
+	requireBubblewrap(t)
 	workspace := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Isolation.Enabled = true
@@ -310,7 +322,7 @@ func TestLocalMCPStartupTimeoutStopsItsProcessNamespace(t *testing.T) {
 }
 
 func TestLocalMCPMissingSandboxFailsBeforeStartingServer(t *testing.T) {
-	cfg, workspace := isolatedMCPConfig(t)
+	cfg, workspace := localMCPConfig(t)
 	t.Setenv("PATH", t.TempDir())
 	manager := NewManager()
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })

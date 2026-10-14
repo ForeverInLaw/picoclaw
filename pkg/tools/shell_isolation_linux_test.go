@@ -19,10 +19,15 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
-func TestShellIsolationKeepsMountsAndEnvironmentExplicit(t *testing.T) {
+func requireBubblewrap(t *testing.T) {
+	t.Helper()
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("real Linux isolation requires bubblewrap")
 	}
+}
+
+func TestShellIsolationKeepsMountsAndEnvironmentExplicit(t *testing.T) {
+	requireBubblewrap(t)
 	workspace, outside := t.TempDir(), t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret"), []byte("host-secret"), 0o600))
 	t.Setenv("UNDECLARED_TEST_SECRET", "hidden-value")
@@ -68,6 +73,7 @@ func isolationShell(t *testing.T, policy config.IsolationConfig) (*ExecTool, str
 }
 
 func TestShellIsolationExtraMountsHaveOnlyDeclaredAccess(t *testing.T) {
+	requireBubblewrap(t)
 	readOnly, writable := t.TempDir(), t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(readOnly, "input"), []byte("readable-input"), 0o600))
 	tool, _ := isolationShell(t, config.IsolationConfig{Enabled: true, ExposePaths: []config.ExposePath{
@@ -92,6 +98,7 @@ func TestShellIsolationExtraMountsHaveOnlyDeclaredAccess(t *testing.T) {
 }
 
 func TestShellIsolationNetworkIsEnabledUnlessDisabled(t *testing.T) {
+	requireBubblewrap(t)
 	var calls atomic.Int32
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -140,6 +147,7 @@ func TestShellIsolationUnavailableOrDeniedNeverFallsBack(t *testing.T) {
 }
 
 func TestShellIsolationCancellationAndTimeoutKillDetachedChildren(t *testing.T) {
+	requireBubblewrap(t)
 	for _, timeout := range []bool{false, true} {
 		t.Run(fmt.Sprintf("timeout=%t", timeout), func(t *testing.T) {
 			tool, workspace := isolationShell(t, config.IsolationConfig{Enabled: true})
