@@ -92,6 +92,124 @@ type ExpandMessagesResult struct {
 	TokenCount int       `json:"tokenCount"`
 }
 
+func (r *RetrievalEngine) conversation(ctx context.Context, sessionKey string) (int64, error) {
+	conv, err := r.store.GetConversationBySessionKey(ctx, sessionKey)
+	if err != nil {
+		return 0, err
+	}
+	if conv == nil {
+		return 0, fmt.Errorf("active conversation has no stored source context")
+	}
+	return conv.ConversationID, nil
+}
+
+// GrepConversation searches only the caller's captured conversation scope.
+func (r *RetrievalEngine) GrepConversation(
+	ctx context.Context,
+	sessionKey string,
+	input GrepInput,
+) (*GrepResult, error) {
+	if input.AllConversations {
+		return nil, fmt.Errorf("cross-conversation retrieval is not allowed")
+	}
+	id, err := r.conversation(ctx, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	input.ConversationID = id
+	return r.Grep(ctx, input)
+}
+
+// ExpandSources recovers bounded, deduplicated originals through summary parents.
+// Every traversed record must belong to the captured conversation.
+func (r *RetrievalEngine) ExpandSources(
+	ctx context.Context,
+	sessionKey string,
+	ids []string,
+) (*ExpandMessagesResult, error) {
+	if len(ids) == 0 || len(ids) > 20 {
+		return nil, fmt.Errorf("provide 1 to 20 source IDs")
+	}
+	conversationID, err := r.conversation(ctx, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	result := &ExpandMessagesResult{Messages: []Message{}}
+	seenMessages := map[int64]bool{}
+	seenSummaries := map[string]bool{}
+	addMessage := func(msg Message) error {
+		if msg.ConversationID != conversationID {
+			return fmt.Errorf("source belongs to another conversation")
+		}
+		if !seenMessages[msg.ID] {
+			if len(result.Messages) >= 1000 {
+				return fmt.Errorf("source expansion exceeds 1000 messages; expand narrower IDs")
+			}
+			seenMessages[msg.ID] = true
+			result.Messages = append(result.Messages, msg)
+			result.TokenCount += msg.TokenCount
+		}
+		return nil
+	}
+	var expandSummary func(string, int) error
+	expandSummary = func(id string, depth int) error {
+		if seenSummaries[id] {
+			return nil
+		}
+		if depth > 32 {
+			return fmt.Errorf("source graph depth exceeded")
+		}
+		summary, e := r.store.GetSummary(ctx, id)
+		if e != nil {
+			return e
+		}
+		if summary.ConversationID != conversationID {
+			return fmt.Errorf("summary belongs to another conversation")
+		}
+		seenSummaries[id] = true
+		source, e := r.store.GetSummarySourceMessages(ctx, id)
+		if e != nil {
+			return e
+		}
+		for _, msg := range source {
+			if e = addMessage(msg); e != nil {
+				return e
+			}
+		}
+		parents, e := r.store.GetSummaryParents(ctx, id)
+		if e != nil {
+			return e
+		}
+		for _, parent := range parents {
+			if e = expandSummary(parent.SummaryID, depth+1); e != nil {
+				return e
+			}
+		}
+		return nil
+	}
+	for _, id := range ids {
+		if raw, ok := strings.CutPrefix(id, "msg:"); ok {
+			n, e := strconv.ParseInt(raw, 10, 64)
+			if e != nil {
+				return nil, fmt.Errorf("invalid message ID")
+			}
+			msg, e := r.store.GetMessageByID(ctx, n)
+			if e != nil {
+				return nil, e
+			}
+			err = addMessage(*msg)
+		} else if strings.HasPrefix(id, "sum_") {
+			err = expandSummary(id, 0)
+		} else {
+			err = fmt.Errorf("invalid source ID")
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
 // Grep searches summaries and messages for matching content.
 func (r *RetrievalEngine) Grep(ctx context.Context, input GrepInput) (*GrepResult, error) {
 	if input.Pattern == "" {

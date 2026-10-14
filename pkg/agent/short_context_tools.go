@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -78,15 +77,11 @@ func (t *shortContextTool) Execute(ctx context.Context, args map[string]any) *to
 		return tools.ErrorResult(err.Error())
 	}
 	defer done()
-	store := manager.engine.GetRetrieval().Store()
-	conv, err := store.GetConversationBySessionKey(ctx, s.ScopeKey)
-	if err != nil || conv == nil {
-		return tools.ErrorResult("active conversation has no stored source context")
-	}
+	retrieval := manager.engine.GetRetrieval()
 	prefix := contextReferenceScope(s.ScopeKey)
 	var result any
 	if t.name == "short_grep" {
-		input := seahorse.GrepInput{ConversationID: conv.ConversationID, Limit: 20}
+		input := seahorse.GrepInput{Limit: 20}
 		input.Pattern, _ = args["pattern"].(string)
 		input.Scope, _ = args["scope"].(string)
 		input.Role, _ = args["role"].(string)
@@ -109,7 +104,7 @@ func (t *shortContextTool) Execute(ctx context.Context, args map[string]any) *to
 				*item.target = &parsed
 			}
 		}
-		found, e := manager.engine.GetRetrieval().Grep(ctx, input)
+		found, e := retrieval.GrepConversation(ctx, s.ScopeKey, input)
 		if e != nil {
 			return tools.ErrorResult(e.Error())
 		}
@@ -147,81 +142,19 @@ func (t *shortContextTool) Execute(ctx context.Context, args map[string]any) *to
 		if json.Unmarshal(encoded, &ids) != nil || len(ids) == 0 || len(ids) > 20 {
 			return tools.ErrorResult("provide 1 to 20 scoped IDs")
 		}
-		messages := make([]providers.Message, 0)
-		seenMessages := map[int64]bool{}
-		seenSummaries := map[string]bool{}
-		addMessage := func(msg seahorse.Message) error {
-			if msg.ConversationID != conv.ConversationID {
-				return fmt.Errorf("source belongs to another conversation")
-			}
-			if !seenMessages[msg.ID] {
-				if len(messages) >= 1000 {
-					return fmt.Errorf("source expansion exceeds 1000 messages; expand narrower IDs")
-				}
-				seenMessages[msg.ID] = true
-				messages = append(messages, fromSeahorseMessage(msg))
-			}
-			return nil
-		}
-		var expandSummary func(string, int) error
-		expandSummary = func(id string, depth int) error {
-			if seenSummaries[id] {
-				return nil
-			}
-			if depth > 32 {
-				return fmt.Errorf("source graph depth exceeded")
-			}
-			sum, e := store.GetSummary(ctx, id)
-			if e != nil {
-				return e
-			}
-			if sum.ConversationID != conv.ConversationID {
-				return fmt.Errorf("summary belongs to another conversation")
-			}
-			seenSummaries[id] = true
-			source, e := store.GetSummarySourceMessages(ctx, id)
-			if e != nil {
-				return e
-			}
-			for _, msg := range source {
-				if e = addMessage(msg); e != nil {
-					return e
-				}
-			}
-			parents, e := store.GetSummaryParents(ctx, id)
-			if e != nil {
-				return e
-			}
-			for _, parent := range parents {
-				if e = expandSummary(parent.SummaryID, depth+1); e != nil {
-					return e
-				}
-			}
-			return nil
-		}
-		for _, id := range ids {
+		for i, id := range ids {
 			if !strings.HasPrefix(id, prefix) {
 				return tools.ErrorResult("source ID is outside the captured conversation")
 			}
-			id = strings.TrimPrefix(id, prefix)
-			if strings.HasPrefix(id, "msg:") {
-				n, e := strconv.ParseInt(strings.TrimPrefix(id, "msg:"), 10, 64)
-				if e != nil {
-					return tools.ErrorResult("invalid message ID")
-				}
-				msg, e := store.GetMessageByID(ctx, n)
-				if e != nil {
-					return tools.ErrorResult(e.Error())
-				}
-				err = addMessage(*msg)
-			} else if strings.HasPrefix(id, "sum_") {
-				err = expandSummary(id, 0)
-			} else {
-				err = fmt.Errorf("invalid source ID")
-			}
-			if err != nil {
-				return tools.ErrorResult(err.Error())
-			}
+			ids[i] = strings.TrimPrefix(id, prefix)
+		}
+		found, e := retrieval.ExpandSources(ctx, s.ScopeKey, ids)
+		if e != nil {
+			return tools.ErrorResult(e.Error())
+		}
+		messages := make([]providers.Message, 0, len(found.Messages))
+		for _, msg := range found.Messages {
+			messages = append(messages, fromSeahorseMessage(msg))
 		}
 		result = map[string]any{
 			"messages": messages,

@@ -101,6 +101,27 @@ func TestForcedCompactionRetainsCompleteSourceGraphThroughCondensationAndReopen(
 	if len(seen) != len(source) {
 		t.Fatalf("source graph lost evidence: %d of %d", len(seen), len(source))
 	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.ItemType == "summary" {
+			ids = append(ids, item.SummaryID)
+		} else {
+			ids = append(ids, fmt.Sprintf("msg:%d", item.MessageID))
+		}
+	}
+	expanded, err := engine.GetRetrieval().ExpandSources(t.Context(), "agent:main:current", append(ids, ids[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expanded.Messages) != len(source) {
+		t.Fatalf("bounded retrieval lost or duplicated originals: %d of %d", len(expanded.Messages), len(source))
+	}
+	if err = engine.SyncSources(t.Context(), "agent:main:foreign", []seahorse.Message{{Role: "user", Content: "separate"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = engine.GetRetrieval().ExpandSources(t.Context(), "agent:main:foreign", ids); err == nil {
+		t.Fatal("retrieval accepted another conversation's source graph")
+	}
 	if err = engine.ReconcileCanonical(t.Context(), "agent:main:current", source, ""); err != nil {
 		t.Fatal(err)
 	}
