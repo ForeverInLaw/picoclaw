@@ -40,6 +40,7 @@ type RequestScope struct {
 	AgentID    string
 	SessionKey string
 	Inline     bool
+	NoHistory  bool
 }
 
 func WithRequestScope(ctx context.Context, scope RequestScope) context.Context {

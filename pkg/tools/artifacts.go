@@ -60,7 +60,7 @@ func NewArtifactStore(settings config.MCPArtifactConfig, filter func(string) str
 }
 
 func validArtifactScope(scope RequestScope) bool {
-	return scope.AgentID != "" && scope.SessionKey != "" && !scope.Inline
+	return scope.AgentID != "" && scope.SessionKey != "" && !scope.Inline && !scope.NoHistory
 }
 
 func (s *ArtifactStore) root(create bool) (*os.Root, error) {
@@ -83,7 +83,9 @@ func (s *ArtifactStore) persist(scope RequestScope, text string) (string, error)
 	if !validArtifactScope(scope) {
 		return "", fmt.Errorf("authorized agent and conversation are required")
 	}
-	encoded, err := json.Marshal(artifactRecord{Version: 1, AgentID: scope.AgentID, SessionKey: scope.SessionKey, Text: text})
+	encoded, err := json.Marshal(
+		artifactRecord{Version: 1, AgentID: scope.AgentID, SessionKey: scope.SessionKey, Text: text},
+	)
 	if err != nil {
 		return "", err
 	}
@@ -98,22 +100,38 @@ func (s *ArtifactStore) persist(scope RequestScope, text string) (string, error)
 		return "", fmt.Errorf("artifact max_disk_bytes must be >= 0")
 	}
 	if s.quota > 0 {
+		// Separate gateway/CLI instances must check quota and publish atomically
+		// under the same OS lock. Contention fails explicitly after completion.
+		lock, err := root.OpenFile(".lock", os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return "", err
+		}
+		defer lock.Close()
+		if lockErr := lockArtifactFile(lock); lockErr != nil {
+			return "", fmt.Errorf("artifact storage is busy or quota locking is unavailable: %w", lockErr)
+		}
 		entries, err := fs.ReadDir(root.FS(), ".")
 		if err != nil {
 			return "", err
 		}
 		remaining := s.quota - int64(len(encoded))
+		quotaError := fmt.Errorf(
+			"artifact disk quota exceeded; increase max_disk_bytes or explicitly clean retained artifacts",
+		)
+		if remaining < 0 {
+			return "", quotaError
+		}
 		for _, entry := range entries {
 			info, err := entry.Info()
 			if err != nil {
 				return "", err
 			}
 			if info.Mode().IsRegular() {
+				if remaining < info.Size() {
+					return "", quotaError
+				}
 				remaining -= info.Size()
 			}
-		}
-		if remaining < 0 {
-			return "", fmt.Errorf("artifact disk quota exceeded; increase max_disk_bytes or explicitly clean retained artifacts")
 		}
 	}
 	id := make([]byte, 16)
@@ -135,16 +153,28 @@ func (s *ArtifactStore) Capture(scope RequestScope, result *ToolResult, raw stri
 	}
 	ref, err := s.persist(scope, raw)
 	if err != nil {
-		message := s.filter("MCP operation completed, but its large result could not be stored: " + err.Error() + ". Do not repeat the operation; fix artifact storage for subsequent calls.")
+		message := s.filter(
+			"MCP operation completed, but its large result could not be stored: " + err.Error() + ". Do not repeat the operation; fix artifact storage for subsequent calls.",
+		)
 		return &ToolResult{ForLLM: message, ForUser: message, Terminal: true, Err: err}
 	}
 	preview := []rune(s.filter(raw))
 	if len(preview) > s.previewRunes {
 		preview = preview[:s.previewRunes]
 	}
-	copy := *result
-	copy.ForLLM = fmt.Sprintf("[MCP result saved: %s | %d characters. Use read_file with this reference and offset/length for details.]\n\n%s", ref, utf8.RuneCountInString(raw), string(preview))
-	return &copy
+	captured := *result
+	status := "MCP result"
+	if result.IsError {
+		status = "MCP returned error"
+	}
+	captured.ForLLM = fmt.Sprintf(
+		"[%s saved: %s | %d characters. Use read_file with this reference and offset/length for details.]\n\n%s",
+		status,
+		ref,
+		utf8.RuneCountInString(raw),
+		string(preview),
+	)
+	return &captured
 }
 
 // Open authorizes the persisted owner before exposing a fully filtered view.
@@ -155,7 +185,8 @@ func (s *ArtifactStore) Open(scope RequestScope, reference string) (fs.File, err
 	}
 	id := strings.TrimPrefix(reference, artifactPrefix)
 	decoded, err := hex.DecodeString(id)
-	if !strings.HasPrefix(reference, artifactPrefix) || err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != id {
+	if !strings.HasPrefix(reference, artifactPrefix) || err != nil || len(decoded) != 16 ||
+		hex.EncodeToString(decoded) != id {
 		return nil, fmt.Errorf("invalid artifact reference")
 	}
 	root, err := s.root(false)
@@ -196,7 +227,7 @@ func (s *ArtifactStore) ProtectPath(path string) bool {
 	if isWithinWorkspace(path, root) {
 		return true
 	}
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+	if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
 		root = resolved
 	}
 	resolved, err := filepath.EvalSymlinks(path)

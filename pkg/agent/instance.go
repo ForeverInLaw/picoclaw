@@ -88,14 +88,18 @@ func NewAgentInstance(
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 
 	toolsRegistry := tools.NewToolRegistry()
-	artifacts := tools.NewArtifactStore(cfg.Tools.MCP.Artifacts, cfg.ArtifactFilter())
+	var artifacts *tools.ArtifactStore
 	if len(artifactStores) > 0 {
 		artifacts = artifactStores[0]
+	} else {
+		artifacts = tools.NewArtifactStore(cfg.Tools.MCP.Artifacts, cfg.ArtifactFilter())
 	}
 
 	if cfg.Tools.IsToolEnabled("read_file") {
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
-		toolsRegistry.Register(tools.NewReadFileTool(workspace, readRestrict, maxReadFileSize, allowReadPaths).WithArtifacts(artifacts))
+		toolsRegistry.Register(
+			tools.NewReadFileTool(workspace, readRestrict, maxReadFileSize, allowReadPaths).WithArtifacts(artifacts),
+		)
 	}
 	if cfg.Tools.IsToolEnabled("write_file") {
 		toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict, allowWritePaths))

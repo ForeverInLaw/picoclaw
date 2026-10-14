@@ -214,6 +214,10 @@ The MCP tool enables integration with external Model Context Protocol servers.
 
 Zero-argument tool calls send `arguments: {}` for compatibility with strict MCP servers. Non-empty argument objects, including nested values, are forwarded unchanged.
 
+Large text results use [durable scoped artifacts](mcp-artifacts.md) with a
+configurable inline threshold, bounded preview, and authorized `read_file`
+references. Retention is explicit (no TTL); quota defaults to disabled.
+
 ### Tool Discovery (Lazy Loading)
 
 When connecting to multiple MCP servers, exposing hundreds of tools simultaneously can exhaust the LLM's context window

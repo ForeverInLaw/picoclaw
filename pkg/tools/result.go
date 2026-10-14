@@ -31,6 +31,8 @@ type ToolResult struct {
 	// Terminal indicates that the tool already produced the final user-visible
 	// outcome for the current turn and the agent loop should stop after
 	// recording the result instead of continuing to call tools or the LLM.
+	// A non-silent ForUser supplies an explicit public final notice; silent
+	// terminal tools keep their existing independently delivered outcome.
 	Terminal bool `json:"terminal"`
 
 	// IsError indicates whether the tool execution failed.

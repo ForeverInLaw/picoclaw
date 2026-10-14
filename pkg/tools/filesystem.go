@@ -288,7 +288,7 @@ func (t *ReadFileTool) Name() string {
 }
 
 func (t *ReadFileTool) Description() string {
-	return "Read the contents of a file. Supports pagination via `offset` and `length`."
+	return "Read a file or an authorized artifact://mcp/ reference. Supports pagination via `offset` and `length`."
 }
 
 func (t *ReadFileTool) Parameters() map[string]any {
@@ -297,7 +297,7 @@ func (t *ReadFileTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"path": map[string]any{
 				"type":        "string",
-				"description": "Path to the file to read.",
+				"description": "File path or artifact://mcp/ reference to read.",
 			},
 			"offset": map[string]any{
 				"type":        "integer",

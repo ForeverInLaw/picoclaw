@@ -220,8 +220,13 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	// Handle error result from server
 	if result.IsError {
 		errMsg := extractContentText(result.Content)
-		return t.artifacts.Capture(ToolRequestScope(ctx),
-			ErrorResult(fmt.Sprintf("MCP tool returned error: %s", errMsg)).WithError(fmt.Errorf("MCP tool error: %s", errMsg)), errMsg)
+		return t.artifacts.Capture(
+			ToolRequestScope(ctx),
+			ErrorResult(
+				fmt.Sprintf("MCP tool returned error: %s", errMsg),
+			).WithError(fmt.Errorf("MCP tool error: %s", errMsg)),
+			errMsg,
+		)
 	}
 
 	// Extract text content from result
