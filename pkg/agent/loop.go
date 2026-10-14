@@ -1989,7 +1989,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		)
 	}
 
-	activeProvider, activeCandidates, activeModel := al.selectCandidates(ts.agent, ts.userMessage, messages)
+	activeProvider, activeCandidates := ts.agent.Provider, ts.agent.Candidates
+	activeModel := resolvedCandidateModel(activeCandidates, ts.agent.Model)
+	if !cfg.IsChannelType(ts.channel, "pico") || len(ts.media) == 0 {
+		activeProvider, activeCandidates, activeModel = al.selectCandidates(ts.agent, ts.userMessage, messages)
+	}
 	resolveCandidateProvider := candidateProviderResolver(al.cfg, ts.agent.Workspace, activeProvider, activeCandidates)
 	if len(activeCandidates) > 0 {
 		resolvedProvider, err := resolveCandidateProvider(activeCandidates[0])
@@ -2253,6 +2257,7 @@ turnLoop:
 					return nil, errModelAttemptBudget
 				}
 				modelAttempts++
+				reasoningActionID := fmt.Sprintf("reasoning:%d:%d", iteration, modelAttempts)
 				streamProvider, providerCanStream := client.(providers.StreamingProvider)
 				phasedProvider, providerCanStreamPhases := client.(providers.PhasedStreamingProvider)
 				var streamer bus.Streamer
@@ -2265,6 +2270,7 @@ turnLoop:
 				}
 				if streamingEnabled && (streamer != nil || streamUpdater != nil) {
 					lastSnapshots := make(map[providers.ContentPhase]string)
+					var lastReasoningAt time.Time
 					var response *providers.LLMResponse
 					var err error
 					onUpdate := func(update providers.StreamContent) {
@@ -2277,6 +2283,10 @@ turnLoop:
 						deltaPayload := LLMDeltaPayload{ContentPhase: update.Phase}
 						if update.Phase == providers.ContentPhaseReasoning {
 							deltaPayload.ReasoningDeltaLen = contentDeltaLen
+							if time.Since(lastReasoningAt) >= streamUpdateInterval {
+								lastReasoningAt = time.Now()
+								al.publishWebReasoning(ctx, ts, reasoningActionID, bus.ProgressStarted, accumulated)
+							}
 						} else {
 							deltaPayload.ContentDeltaLen = contentDeltaLen
 						}
@@ -2297,6 +2307,7 @@ turnLoop:
 						response, err = streamProvider.ChatStream(ctx, messagesForCall, toolDefsForCall, model, llmOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
 					}
 					if err != nil {
+						al.publishWebReasoning(ctx, ts, reasoningActionID, bus.ProgressFailed, lastSnapshots[providers.ContentPhaseReasoning])
 						cancelStreamingContent(ctx, streamer)
 						return nil, err
 					}
@@ -2304,6 +2315,7 @@ turnLoop:
 						cancelStreamingContent(ctx, streamer)
 						return nil, errEmptyAnswer
 					}
+					al.publishWebReasoning(ctx, ts, reasoningActionID, bus.ProgressCompleted, lastSnapshots[providers.ContentPhaseReasoning])
 					if len(response.ToolCalls) > 0 || !isAnswerContent(response) {
 						cancelStreamingContent(ctx, streamer)
 					}
@@ -2552,6 +2564,11 @@ turnLoop:
 			}
 		}
 
+		reasoningContent := response.ReasoningContent
+		if reasoningContent == "" {
+			reasoningContent = response.Reasoning
+		}
+		al.publishWebReasoning(turnCtx, ts, fmt.Sprintf("reasoning:%d:%d", iteration, modelAttempts), bus.ProgressCompleted, reasoningContent)
 		go al.handleReasoning(
 			turnCtx,
 			response.Reasoning,

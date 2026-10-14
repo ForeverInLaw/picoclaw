@@ -17,6 +17,12 @@ func ErrorGuidance(err error) string {
 		return "Model request canceled."
 	}
 	status, _, _ := errorHTTPMetadata(err)
+	text := strings.ToLower(err.Error())
+	if (status == 400 || status == 422) &&
+		(strings.Contains(text, "image") || strings.Contains(text, "vision")) &&
+		(strings.Contains(text, "not support") || strings.Contains(text, "unsupported") || strings.Contains(text, "not allowed")) {
+		return "The selected model does not support these image inputs. Select a vision-capable model or remove the images and send text."
+	}
 	failure := ClassifyError(err, "", "")
 	if failure != nil {
 		switch failure.Reason {

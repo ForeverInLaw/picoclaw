@@ -10,13 +10,15 @@ const (
 	TypePing        = "ping"
 
 	// TypeMessageCreate is sent from server to client.
-	TypeMessageCreate = "message.create"
-	TypeMessageUpdate = "message.update"
-	TypeMediaCreate   = "media.create"
-	TypeTypingStart   = "typing.start"
-	TypeTypingStop    = "typing.stop"
-	TypeError         = "error"
-	TypePong          = "pong"
+	TypeMessageCreate  = "message.create"
+	TypeMessageUpdate  = "message.update"
+	TypeMessageDelete  = "message.delete"
+	TypeActivityUpdate = "activity.update"
+	TypeMediaCreate    = "media.create"
+	TypeTypingStart    = "typing.start"
+	TypeTypingStop     = "typing.stop"
+	TypeError          = "error"
+	TypePong           = "pong"
 )
 
 // PicoMessage is the wire format for all Pico Protocol messages.
@@ -30,8 +32,10 @@ type PicoMessage struct {
 
 // newMessage creates a PicoMessage with the given type and payload.
 func newMessage(msgType string, payload map[string]any) PicoMessage {
+	id, _ := payload["message_id"].(string)
 	return PicoMessage{
 		Type:      msgType,
+		ID:        id,
 		Timestamp: time.Now().UnixMilli(),
 		Payload:   payload,
 	}

@@ -242,6 +242,13 @@ func (c *PicoClientChannel) handleInbound(pc *picoConn, msg PicoMessage) {
 }
 
 func (c *PicoClientChannel) handleServerMessage(pc *picoConn, msg PicoMessage) {
+	if msg.Payload["final"] == false || msg.Payload["placeholder"] == true || msg.Payload["thought"] == true {
+		return
+	}
+	if kind, _ := msg.Payload["kind"].(string); strings.EqualFold(kind, "thought") ||
+		strings.EqualFold(kind, "reasoning") {
+		return
+	}
 	content, _ := msg.Payload["content"].(string)
 	if strings.TrimSpace(content) == "" {
 		return

@@ -22,6 +22,38 @@ func (h *Handler) registerPicoRoutes(mux *http.ServeMux) {
 	// This allows the frontend to connect via the same port as the web UI,
 	// avoiding the need to expose extra ports for WebSocket communication.
 	mux.HandleFunc("GET /pico/ws", h.handleWebSocketProxy())
+	mux.HandleFunc("GET /pico/uploads", h.handlePicoMediaProxy())
+	mux.HandleFunc("POST /pico/uploads", h.handlePicoMediaProxy())
+	mux.HandleFunc("GET /pico/media/{id}", h.handlePicoMediaProxy())
+	mux.HandleFunc("HEAD /pico/media/{id}", h.handlePicoMediaProxy())
+	mux.HandleFunc("DELETE /pico/media/{id}", h.handlePicoMediaProxy())
+}
+
+// Cookie authentication is enforced by the launcher middleware. The gateway
+// independently verifies its Pico token and upload/session ownership.
+func (h *Handler) handlePicoMediaProxy() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := config.LoadConfig(h.configPath)
+		if err != nil || cfg.Channels.Pico.Token == "" || !cfg.Channels.Pico.Enabled {
+			http.Error(
+				w,
+				"Chat media is unavailable. Start the gateway and enable Pico.",
+				http.StatusServiceUnavailable,
+			)
+			return
+		}
+		proxy := httputil.NewSingleHostReverseProxy(h.gatewayProxyURL())
+		director := proxy.Director
+		proxy.Director = func(out *http.Request) {
+			director(out)
+			out.Header.Del("Cookie")
+			out.Header.Set("Authorization", "Bearer "+cfg.Channels.Pico.Token)
+		}
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, "Gateway unavailable. Start it and try the image upload again.", http.StatusBadGateway)
+		}
+		proxy.ServeHTTP(w, r)
+	}
 }
 
 // createWsProxy creates a reverse proxy to the current gateway WebSocket endpoint.
