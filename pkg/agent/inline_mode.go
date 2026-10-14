@@ -12,6 +12,7 @@ import (
 const (
 	telegramInlineMetadataKey = "telegram_inline"
 	telegramInlineQueryKey    = "inline_query"
+	telegramGuestMetadataKey  = "telegram_guest"
 )
 
 func telegramUserID(msg bus.InboundMessage) string {
@@ -56,7 +57,7 @@ func inlineToolAllowlist() []string {
 }
 
 func inlineResponseQuote(msg bus.InboundMessage) string {
-	if !isInlineMessage(msg) {
+	if !isInlineMessage(msg) || strings.EqualFold(msg.Metadata[telegramGuestMetadataKey], "true") {
 		return ""
 	}
 

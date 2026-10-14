@@ -2016,6 +2016,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
+	var finalModelContent string
 	var lastResponseModel string
 	var finalContentPhase providers.ContentPhase
 	var lastToolResultForFallback string
@@ -2629,6 +2630,7 @@ turnLoop:
 				pendingMessages = append(pendingMessages, steerMsgs...)
 				continue
 			}
+			finalModelContent = responseContent
 			finalContent = formatInlineResponse(ts.opts.ResponseQuote, responseContent)
 			finalContentPhase = response.ContentPhase
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
@@ -3148,6 +3150,7 @@ turnLoop:
 				})
 			pendingMessages = append(pendingMessages, steerMsgs...)
 			finalContent = ""
+			finalModelContent = ""
 			goto turnLoop
 		}
 	}
@@ -3165,6 +3168,11 @@ turnLoop:
 		}
 	}
 
+	// Delivery quotes belong to the publication, not to canonical model history.
+	assistantContent := finalContent
+	if finalModelContent != "" {
+		assistantContent = finalModelContent
+	}
 	ts.setPhase(TurnPhaseFinalizing)
 	ts.setFinalContent(finalContent)
 	if !ts.opts.NoHistory {
@@ -3181,7 +3189,7 @@ turnLoop:
 		if !deliveredSaved {
 			finalMsg := providers.Message{
 				Role:         "assistant",
-				Content:      finalContent,
+				Content:      assistantContent,
 				ContentPhase: finalContentPhase,
 				ModelName:    lastResponseModel,
 			}
@@ -3197,7 +3205,7 @@ turnLoop:
 				ts.opts.ChatLabel,
 				"assistant",
 				"",
-				finalContent,
+				assistantContent,
 			)
 		}
 		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
@@ -3229,7 +3237,7 @@ turnLoop:
 			ts.sessionKey,
 			ts.scope,
 			lastRequestTokens+estimateMessageTokens(providers.Message{
-				Role: "assistant", Content: finalContent,
+				Role: "assistant", Content: assistantContent,
 			}),
 		)
 	}

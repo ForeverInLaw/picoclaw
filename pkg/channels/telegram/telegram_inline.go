@@ -22,6 +22,7 @@ const (
 	telegramInlineCallbackData = "__picoclaw_inline_ack__"
 	telegramInlineMetadataKey  = "telegram_inline"
 	telegramInlineQueryKey     = "inline_query"
+	telegramGuestMetadataKey   = "telegram_guest"
 )
 
 func isTelegramInlineChatID(chatID string) bool {
@@ -149,10 +150,10 @@ func (c *TelegramChannel) handleGuestMessage(ctx *th.Context, msg telego.Message
 	if answered == nil || strings.TrimSpace(answered.InlineMessageID) == "" {
 		return fmt.Errorf("answer guest query returned no inline message ID")
 	}
-	return c.handleChosenInlineResult(ctx, telego.ChosenInlineResult{
+	return c.handleInlineResult(ctx, telego.ChosenInlineResult{
 		ResultID: result.ID, InlineMessageID: answered.InlineMessageID,
 		Query: query, From: *msg.From,
-	})
+	}, true)
 }
 
 func (c *TelegramChannel) handleInlineQuery(ctx *th.Context, query telego.InlineQuery) error {
@@ -194,6 +195,10 @@ func (c *TelegramChannel) handleInlineQuery(ctx *th.Context, query telego.Inline
 }
 
 func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result telego.ChosenInlineResult) error {
+	return c.handleInlineResult(ctx, result, false)
+}
+
+func (c *TelegramChannel) handleInlineResult(ctx *th.Context, result telego.ChosenInlineResult, guest bool) error {
 	inlineCfg := c.config.Channels.Telegram.Inline
 	if !inlineCfg.Enabled {
 		return nil
@@ -249,7 +254,11 @@ func (c *TelegramChannel) handleChosenInlineResult(ctx *th.Context, result teleg
 		})
 	}
 
-	err := c.PublishInbound(ctx, buildTelegramInlineInboundMessage(result, sender))
+	msg := buildTelegramInlineInboundMessage(result, sender)
+	if guest {
+		msg.Metadata[telegramGuestMetadataKey] = "true"
+	}
+	err := c.PublishInbound(ctx, msg)
 	if err != nil {
 		c.inlineMu.Lock()
 		state.admitted = false

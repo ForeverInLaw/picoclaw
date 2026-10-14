@@ -41,6 +41,13 @@ Guest mentions such as `@bot question` are handled through Telegram's
 conversation and retained answer storage as selected inline results. This is
 separate from BotFather's `/setinline` setting for the inline result picker.
 
+Guest replies use Telegram's native reply reference without adding another
+copy of the request inside the answer. Selected inline results keep their
+request quote because the typed query need not appear as a chat message.
+New assistant turns store the model's answer without delivery formatting;
+quotes intentionally written by the model remain part of its answer. Existing
+history is retained without rewriting old messages.
+
 Replies in direct chats, groups, topics, and inline destinations use Telegram's
 native Rich Markdown: headings, lists, tables, code blocks, and LaTeX formulas.
 Inline math uses `$x^2$`; display math uses `$$E = mc^2$$` or a `math` code block.

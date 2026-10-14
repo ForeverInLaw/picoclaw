@@ -65,6 +65,7 @@ func TestGuestMentionUsesIsolatedInlineConversation(t *testing.T) {
 		require.Equal(t, "inline:guest-result", msg.ChatID)
 		require.Equal(t, "write a formula", msg.Content)
 		require.Equal(t, "true", msg.Metadata[telegramInlineMetadataKey])
+		require.Equal(t, "true", msg.Metadata["telegram_guest"])
 		require.Equal(t, "42", msg.Metadata["telegram_user_id"])
 	default:
 		t.Fatal("guest mention was not admitted to the agent")
