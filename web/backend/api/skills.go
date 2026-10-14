@@ -37,6 +37,7 @@ func (h *Handler) registerSkillRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/skills/{name}", h.handleGetSkill)
 	mux.HandleFunc("POST /api/skills/import", h.handleImportSkill)
 	mux.HandleFunc("DELETE /api/skills/{name}", h.handleDeleteSkill)
+	h.registerSkillHubRoutes(mux)
 }
 
 func (h *Handler) handleListSkills(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +129,8 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 	content = normalizeImportedSkillContent(content, skillName)
 
 	workspace := cfg.WorkspacePath()
+	workspaceSkillWriteMu.Lock()
+	defer workspaceSkillWriteMu.Unlock()
 	skillDir := filepath.Join(workspace, "skills", skillName)
 	skillFile := filepath.Join(skillDir, "SKILL.md")
 	if _, err := os.Stat(skillDir); err == nil {
@@ -161,6 +164,8 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
+	workspaceSkillWriteMu.Lock()
+	defer workspaceSkillWriteMu.Unlock()
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)

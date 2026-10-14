@@ -9,3 +9,5 @@ The final check runs after tool results, steering messages, and LLM hooks have a
 Background summaries compare the complete next-request estimate with `context_window * summarize_token_percent / 100`; `summarize_message_threshold` remains an independent trigger. Summaries stay scoped to the owning conversation and keep the existing Conversation reset fence.
 
 Media remains stored as reusable references in conversation history. Every initial or rebuilt provider request resolves images to data URLs and documents to local path tags, including a rebuild after a context-limit error. Inline conversation privacy, reply routing, answer classification, and model retry limits keep their existing behavior.
+
+Selectable Seahorse context management uses the same shared estimator and request checks. It compacts only historical source context, retaining the active turn's text, media and tool sequence during a retry. See [scoped active context](seahorse-context.md) for engine selection and lifecycle limits.

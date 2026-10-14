@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -28,6 +29,12 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if cfg.Tools.Skills.Registries.ClawHub.AuthToken != "" {
+		cfg.Tools.Skills.Registries.ClawHub.AuthToken = registryCredentialMask
+	}
+	if cfg.Tools.Skills.Github.Token != "" {
+		cfg.Tools.Skills.Github.Token = registryCredentialMask
+	}
 	if err := json.NewEncoder(w).Encode(cfg); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
@@ -52,6 +59,12 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if execAllowRemoteOmitted(body) {
 		cfg.Tools.Exec.AllowRemote = config.DefaultConfig().Tools.Exec.AllowRemote
 	}
+	current, err := config.LoadConfig(h.configPath)
+	if err != nil {
+		http.Error(w, "Failed to load stored registry credentials", http.StatusInternalServerError)
+		return
+	}
+	preserveRegistryCredentials(&cfg, current, body)
 
 	if errs := validateConfig(&cfg); len(errs) > 0 {
 		w.Header().Set("Content-Type", "application/json")
@@ -176,6 +189,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	preserveRegistryCredentials(&newCfg, cfg, patchBody)
 	if errs := validateConfig(&newCfg); len(errs) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -193,6 +207,49 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+const registryCredentialMask = "****"
+
+// Public config uses a sentinel for registry credentials. Unchanged/missing
+// values retain the stored secret only while its configured endpoint matches.
+// An explicit value replaces it; an explicit empty value removes it.
+func preserveRegistryCredentials(next, current *config.Config, body []byte) {
+	var fields struct {
+		Tools struct {
+			Skills struct {
+				Registries struct {
+					ClawHub struct {
+						AuthToken json.RawMessage `json:"auth_token"`
+					} `json:"clawhub"`
+				} `json:"registries"`
+				Github struct {
+					Token json.RawMessage `json:"token"`
+				} `json:"github"`
+			} `json:"skills"`
+		} `json:"tools"`
+	}
+	_ = json.Unmarshal(body, &fields)
+	preserve := func(raw json.RawMessage) bool {
+		var value string
+		_ = json.Unmarshal(raw, &value)
+		return len(raw) == 0 || value == registryCredentialMask
+	}
+	if preserve(fields.Tools.Skills.Registries.ClawHub.AuthToken) {
+		next.Tools.Skills.Registries.ClawHub.AuthToken = ""
+		base := func(value string) string {
+			if value == "" {
+				value = "https://clawhub.ai"
+			}
+			return strings.TrimRight(value, "/")
+		}
+		if base(next.Tools.Skills.Registries.ClawHub.BaseURL) == base(current.Tools.Skills.Registries.ClawHub.BaseURL) {
+			next.Tools.Skills.Registries.ClawHub.AuthToken = current.Tools.Skills.Registries.ClawHub.AuthToken
+		}
+	}
+	if preserve(fields.Tools.Skills.Github.Token) {
+		next.Tools.Skills.Github.Token = current.Tools.Skills.Github.Token
+	}
 }
 
 // validateConfig checks the config for common errors before saving.

@@ -42,7 +42,7 @@ func isTelegramMessage(msg bus.InboundMessage) bool {
 	return msg.Channel == "telegram" || msg.Sender.Platform == "telegram"
 }
 
-var inlineSafeTools = []string{"web_search", "web_fetch", "fact_check"}
+var inlineSafeTools = []string{"web_search", "web_fetch", "fact_check", "short_grep", "short_expand"}
 
 func isInlineMessage(msg bus.InboundMessage) bool {
 	if strings.EqualFold(msg.Metadata[telegramInlineMetadataKey], "true") {

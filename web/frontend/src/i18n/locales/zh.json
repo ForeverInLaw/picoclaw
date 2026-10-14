@@ -377,7 +377,29 @@
         "loading_detail": "正在加载技能内容...",
         "load_detail_error": "加载技能内容失败。",
         "path": "技能路径",
-        "no_description": "未提供描述。"
+        "no_description": "未提供描述。",
+        "hub": {
+          "title": "技能中心",
+          "description": "搜索已配置的技能库，并将技能安装到工作区。",
+          "searchLabel": "查找技能",
+          "search": "搜索",
+          "disabled": "请在工具设置中启用 skills 和 find_skills。",
+          "empty": "未找到技能。请尝试其他搜索。",
+          "latest": "最新版本",
+          "details": "详情",
+          "more": "加载更多",
+          "detailDescription": "技能库详情",
+          "installed": "已安装 {{name}}",
+          "installedLabel": "已安装",
+          "install": "安装技能",
+          "installing": "正在安装…",
+          "cancel": "取消安装",
+          "canceled": "安装请求已取消。重试前请检查已安装的技能。",
+          "blocked": "此技能已被标记为恶意，无法安装。",
+          "suspicious": "技能库将此技能标记为可疑。",
+          "installDisabled": "请在工具设置中启用 skills 和 install_skill。",
+          "yourSkills": "已安装的技能"
+        }
       },
       "tools": {
         "description": "这里展示每个 Agent 工具当前是已启用、已禁用，还是被依赖条件阻塞。",

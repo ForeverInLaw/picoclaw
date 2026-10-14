@@ -21,6 +21,7 @@ import {
   importSkill,
 } from "@/api/skills"
 import { PageHeader } from "@/components/page-header"
+import { SkillHub } from "@/components/skills/skill-hub"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -149,7 +150,11 @@ export function SkillsPage() {
       />
 
       <div className="flex-1 overflow-auto px-6 py-3">
-        <div className="w-full max-w-6xl space-y-6">
+        <div className="flex w-full max-w-6xl flex-col gap-6">
+          <SkillHub installed={data?.skills || []} />
+          <h2 className="text-lg font-semibold">
+            {t("pages.agent.skills.hub.yourSkills")}
+          </h2>
           {isLoading ? (
             <div className="text-muted-foreground py-6 text-sm">
               {t("labels.loading")}
