@@ -2,14 +2,11 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
-	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/utils"
@@ -146,7 +143,7 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 
 	// Write origin metadata.
-	if err := writeOriginMeta(targetDir, registry.Name(), slug, result.Version); err != nil {
+	if err := skills.WriteOriginMetadata(targetDir, registry.Name(), slug, result.Version); err != nil {
 		logger.ErrorCF("tool", "Failed to write origin metadata",
 			map[string]any{
 				"tool":     "install_skill",
@@ -173,31 +170,4 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	output += "\nThe skill is now available and can be loaded in the current session."
 
 	return SilentResult(output)
-}
-
-// originMeta tracks which registry a skill was installed from.
-type originMeta struct {
-	Version          int    `json:"version"`
-	Registry         string `json:"registry"`
-	Slug             string `json:"slug"`
-	InstalledVersion string `json:"installed_version"`
-	InstalledAt      int64  `json:"installed_at"`
-}
-
-func writeOriginMeta(targetDir, registryName, slug, version string) error {
-	meta := originMeta{
-		Version:          1,
-		Registry:         registryName,
-		Slug:             slug,
-		InstalledVersion: version,
-		InstalledAt:      time.Now().UnixMilli(),
-	}
-
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	return fileutil.WriteFileAtomic(filepath.Join(targetDir, ".skill-origin.json"), data, 0o600)
 }

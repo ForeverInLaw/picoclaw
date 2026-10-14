@@ -241,6 +241,8 @@ Chat displays separate [thought and tool activity](docs/web-chat-activity.md) bl
 
 The composer also supports [pasted, dropped and selected images](docs/web-chat-images.md) with previews, cancellation, and authenticated media access.
 
+Use [Skill Hub](docs/skill-hub.md) on the Skills page to search and install registry skills alongside existing import and delete actions.
+
 ### Agent Mode (One-shot)
 
 ```bash

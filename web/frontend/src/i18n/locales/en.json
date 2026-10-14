@@ -377,7 +377,29 @@
         "loading_detail": "Loading skill content...",
         "load_detail_error": "Failed to load skill content.",
         "path": "Skill Path",
-        "no_description": "No description provided."
+        "no_description": "No description provided.",
+        "hub": {
+          "title": "Skill Hub",
+          "description": "Search the configured registry and install skills into your workspace.",
+          "searchLabel": "Find skills",
+          "search": "Search",
+          "disabled": "Enable skills and find_skills in tool settings to search the Hub.",
+          "empty": "No skills found. Try another search.",
+          "latest": "Latest",
+          "details": "Details",
+          "more": "Load more",
+          "detailDescription": "Registry skill details",
+          "installed": "Installed {{name}}",
+          "installedLabel": "Installed",
+          "install": "Install skill",
+          "installing": "Installing…",
+          "cancel": "Cancel install",
+          "canceled": "Install request canceled. Check your installed skills before retrying.",
+          "blocked": "This skill is flagged as malicious and cannot be installed.",
+          "suspicious": "The registry flagged this skill as suspicious.",
+          "installDisabled": "Enable skills and install_skill in tool settings to install.",
+          "yourSkills": "Installed skills"
+        }
       },
       "tools": {
         "description": "This view reflects whether each agent tool is enabled, disabled, or blocked by a missing prerequisite.",

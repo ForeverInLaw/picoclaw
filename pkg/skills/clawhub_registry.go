@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/utils"
@@ -75,6 +76,16 @@ func NewClawHubRegistry(cfg ClawHubConfig) *ClawHubRegistry {
 		maxResponseSize: maxResp,
 		client: &http.Client{
 			Timeout: timeout,
+			CheckRedirect: func(request *http.Request, previous []*http.Request) error {
+				if len(previous) >= 10 {
+					return fmt.Errorf("registry redirect limit exceeded")
+				}
+				if len(previous) > 0 &&
+					(request.URL.Host != previous[0].URL.Host || request.URL.Scheme != previous[0].URL.Scheme) {
+					request.Header.Del("Authorization")
+				}
+				return nil
+			},
 			Transport: &http.Transport{
 				MaxIdleConns:        5,
 				IdleConnTimeout:     30 * time.Second,
@@ -128,7 +139,7 @@ func (c *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 	results := make([]SearchResult, 0, len(resp.Results))
 	for _, r := range resp.Results {
 		slug := utils.DerefStr(r.Slug, "")
-		if slug == "" {
+		if slug == "" || c.authToken != "" && strings.Contains(slug, c.authToken) {
 			continue
 		}
 
@@ -145,9 +156,9 @@ func (c *ClawHubRegistry) Search(ctx context.Context, query string, limit int) (
 		results = append(results, SearchResult{
 			Score:        r.Score,
 			Slug:         slug,
-			DisplayName:  displayName,
-			Summary:      summary,
-			Version:      utils.DerefStr(r.Version, ""),
+			DisplayName:  c.redact(displayName),
+			Summary:      c.redact(summary),
+			Version:      c.redact(utils.DerefStr(r.Version, "")),
 			RegistryName: c.Name(),
 		})
 	}
@@ -192,14 +203,14 @@ func (c *ClawHubRegistry) GetSkillMeta(ctx context.Context, slug string) (*Skill
 	}
 
 	meta := &SkillMeta{
-		Slug:         resp.Slug,
-		DisplayName:  resp.DisplayName,
-		Summary:      resp.Summary,
+		Slug:         slug,
+		DisplayName:  c.redact(resp.DisplayName),
+		Summary:      c.redact(resp.Summary),
 		RegistryName: c.Name(),
 	}
 
 	if resp.LatestVersion != nil {
-		meta.LatestVersion = resp.LatestVersion.Version
+		meta.LatestVersion = c.redact(resp.LatestVersion.Version)
 	}
 	if resp.Moderation != nil {
 		meta.IsMalwareBlocked = resp.Moderation.IsMalwareBlocked
@@ -267,7 +278,7 @@ func (c *ClawHubRegistry) DownloadAndInstall(
 
 	// Step 4: Extract from file on disk.
 	if err := utils.ExtractZipFile(tmpPath, targetDir); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("registry archive validation failed: %s", c.redact(err.Error()))
 	}
 
 	return result, nil
@@ -278,12 +289,12 @@ func (c *ClawHubRegistry) DownloadAndInstall(
 func (c *ClawHubRegistry) doGet(ctx context.Context, urlStr string) ([]byte, error) {
 	req, err := c.newGetRequest(ctx, urlStr, "application/json")
 	if err != nil {
-		return nil, err
+		return nil, c.requestError(ctx)
 	}
 
 	resp, err := utils.DoRequestWithRetry(c.client, req)
 	if err != nil {
-		return nil, err
+		return nil, c.requestError(ctx)
 	}
 	defer resp.Body.Close()
 
@@ -294,7 +305,7 @@ func (c *ClawHubRegistry) doGet(ctx context.Context, urlStr string) ([]byte, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("registry returned HTTP %d; check availability and credentials", resp.StatusCode)
 	}
 
 	return body, nil
@@ -315,19 +326,17 @@ func (c *ClawHubRegistry) newGetRequest(ctx context.Context, urlStr, accept stri
 func (c *ClawHubRegistry) downloadToTempFileWithRetry(ctx context.Context, urlStr string) (string, error) {
 	req, err := c.newGetRequest(ctx, urlStr, "application/zip")
 	if err != nil {
-		return "", err
+		return "", c.requestError(ctx)
 	}
 
 	resp, err := utils.DoRequestWithRetry(c.client, req)
 	if err != nil {
-		return "", err
+		return "", c.requestError(ctx)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		errBody := make([]byte, 512)
-		n, _ := io.ReadFull(resp.Body, errBody)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(errBody[:n]))
+		return "", fmt.Errorf("registry returned HTTP %d; check availability and credentials", resp.StatusCode)
 	}
 
 	tmpFile, err := os.CreateTemp("", "picoclaw-dl-*")
@@ -359,4 +368,20 @@ func (c *ClawHubRegistry) downloadToTempFileWithRetry(ctx context.Context, urlSt
 	}
 
 	return tmpPath, nil
+}
+
+// Registry credentials never enter public metadata, tool results or HTTP error
+// text, even when an upstream service reflects its Authorization header.
+func (c *ClawHubRegistry) redact(value string) string {
+	if c.authToken == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, c.authToken, "[REDACTED]")
+}
+
+func (c *ClawHubRegistry) requestError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fmt.Errorf("registry request failed; check availability and settings")
 }

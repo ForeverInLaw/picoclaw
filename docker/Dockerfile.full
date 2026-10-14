@@ -13,31 +13,36 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN make build
+ARG VERSION=dev
+ARG VCS_REF=dev
+RUN --mount=type=cache,target=/root/.cache/go-build make build VERSION=${VERSION} GIT_COMMIT=${VCS_REF}
 
 # ============================================================
 # Stage 2: Node.js-based runtime with full MCP support
 # ============================================================
 FROM node:24-alpine3.23
+ARG VERSION=dev
+ARG VCS_REF=dev
+LABEL org.opencontainers.image.version=${VERSION} org.opencontainers.image.revision=${VCS_REF}
 
 # Install runtime dependencies
 RUN apk add --no-cache \
   ca-certificates \
+  tzdata \
   curl \
   git \
   python3 \
-  py3-pip
-
-# Install uv and symlink to system path
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-  ln -s /root/.local/bin/uv /usr/local/bin/uv && \
-  ln -s /root/.local/bin/uvx /usr/local/bin/uvx && \
-  uv --version
+  py3-pip \
+  uv \
+  bubblewrap
 
 # Copy binary
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
 
 # Create picoclaw home directory
+ENV PICOCLAW_HOME=/data
+RUN mkdir -p /data && chown node:node /data
+USER node
 RUN /usr/local/bin/picoclaw onboard
 
 ENTRYPOINT ["picoclaw"]
