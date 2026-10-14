@@ -193,9 +193,9 @@ func (s *Store) canonicalPlan(
 			if strings.HasPrefix(item.key, "canonical:") {
 				ordinal, _ = strconv.Atoi(strings.TrimPrefix(item.key, "canonical:"))
 			}
-			digest, err := canonicalDigest(*msg, scope, ordinal)
-			if err != nil {
-				return 0, plan, err
+			digest, digestErr := canonicalDigest(*msg, scope, ordinal)
+			if digestErr != nil {
+				return 0, plan, digestErr
 			}
 			previous.Digests = append(previous.Digests, digest)
 			previous.Keys = append(previous.Keys, item.key)
