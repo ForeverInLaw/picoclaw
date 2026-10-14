@@ -65,6 +65,10 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: docker/Dockerfile
+          build-args: |
+            VERSION=${{ inputs.tag }}
+            VCS_REF=${{ github.sha }}
           push: true
           tags: |
             ${{ steps.tags.outputs.ghcr_tag }}
