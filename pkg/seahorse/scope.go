@@ -5,8 +5,10 @@ import (
 	"fmt"
 )
 
-type CommitGuard func(operation func() error) (bool, error)
-type commitGuardKey struct{}
+type (
+	CommitGuard    func(operation func() error) (bool, error)
+	commitGuardKey struct{}
+)
 
 // WithCommitGuard binds publication to the conversation generation captured by
 // the caller. Computation and LLM requests always happen outside that gate.
@@ -35,4 +37,16 @@ func publishContextSummary(ctx context.Context, operation func() (*string, error
 	var id *string
 	err := commitContext(ctx, func() error { var err error; id, err = operation(); return err })
 	return id, err
+}
+
+// WithCompletionModel records the owning runtime's model on generated summaries.
+func WithCompletionModel(ctx context.Context, model string) context.Context {
+	return context.WithValue(ctx, completionModelKey{}, model)
+}
+
+type completionModelKey struct{}
+
+func summaryModel(ctx context.Context) string {
+	model, _ := ctx.Value(completionModelKey{}).(string)
+	return model
 }

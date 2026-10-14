@@ -35,13 +35,6 @@ func (e *CompactionEngine) NeedsCompaction(ctx context.Context, convID int64, co
 	return tokens >= threshold, nil
 }
 
-// Close cancels the shutdown context, stopping async goroutines.
-func (e *CompactionEngine) Close() {
-	if e.shutdownCancel != nil {
-		e.shutdownCancel()
-	}
-}
-
 // Compact runs leaf compaction (sync) and optionally condensed compaction.
 func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input CompactInput) (*CompactResult, error) {
 	result := &CompactResult{}
@@ -234,9 +227,9 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	}
 
 	for chunkEnd+1 < len(items) && items[chunkEnd+1].ItemType == "message" {
-		next, err := e.store.GetMessageByID(ctx, items[chunkEnd+1].MessageID)
-		if err != nil {
-			return nil, err
+		next, nextErr := e.store.GetMessageByID(ctx, items[chunkEnd+1].MessageID)
+		if nextErr != nil {
+			return nil, nextErr
 		}
 		if next.Role == "user" {
 			break
@@ -294,6 +287,7 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 
 		summary, err := e.store.CreateSummary(ctx, CreateSummaryInput{
 			ConversationID:      convID,
+			Model:               summaryModel(ctx),
 			Kind:                SummaryKindLeaf,
 			Depth:               0,
 			Content:             content,
@@ -324,7 +318,6 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 
 		return &summary.SummaryID, nil
 	})
-
 }
 
 // compactCondensed compresses multiple summaries into one higher-level summary.
@@ -400,6 +393,7 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, f
 
 		summary, err := e.store.CreateSummary(ctx, CreateSummaryInput{
 			ConversationID:       convID,
+			Model:                summaryModel(ctx),
 			Kind:                 SummaryKindCondensed,
 			Depth:                maxDepth + 1,
 			Content:              content,
@@ -473,14 +467,19 @@ func (e *CompactionEngine) compactCondensed(ctx context.Context, convID int64, f
 			}
 		} else {
 			// Candidates are consecutive, use efficient range deletion
-			if err := e.store.ReplaceContextRangeWithSummary(ctx, convID, startOrd, endOrd, summary.SummaryID); err != nil {
+			if err := e.store.ReplaceContextRangeWithSummary(
+				ctx,
+				convID,
+				startOrd,
+				endOrd,
+				summary.SummaryID,
+			); err != nil {
 				return nil, err
 			}
 		}
 
 		return &summary.SummaryID, nil
 	})
-
 }
 
 // selectShallowestCondensationCandidate finds the shallowest consecutive summary group.

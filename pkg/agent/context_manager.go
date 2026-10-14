@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -11,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"errors"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -24,10 +24,10 @@ import (
 // chat memory and Saved facts retain their separate persistence boundaries.
 type ContextManager interface {
 	Name() string
-	Assemble(context.Context, ContextSnapshot, int) (ContextAssembly, error)
-	Ingest(context.Context, ContextSnapshot) error
-	Compact(context.Context, ContextSnapshot, int) error
-	Clear(context.Context, string) error
+	Assemble(ctx context.Context, snapshot ContextSnapshot) (ContextAssembly, error)
+	Ingest(ctx context.Context, snapshot ContextSnapshot) error
+	Compact(ctx context.Context, snapshot ContextSnapshot, budget int) error
+	Clear(ctx context.Context, sessionKey string) error
 	Close() error
 }
 
@@ -48,11 +48,24 @@ type ContextAssembly struct {
 }
 
 func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
-	snapshot := ContextSnapshot{SessionKey: key, ScopeKey: key, History: agent.Sessions.GetHistory(key), Summary: agent.Sessions.GetSummary(key), Provider: agent.ContextProvider, Model: resolvedCandidateModel(agent.Candidates, agent.Model), Options: map[string]any{"temperature": agent.Temperature, "max_tokens": agent.MaxTokens, "prompt_cache_key": "seahorse:" + agent.ID}}
+	snapshot := ContextSnapshot{
+		SessionKey: key,
+		ScopeKey:   key,
+		History:    agent.Sessions.GetHistory(key),
+		Summary:    agent.Sessions.GetSummary(key),
+		Provider:   agent.ContextProvider,
+		Model:      resolvedCandidateModel(agent.Candidates, agent.Model),
+		Options: map[string]any{
+			"temperature":      agent.Temperature,
+			"max_tokens":       agent.MaxTokens,
+			"prompt_cache_key": "seahorse:" + agent.ID,
+		},
+	}
 	if snapshot.Provider == nil {
 		snapshot.Provider = agent.Provider
 	}
-	if tc, ok := snapshot.Provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() && agent.ThinkingLevel != ThinkingOff {
+	if tc, ok := snapshot.Provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() &&
+		agent.ThinkingLevel != ThinkingOff {
 		snapshot.Options["thinking_level"] = string(agent.ThinkingLevel)
 	}
 	if guard, ok := agent.Sessions.(session.ConversationTurn); ok {
@@ -66,39 +79,51 @@ func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 type legacyContextManager struct{}
 
 func (legacyContextManager) Name() string { return "legacy" }
-func (legacyContextManager) Assemble(_ context.Context, s ContextSnapshot, _ int) (ContextAssembly, error) {
+func (legacyContextManager) Assemble(_ context.Context, s ContextSnapshot) (ContextAssembly, error) {
 	return ContextAssembly{History: s.History, Summary: s.Summary}, nil
 }
-func (legacyContextManager) Ingest(context.Context, ContextSnapshot) error       { return nil }
-func (legacyContextManager) Compact(context.Context, ContextSnapshot, int) error { return nil }
-func (legacyContextManager) Clear(context.Context, string) error                 { return nil }
-func (legacyContextManager) Close() error                                        { return nil }
+
+func (legacyContextManager) Ingest(ctx context.Context, snapshot ContextSnapshot) error { return nil }
+
+func (legacyContextManager) Compact(ctx context.Context, snapshot ContextSnapshot, budget int) error {
+	return nil
+}
+func (legacyContextManager) Clear(ctx context.Context, sessionKey string) error { return nil }
+func (legacyContextManager) Close() error                                       { return nil }
 
 type seahorseContextManager struct {
-	engine          *seahorse.Engine
-	options         config.SeahorseContextConfig
-	lifetime        context.Context
-	cancel          context.CancelFunc
-	mu              sync.Mutex
-	closing         bool
-	closed          chan struct{}
-	closeErr        error
-	nextOperation   uint64
-	operations      map[uint64]contextOperation
-	workers         sync.WaitGroup
-	compactionSlots chan struct{}
-	compactMu       sync.Map // scope -> cancellable semaphore
-	background      sync.Map
+	engine            *seahorse.Engine
+	options           config.SeahorseContextConfig
+	lifetime          context.Context
+	cancel            context.CancelFunc
+	mu                sync.Mutex
+	closing           bool
+	retainedProviders []providers.StatefulProvider
+	closed            chan struct{}
+	closeErr          error
+	nextOperation     uint64
+	operations        map[uint64]contextOperation
+	workers           sync.WaitGroup
+	compactionSlots   chan struct{}
+	conversationSlots [256]chan struct{}
+	background        sync.Map
 }
 type contextOperation struct {
 	key    string
 	cancel context.CancelFunc
 }
-type completionBudgetKey struct{}
-type contextRuntimeKey struct{}
-type completionBudget struct{ used int }
+type (
+	completionBudgetKey struct{}
+	contextRuntimeKey   struct{}
+	completionBudget    struct{ used int }
+)
 
-func newContextManager(agent *AgentInstance, name string, options config.SeahorseContextConfig) (ContextManager, error) {
+// NewContextManager opens the selected active-context engine for one agent.
+func NewContextManager(
+	agent *AgentInstance,
+	name string,
+	options config.SeahorseContextConfig,
+) (ContextManager, error) {
 	if name == "" || name == "legacy" {
 		return legacyContextManager{}, nil
 	}
@@ -118,8 +143,24 @@ func newContextManager(agent *AgentInstance, name string, options config.Seahors
 		options.MaxConcurrentCompactions = 2
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
-	m := &seahorseContextManager{options: options, lifetime: lifetime, cancel: cancel, closed: make(chan struct{}), operations: map[uint64]contextOperation{}, compactionSlots: make(chan struct{}, options.MaxConcurrentCompactions)}
-	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(agent.Workspace, "sessions", "seahorse-"+agent.ID+".sqlite"), MaxCompactIterations: options.MaxCompactIterations}, m.complete)
+	m := &seahorseContextManager{
+		options:         options,
+		lifetime:        lifetime,
+		cancel:          cancel,
+		closed:          make(chan struct{}),
+		operations:      map[uint64]contextOperation{},
+		compactionSlots: make(chan struct{}, options.MaxConcurrentCompactions),
+	}
+	for i := range m.conversationSlots {
+		m.conversationSlots[i] = make(chan struct{}, 1)
+	}
+	engine, err := seahorse.NewEngine(
+		seahorse.Config{
+			DBPath:               filepath.Join(agent.Workspace, "sessions", "seahorse-"+agent.ID+".sqlite"),
+			MaxCompactIterations: options.MaxCompactIterations,
+		},
+		m.complete,
+	)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -138,6 +179,7 @@ func (m *seahorseContextManager) begin(ctx context.Context, s ContextSnapshot) (
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	ctx = context.WithValue(ctx, contextRuntimeKey{}, s)
+	ctx = seahorse.WithCompletionModel(ctx, s.Model)
 	stop := context.AfterFunc(m.lifetime, cancel)
 	if s.Guard != nil {
 		ctx = seahorse.WithCommitGuard(ctx, s.Guard.CommitIfCurrent)
@@ -170,7 +212,7 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, s ContextSnapshot) 
 	return m.engine.SyncSources(ctx, s.ScopeKey, messages)
 }
 
-func (m *seahorseContextManager) Assemble(ctx context.Context, s ContextSnapshot, budget int) (ContextAssembly, error) {
+func (m *seahorseContextManager) Assemble(ctx context.Context, s ContextSnapshot) (ContextAssembly, error) {
 	if err := m.Ingest(ctx, s); err != nil {
 		return ContextAssembly{}, err
 	}
@@ -179,6 +221,8 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, s ContextSnapshot
 		return ContextAssembly{}, err
 	}
 	defer done()
+	// Retain the complete active graph until the caller accounts for system,
+	// tools, media and output reserve and requests source-linked compaction.
 	assembled, err := m.engine.Assemble(ctx, s.ScopeKey, seahorse.AssembleInput{Budget: int(^uint(0) >> 1)})
 	if err != nil {
 		return ContextAssembly{}, err
@@ -189,7 +233,11 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, s ContextSnapshot
 			result.History = append(result.History, fromSeahorseMessage(msg))
 		}
 		if assembled.Summary != "" {
-			result.Summary = scopedContextReferences(assembled.Summary, s.ScopeKey)
+			activeSummary := scopedContextReferences(assembled.Summary, s.ScopeKey)
+			if result.Summary != "" {
+				result.Summary += "\n\n"
+			}
+			result.Summary += activeSummary
 		}
 	}
 	if s.Guard != nil {
@@ -205,9 +253,6 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, s ContextSnapshot
 }
 
 func (m *seahorseContextManager) Compact(ctx context.Context, s ContextSnapshot, budget int) error {
-	if err := m.Ingest(ctx, s); err != nil {
-		return err
-	}
 	ctx, done, err := m.begin(ctx, s)
 	if err != nil {
 		return err
@@ -215,14 +260,17 @@ func (m *seahorseContextManager) Compact(ctx context.Context, s ContextSnapshot,
 	defer done()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(m.options.CompactTimeoutSeconds)*time.Second)
 	defer cancel()
+	if err = m.Ingest(ctx, s); err != nil {
+		return err
+	}
 	select {
 	case m.compactionSlots <- struct{}{}:
 		defer func() { <-m.compactionSlots }()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	lock, _ := m.compactMu.LoadOrStore(s.ScopeKey, make(chan struct{}, 1))
-	semaphore := lock.(chan struct{})
+	scopeHash := sha256.Sum256([]byte(s.ScopeKey))
+	semaphore := m.conversationSlots[scopeHash[0]]
 	select {
 	case semaphore <- struct{}{}:
 		defer func() { <-semaphore }()
@@ -234,7 +282,11 @@ func (m *seahorseContextManager) Compact(ctx context.Context, s ContextSnapshot,
 	return err
 }
 
-func (m *seahorseContextManager) complete(ctx context.Context, prompt string, options seahorse.CompleteOptions) (string, error) {
+func (m *seahorseContextManager) complete(
+	ctx context.Context,
+	prompt string,
+	options seahorse.CompleteOptions,
+) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -252,8 +304,18 @@ func (m *seahorseContextManager) complete(ctx context.Context, prompt string, op
 	for key, value := range runtime.Options {
 		requestOptions[key] = value
 	}
-	requestOptions["max_tokens"] = min(options.MaxTokens, runtime.Options["max_tokens"].(int))
-	response, err := runtime.Provider.Chat(ctx, []providers.Message{{Role: "user", Content: prompt}}, nil, runtime.Model, requestOptions)
+	maxTokens, ok := runtime.Options["max_tokens"].(int)
+	if !ok || maxTokens <= 0 {
+		return "", fmt.Errorf("compaction has no configured output limit")
+	}
+	requestOptions["max_tokens"] = min(options.MaxTokens, maxTokens)
+	response, err := runtime.Provider.Chat(
+		ctx,
+		[]providers.Message{{Role: "user", Content: prompt}},
+		nil,
+		runtime.Model,
+		requestOptions,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -288,6 +350,9 @@ func (m *seahorseContextManager) Close() error {
 	m.mu.Unlock()
 	m.workers.Wait()
 	m.closeErr = m.engine.Close()
+	for _, provider := range m.retainedProviders {
+		provider.Close()
+	}
 	close(m.closed)
 	return m.closeErr
 }
@@ -305,15 +370,34 @@ func toSeahorseMessage(msg providers.Message, scope string, index int) seahorse.
 		}
 	}
 	payload, _ := json.Marshal(msg)
-	result := seahorse.Message{Role: msg.Role, Content: msg.Content, ModelName: msg.ModelName, ReasoningContent: msg.ReasoningContent, CreatedAt: msg.CreatedAt, TokenCount: tokenizer.EstimateMessageTokens(msg), Payload: payload}
+	result := seahorse.Message{
+		Role:             msg.Role,
+		Content:          msg.Content,
+		ModelName:        msg.ModelName,
+		ReasoningContent: msg.ReasoningContent,
+		CreatedAt:        msg.CreatedAt,
+		TokenCount:       tokenizer.EstimateMessageTokens(msg),
+		Payload:          payload,
+	}
 	if msg.Content != "" {
 		result.Parts = append(result.Parts, seahorse.MessagePart{Type: "text", Text: msg.Content})
 	}
 	for _, call := range msg.ToolCalls {
-		result.Parts = append(result.Parts, seahorse.MessagePart{Type: "tool_use", Name: call.Function.Name, Arguments: call.Function.Arguments, ToolCallID: call.ID})
+		result.Parts = append(
+			result.Parts,
+			seahorse.MessagePart{
+				Type:       "tool_use",
+				Name:       call.Function.Name,
+				Arguments:  call.Function.Arguments,
+				ToolCallID: call.ID,
+			},
+		)
 	}
 	if msg.ToolCallID != "" {
-		result.Parts = append(result.Parts, seahorse.MessagePart{Type: "tool_result", ToolCallID: msg.ToolCallID, Text: msg.Content})
+		result.Parts = append(
+			result.Parts,
+			seahorse.MessagePart{Type: "tool_result", ToolCallID: msg.ToolCallID, Text: msg.Content},
+		)
 	}
 	for _, uri := range msg.Media {
 		result.Parts = append(result.Parts, seahorse.MessagePart{Type: "media", MediaURI: uri})
@@ -326,11 +410,24 @@ func fromSeahorseMessage(msg seahorse.Message) providers.Message {
 	if len(msg.Payload) > 0 && json.Unmarshal(msg.Payload, &result) == nil {
 		return result
 	}
-	result = providers.Message{Role: msg.Role, Content: msg.Content, ModelName: msg.ModelName, ReasoningContent: msg.ReasoningContent, CreatedAt: msg.CreatedAt}
+	result = providers.Message{
+		Role:             msg.Role,
+		Content:          msg.Content,
+		ModelName:        msg.ModelName,
+		ReasoningContent: msg.ReasoningContent,
+		CreatedAt:        msg.CreatedAt,
+	}
 	for _, part := range msg.Parts {
 		switch part.Type {
 		case "tool_use":
-			result.ToolCalls = append(result.ToolCalls, providers.ToolCall{ID: part.ToolCallID, Type: "function", Function: &providers.FunctionCall{Name: part.Name, Arguments: part.Arguments}})
+			result.ToolCalls = append(
+				result.ToolCalls,
+				providers.ToolCall{
+					ID:       part.ToolCallID,
+					Type:     "function",
+					Function: &providers.FunctionCall{Name: part.Name, Arguments: part.Arguments},
+				},
+			)
 		case "tool_result":
 			result.ToolCallID = part.ToolCallID
 		case "media":
@@ -340,7 +437,10 @@ func fromSeahorseMessage(msg seahorse.Message) providers.Message {
 	return result
 }
 
-func contextManagerSettings(agent *config.AgentConfig, defaults *config.AgentDefaults) (string, config.SeahorseContextConfig) {
+func contextManagerSettings(
+	agent *config.AgentConfig,
+	defaults *config.AgentDefaults,
+) (string, config.SeahorseContextConfig) {
 	name, options := strings.TrimSpace(defaults.ContextManager), defaults.ContextManagerConfig
 	if agent != nil {
 		if agent.ContextManager != "" {
@@ -358,9 +458,14 @@ var contextReferencePattern = regexp.MustCompile(`msg:[0-9]+|sum_[a-f0-9]+`)
 func contextReferenceScope(scope string) string {
 	return fmt.Sprintf("scope:%x/", sha256.Sum256([]byte(scope)))
 }
+
 func scopedContextReferences(text, scope string) string {
-	return contextReferencePattern.ReplaceAllStringFunc(text, func(id string) string { return contextReferenceScope(scope) + id })
+	return contextReferencePattern.ReplaceAllStringFunc(
+		text,
+		func(id string) string { return contextReferenceScope(scope) + id },
+	)
 }
+
 func contextHistory(ctx context.Context, agent *AgentInstance, key string, protected int) (ContextAssembly, error) {
 	s := snapshotContext(agent, key)
 	protected = min(protected, len(s.History))
@@ -372,18 +477,27 @@ func contextHistory(ctx context.Context, agent *AgentInstance, key string, prote
 	if agent.ContextManager == nil {
 		return ContextAssembly{History: append(s.History, tail...), Summary: s.Summary}, nil
 	}
-	result, err := agent.ContextManager.Assemble(ctx, s, agent.ContextWindow)
+	result, err := agent.ContextManager.Assemble(ctx, s)
 	result.History = append(result.History, tail...)
 	return result, err
 }
-func (al *AgentLoop) compressContext(ctx context.Context, agent *AgentInstance, key string, protected int, messages []providers.Message, defs []providers.ToolDefinition, reserve int) (compressionResult, bool, error) {
+
+func (al *AgentLoop) compressContext(
+	ctx context.Context,
+	agent *AgentInstance,
+	key string,
+	protected int,
+	messages []providers.Message,
+	defs []providers.ToolDefinition,
+	reserve int,
+) (compressionResult, bool, error) {
 	if agent.ContextManager == nil || agent.ContextManager.Name() == "legacy" {
 		result, ok := al.forceCompression(agent, key, protected)
 		return result, ok, nil
 	}
 	s := snapshotContext(agent, key)
 	s.History = s.History[:max(0, len(s.History)-protected)]
-	before, err := agent.ContextManager.Assemble(ctx, s, agent.ContextWindow)
+	before, err := agent.ContextManager.Assemble(ctx, s)
 	if err != nil {
 		return compressionResult{}, false, err
 	}
@@ -397,12 +511,16 @@ func (al *AgentLoop) compressContext(ctx context.Context, agent *AgentInstance, 
 	if err = agent.ContextManager.Compact(ctx, s, budget); err != nil {
 		return compressionResult{}, false, err
 	}
-	after, err := agent.ContextManager.Assemble(ctx, s, agent.ContextWindow)
+	after, err := agent.ContextManager.Assemble(ctx, s)
 	if err != nil {
 		return compressionResult{}, false, err
 	}
 	dropped := len(before.History) - len(after.History)
-	return compressionResult{DroppedMessages: dropped, RemainingMessages: len(after.History)}, dropped > 0 || before.Summary != after.Summary, nil
+	return compressionResult{
+		DroppedMessages:   dropped,
+		RemainingMessages: len(after.History),
+	}, dropped > 0 ||
+		before.Summary != after.Summary, nil
 }
 
 func estimateTokens(messages []providers.Message) int {
@@ -412,6 +530,7 @@ func estimateTokens(messages []providers.Message) int {
 	}
 	return n
 }
+
 func (m *seahorseContextManager) scheduleCompact(ctx context.Context, s ContextSnapshot, budget int) {
 	if _, loaded := m.background.LoadOrStore(s.ScopeKey, true); loaded {
 		return
@@ -425,7 +544,35 @@ func (m *seahorseContextManager) scheduleCompact(ctx context.Context, s ContextS
 		defer done()
 		defer m.background.Delete(s.ScopeKey)
 		if err := m.Compact(tracked, s, budget); err != nil && !errors.Is(err, context.Canceled) {
-			logger.WarnCF("agent", "Context compaction failed", map[string]any{"session_key": s.SessionKey, "error": err.Error()})
+			logger.WarnCF(
+				"agent",
+				"Context compaction failed",
+				map[string]any{"session_key": s.SessionKey, "error": err.Error()},
+			)
 		}
 	}()
+}
+
+// Providers captured by earlier compactions remain usable until every worker
+// has joined, including when a command switches the agent's answer model.
+func (m *seahorseContextManager) retainProvider(provider providers.LLMProvider) {
+	stateful, ok := provider.(providers.StatefulProvider)
+	if !ok {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.retainedProviders {
+		if existing == stateful {
+			return
+		}
+	}
+	if m.closing {
+		m.mu.Unlock()
+		<-m.closed
+		stateful.Close()
+		m.mu.Lock()
+		return
+	}
+	m.retainedProviders = append(m.retainedProviders, stateful)
 }

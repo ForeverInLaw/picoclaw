@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,12 +74,9 @@ type Engine struct {
 
 // CompactionEngine handles LLM-based summarization (defined in short_compaction.go).
 type CompactionEngine struct {
-	store          *Store
-	config         Config
-	complete       CompleteFn
-	condensing     sync.Map // map[int64]struct{} — dedup for async condensed goroutines
-	shutdownCtx    context.Context
-	shutdownCancel context.CancelFunc
+	store    *Store
+	config   Config
+	complete CompleteFn
 }
 
 // Assembler handles budget-aware context assembly (defined in short_assembler.go).
@@ -107,7 +105,12 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", config.DBPath)
+	dsn := url.URL{
+		Scheme:   "file",
+		Path:     filepath.ToSlash(config.DBPath),
+		RawQuery: "_pragma=busy_timeout%285000%29&_txlock=immediate",
+	}
+	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
@@ -302,10 +305,6 @@ func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Messa
 
 // Close releases resources.
 func (e *Engine) Close() error {
-	// Signal compaction goroutines to stop
-	if e.compaction != nil {
-		e.compaction.Close()
-	}
 	if e.store != nil && e.store.db != nil {
 		return e.store.db.Close()
 	}
@@ -368,10 +367,10 @@ func (e *Engine) initCompactionOnce() {
 	e.compactionMu.Lock()
 	defer e.compactionMu.Unlock()
 	if e.compaction == nil {
-		shutdownCtx, cancel := context.WithCancel(context.Background())
-		e.compaction = &CompactionEngine{store: e.store, config: e.config, complete: e.complete, shutdownCtx: shutdownCtx, shutdownCancel: cancel}
+		e.compaction = &CompactionEngine{store: e.store, config: e.config, complete: e.complete}
 	}
 }
+
 func (e *Engine) initAssemblerOnce() {
 	e.assemblerMu.Lock()
 	defer e.assemblerMu.Unlock()

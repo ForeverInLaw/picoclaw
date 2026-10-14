@@ -2,18 +2,24 @@ package seahorse_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/seahorse"
+	"github.com/sipeed/picoclaw/pkg/session"
 )
 
 func TestForcedCompactionRetainsCompleteSourceGraphThroughCondensationAndReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "context.sqlite")
-	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: path}, func(context.Context, string, seahorse.CompleteOptions) (string, error) { return "brief summary", nil })
+	engine, err := seahorse.NewEngine(
+		seahorse.Config{DBPath: path},
+		func(context.Context, string, seahorse.CompleteOptions) (string, error) { return "brief summary", nil },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,9 +30,13 @@ func TestForcedCompactionRetainsCompleteSourceGraphThroughCondensationAndReopen(
 		if i%2 == 1 {
 			role = "assistant"
 		}
-		source[i] = seahorse.Message{Role: role, Content: fmt.Sprint(i) + strings.Repeat("evidence ", 1200), TokenCount: 4500}
+		source[i] = seahorse.Message{
+			Role:       role,
+			Content:    fmt.Sprint(i) + strings.Repeat("evidence ", 1200),
+			TokenCount: 4500,
+		}
 	}
-	if err := engine.SyncSources(t.Context(), "agent:main:current", source); err != nil {
+	if err = engine.SyncSources(t.Context(), "agent:main:current", source); err != nil {
 		t.Fatal(err)
 	}
 	result, err := engine.CompactUntilUnder(t.Context(), "agent:main:current", 25)
@@ -94,7 +104,8 @@ func TestForcedCompactionRetainsCompleteSourceGraphThroughCondensationAndReopen(
 	if err = engine.SyncSources(t.Context(), "agent:main:current", source); err != nil {
 		t.Fatal(err)
 	}
-	found, err := engine.GetRetrieval().Grep(t.Context(), seahorse.GrepInput{ConversationID: conv.ConversationID, Pattern: "%evidence%", Scope: "message", Limit: 100})
+	found, err := engine.GetRetrieval().
+		Grep(t.Context(), seahorse.GrepInput{ConversationID: conv.ConversationID, Pattern: "%evidence%", Scope: "message", Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,17 +127,20 @@ func TestGenerationFenceRejectsLateCompactionPublicationWithoutHoldingLockDuring
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
-	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.sqlite")}, func(context.Context, string, seahorse.CompleteOptions) (string, error) {
-		close(started)
-		<-release
-		return "late summary", nil
-	})
+	engine, err := seahorse.NewEngine(
+		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.sqlite")},
+		func(context.Context, string, seahorse.CompleteOptions) (string, error) {
+			close(started)
+			<-release
+			return "late summary", nil
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer engine.Close()
 	ctx := seahorse.WithCommitGuard(t.Context(), guard)
-	source := make([]seahorse.Message, 8)
+	source := make([]seahorse.Message, 8, 9)
 	for i := range source {
 		source[i] = seahorse.Message{Role: "user", Content: strings.Repeat("evidence ", 1000), TokenCount: 4000}
 	}
@@ -156,7 +170,11 @@ func TestGenerationFenceRejectsLateCompactionPublicationWithoutHoldingLockDuring
 	if len(summaries) != 0 {
 		t.Fatal("stale summary was persisted")
 	}
-	if err = engine.SyncSources(ctx, "captured-generation", append(source, seahorse.Message{Role: "user", Content: "late source"})); err == nil {
+	if err = engine.SyncSources(
+		ctx,
+		"captured-generation",
+		append(source, seahorse.Message{Role: "user", Content: "late source"}),
+	); err == nil {
 		t.Fatal("late source was accepted")
 	}
 	items, err := store.GetContextItems(t.Context(), conv.ConversationID)
@@ -165,5 +183,88 @@ func TestGenerationFenceRejectsLateCompactionPublicationWithoutHoldingLockDuring
 	}
 	if len(items) != 8 {
 		t.Fatal("stale operation changed active context")
+	}
+}
+
+func TestCanceledIngestionReleasesGenerationGateBeforeSQLiteWriterUnlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.sqlite")
+	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: path}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	boundaryDir := t.TempDir()
+	canonical := session.NewConversationStore(session.NewSessionManager(boundaryDir), boundaryDir)
+	defer canonical.Close()
+	captured, _, err := canonical.CaptureTurn("conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := captured.(session.ConversationTurn)
+	scope := guard.ConversationKey("conversation")
+	if err = engine.SyncSources(t.Context(), scope, nil); err != nil {
+		t.Fatal(err)
+	}
+	lockDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockDB.Close()
+	connection, err := lockDB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err = connection.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	defer connection.ExecContext(t.Context(), "ROLLBACK")
+	entered := make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx = seahorse.WithCommitGuard(ctx, func(commit func() error) (bool, error) {
+		return guard.CommitIfCurrent(func() error { close(entered); return commit() })
+	})
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.SyncSources(ctx, scope, []seahorse.Message{{Role: "user", Content: "stale blocked source", TokenCount: 10}})
+	}()
+	<-entered
+	cancel()
+	reset := make(chan error, 1)
+	go func() { reset <- canonical.ResetConversation("conversation") }()
+	select {
+	case err = <-done:
+		if err == nil {
+			t.Fatal("canceled ingest reported success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled ingest remained blocked on SQLite writer")
+	}
+	select {
+	case err = <-reset:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled ingest held reset gate")
+	}
+	if _, err = connection.ExecContext(t.Context(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	conv, err := engine.GetRetrieval().Store().GetConversationBySessionKey(t.Context(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := engine.GetRetrieval().
+		Grep(t.Context(), seahorse.GrepInput{ConversationID: conv.ConversationID, Pattern: "%stale%", Scope: "message"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.TotalMessages != 0 {
+		t.Fatal("canceled ingestion persisted old source")
+	}
+	if current, err := guard.IsCurrent(); err != nil || current {
+		t.Fatal("reset did not advance the captured generation")
 	}
 }

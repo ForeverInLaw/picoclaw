@@ -1937,7 +1937,15 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		for isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
-			compression, ok, err := al.compressContext(turnCtx, ts.agent, ts.sessionKey, 0, messages, toolDefs, ts.agent.MaxTokens)
+			compression, ok, err := al.compressContext(
+				turnCtx,
+				ts.agent,
+				ts.sessionKey,
+				0,
+				messages,
+				toolDefs,
+				ts.agent.MaxTokens,
+			)
 			if err != nil {
 				return turnResult{}, err
 			}
@@ -2005,6 +2013,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
+	var lastResponseModel string
 	var finalContentPhase providers.ContentPhase
 	var lastToolResultForFallback string
 	var hadToolCalls bool
@@ -2245,6 +2254,7 @@ turnLoop:
 			defer al.activeRequests.Done()
 
 			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
+				lastResponseModel = model
 				defer func() {
 					if requestErr != nil {
 						lastProviderError = requestErr
@@ -2635,7 +2645,7 @@ turnLoop:
 			Content:          response.Content,
 			ContentPhase:     response.ContentPhase,
 			ReasoningContent: response.ReasoningContent,
-			ModelName:        llmModel,
+			ModelName:        lastResponseModel,
 		}
 		hadToolCalls = true
 		for _, tc := range normalizedToolCalls {
@@ -3133,7 +3143,12 @@ turnLoop:
 			ts.agent.Tools.DeliveredInRound(),
 		)
 		if !deliveredSaved {
-			finalMsg := providers.Message{Role: "assistant", Content: finalContent, ContentPhase: finalContentPhase, ModelName: activeModel}
+			finalMsg := providers.Message{
+				Role:         "assistant",
+				Content:      finalContent,
+				ContentPhase: finalContentPhase,
+				ModelName:    lastResponseModel,
+			}
 			ts.agent.Sessions.AddFullMessage(ts.sessionKey, finalMsg)
 			ts.recordPersistedMessage(finalMsg)
 			recordMemoryObservation(
@@ -3172,9 +3187,15 @@ turnLoop:
 	if ts.opts.EnableSummary {
 		// The final answer is persisted after the last provider request. Include
 		// it once so the threshold represents the next request's full context.
-		al.maybeSummarize(ctx, ts.agent, ts.sessionKey, ts.scope, lastRequestTokens+estimateMessageTokens(providers.Message{
-			Role: "assistant", Content: finalContent,
-		}))
+		al.maybeSummarize(
+			ctx,
+			ts.agent,
+			ts.sessionKey,
+			ts.scope,
+			lastRequestTokens+estimateMessageTokens(providers.Message{
+				Role: "assistant", Content: finalContent,
+			}),
+		)
 	}
 
 	ts.setPhase(TurnPhaseCompleted)
@@ -3335,13 +3356,17 @@ func (al *AgentLoop) maybeSummarize(
 	if manager, ok := agent.ContextManager.(*seahorseContextManager); ok {
 		s := snapshotContext(agent, sessionKey)
 		if requestTokens > agent.ContextWindow*agent.SummarizeTokenPercent/100 {
-			assembled, err := manager.Assemble(ctx, s, agent.ContextWindow)
+			assembled, err := manager.Assemble(ctx, s)
 			if err != nil {
 				logger.WarnCF("agent", "Cannot prepare context compaction", map[string]any{"error": err.Error()})
 				return
 			}
 			contributors := max(0, requestTokens-estimateTokens(assembled.History))
-			manager.scheduleCompact(ctx, s, max(1, agent.ContextWindow*agent.SummarizeTokenPercent/100-contributors-512))
+			manager.scheduleCompact(
+				ctx,
+				s,
+				max(1, agent.ContextWindow*agent.SummarizeTokenPercent/100-contributors-512),
+			)
 		}
 		return
 	}
@@ -3882,11 +3907,14 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			oldProvider := agent.Provider
 			agent.Model = value
 			agent.Provider = nextProvider
+			agent.ContextProvider = nextProvider
 			agent.Candidates = nextCandidates
 			agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
 
 			if oldProvider != nil && oldProvider != nextProvider {
-				if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
+				if manager, ok := agent.ContextManager.(*seahorseContextManager); ok {
+					manager.retainProvider(oldProvider)
+				} else if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
 					stateful.Close()
 				}
 			}

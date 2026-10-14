@@ -4,9 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -32,11 +38,17 @@ func TestSeahorseCompactsActiveContextWithoutDeletingCanonicalTranscript(t *test
 	al = NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	defer al.Close()
 	for i := 0; i < 24; i++ {
-		if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "target", strings.Repeat("source detail ", 70))); err != nil {
+		if _, err := al.processMessage(
+			t.Context(),
+			selectedInlineMessage("42", "target", strings.Repeat("source detail ", 70)),
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "target", "Continue after compaction")); err != nil {
+	if _, err := al.processMessage(
+		t.Context(),
+		selectedInlineMessage("42", "target", "Continue after compaction"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(conversationInput(provider.lastMessages), "summary") {
@@ -61,7 +73,14 @@ type sourceScenarioProvider struct {
 }
 
 func (p *sourceScenarioProvider) GetDefaultModel() string { return "test-model" }
-func (p *sourceScenarioProvider) Chat(ctx context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+
+func (p *sourceScenarioProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(messages) == 1 && messages[0].Role == "user" {
@@ -71,7 +90,9 @@ func (p *sourceScenarioProvider) Chat(ctx context.Context, messages []providers.
 	p.lastInput = append([]providers.Message(nil), messages...)
 	last := messages[len(messages)-1]
 	if last.Role == "user" && last.Content == "query sources" {
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "lookup", Name: p.tool, Arguments: p.args}}}, nil
+		return &providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{ID: "lookup", Name: p.tool, Arguments: p.args}},
+		}, nil
 	}
 	if last.Role == "tool" {
 		if strings.Contains(last.Content, `"total_messages"`) {
@@ -79,10 +100,10 @@ func (p *sourceScenarioProvider) Chat(ctx context.Context, messages []providers.
 			var found struct {
 				Messages []struct {
 					ID string `json:"id"`
-				}
+				} `json:"messages"`
 				Summaries []struct {
 					ID string `json:"id"`
-				}
+				} `json:"summaries"`
 			}
 			if err := json.Unmarshal([]byte(last.Content), &found); err != nil {
 				return nil, err
@@ -95,7 +116,11 @@ func (p *sourceScenarioProvider) Chat(ctx context.Context, messages []providers.
 				ids = append(ids, match.ID)
 			}
 			if len(ids) > 0 {
-				return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "expand", Name: "short_expand", Arguments: map[string]any{"ids": ids}}}}, nil
+				return &providers.LLMResponse{
+					ToolCalls: []providers.ToolCall{
+						{ID: "expand", Name: "short_expand", Arguments: map[string]any{"ids": ids}},
+					},
+				}, nil
 			}
 		} else {
 			p.expandOutput = last.Content
@@ -103,6 +128,7 @@ func (p *sourceScenarioProvider) Chat(ctx context.Context, messages []providers.
 	}
 	return &providers.LLMResponse{Content: "answer"}, nil
 }
+
 func newSeahorseScenarioLoop(t *testing.T, p providers.LLMProvider) (*AgentLoop, *config.Config) {
 	t.Helper()
 	base, cfg, mb, _, cleanup := newTestAgentLoop(t)
@@ -117,16 +143,51 @@ func newSeahorseScenarioLoop(t *testing.T, p providers.LLMProvider) (*AgentLoop,
 	t.Cleanup(al.Close)
 	return al, cfg
 }
+
 func TestSeahorseScopedRetrievalPreservesMixedSourcesAcrossReopen(t *testing.T) {
 	p := &sourceScenarioProvider{tool: "short_grep", args: map[string]any{"pattern": "%probe%", "scope": "message"}}
 	al, cfg := newSeahorseScenarioLoop(t, p)
 	agent := al.GetRegistry().GetDefaultAgent()
 	key := inlineConversationKey("main", "42")
 	original := []providers.Message{
-		{Role: "user", Content: "probe question", SourceID: "telegram:original", CreatedAt: time.Date(2026, 4, 2, 13, 4, 5, 123, time.UTC)},
-		{Role: "assistant", Content: "probe text beside tool", ContentPhase: providers.ContentPhaseCommentary, SourceID: "answer:original", ModelName: "source-model", ReasoningContent: "retained reasoning", ToolCalls: []providers.ToolCall{{ID: "call_1", Type: "function", Name: "read_file", Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"evidence.txt"}`, ThoughtSignature: "opaque-signature"}}}},
-		{Role: "tool", Content: "probe " + strings.Repeat("complete-tool-result ", 500), ToolCallID: "call_1", SourceID: "tool:original"},
-		{Role: "user", Content: "probe media caption", Media: []string{"media://image-reference"}, SourceID: "media:original"},
+		{
+			Role:      "user",
+			Content:   "probe question",
+			SourceID:  "telegram:original",
+			CreatedAt: time.Date(2026, 4, 2, 13, 4, 5, 123, time.UTC),
+		},
+		{
+			Role:             "assistant",
+			Content:          "probe text beside tool",
+			ContentPhase:     providers.ContentPhaseCommentary,
+			SourceID:         "answer:original",
+			ModelName:        "source-model",
+			ReasoningContent: "retained reasoning",
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Name: "read_file",
+					Function: &providers.FunctionCall{
+						Name:             "read_file",
+						Arguments:        `{"path":"evidence.txt"}`,
+						ThoughtSignature: "opaque-signature",
+					},
+				},
+			},
+		},
+		{
+			Role:       "tool",
+			Content:    "probe " + strings.Repeat("complete-tool-result ", 500),
+			ToolCallID: "call_1",
+			SourceID:   "tool:original",
+		},
+		{
+			Role:     "user",
+			Content:  "probe media caption",
+			Media:    []string{"media://image-reference"},
+			SourceID: "media:original",
+		},
 	}
 	for _, msg := range original {
 		agent.Sessions.AddFullMessage(key, msg)
@@ -159,6 +220,24 @@ func TestSeahorseScopedRetrievalPreservesMixedSourcesAcrossReopen(t *testing.T) 
 	if !strings.Contains(p.expandOutput, "outside the captured conversation") {
 		t.Fatalf("foreign source accepted: %s", p.expandOutput)
 	}
+
+	// Changing the prefix cannot turn a foreign stored ID into an owned source.
+	p.tool = "short_grep"
+	p.args = map[string]any{"pattern": "%query sources%", "scope": "message"}
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("99", "own", "query sources")); err != nil {
+		t.Fatal(err)
+	}
+	ownID := firstSourceID(t, p.grepOutput)
+	forgedID := ownID[:strings.LastIndex(ownID, "/")+1] + oldID[strings.LastIndex(oldID, "/")+1:]
+	p.tool = "short_expand"
+	p.args = map[string]any{"ids": []string{forgedID}}
+	p.expandOutput = ""
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("99", "forged", "query sources")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.expandOutput, "belongs to another conversation") {
+		t.Fatalf("foreign stored ID accepted: %s", p.expandOutput)
+	}
 	p.tool = "short_grep"
 	p.args = map[string]any{"pattern": "%probe%", "all_conversations": true}
 	p.expandOutput = ""
@@ -168,13 +247,34 @@ func TestSeahorseScopedRetrievalPreservesMixedSourcesAcrossReopen(t *testing.T) 
 	if !strings.Contains(p.expandOutput, "unsupported scoped retrieval parameter") {
 		t.Fatalf("bypass accepted: %s", p.expandOutput)
 	}
+	reset := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Sender:   bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"},
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "/clear_inline",
+	}
+	if response, err := al.processMessage(t.Context(), reset); err != nil || !strings.Contains(response, "reset") {
+		t.Fatalf("reset = %q %v", response, err)
+	}
+	p.tool = "short_expand"
+	p.args = map[string]any{"ids": []string{oldID}}
+	p.expandOutput = ""
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "reset", "query sources")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.expandOutput, "outside the captured conversation") {
+		t.Fatalf("old generation source accepted: %s", p.expandOutput)
+	}
 }
+
 func firstSourceID(t *testing.T, data string) string {
 	t.Helper()
 	var found struct {
 		Messages []struct {
 			ID string `json:"id"`
-		}
+		} `json:"messages"`
 	}
 	if err := json.Unmarshal([]byte(data), &found); err != nil {
 		t.Fatal(err)
@@ -184,9 +284,12 @@ func firstSourceID(t *testing.T, data string) string {
 	}
 	return found.Messages[0].ID
 }
+
 func assertExpandedSources(t *testing.T, data string, original []providers.Message) {
 	t.Helper()
-	var result struct{ Messages []providers.Message }
+	var result struct {
+		Messages []providers.Message `json:"messages"`
+	}
 	if err := json.Unmarshal([]byte(data), &result); err != nil {
 		t.Fatalf("expand: %v: %s", err, data)
 	}
@@ -215,9 +318,31 @@ func TestSeahorseSummaryPromptLabelsUnknownTimestampsAndIncludesMixedParts(t *te
 	agent.ContextWindow = 9000
 	key := inlineConversationKey("main", "42")
 	for i := 0; i < 12; i++ {
-		agent.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: strings.Repeat("source evidence ", 1000)})
-		agent.Sessions.AddFullMessage(key, providers.Message{Role: "assistant", Content: "text beside tool", ToolCalls: []providers.ToolCall{{ID: fmt.Sprint(i), Name: "evidence_call", Function: &providers.FunctionCall{Name: "evidence_call", Arguments: `{"path":"mixed-evidence"}`}}}})
-		agent.Sessions.AddFullMessage(key, providers.Message{Role: "tool", ToolCallID: fmt.Sprint(i), Content: "full evidence result"})
+		agent.Sessions.AddFullMessage(
+			key,
+			providers.Message{Role: "user", Content: strings.Repeat("source evidence ", 1000)},
+		)
+		agent.Sessions.AddFullMessage(
+			key,
+			providers.Message{
+				Role:    "assistant",
+				Content: "text beside tool",
+				ToolCalls: []providers.ToolCall{
+					{
+						ID:   fmt.Sprint(i),
+						Name: "evidence_call",
+						Function: &providers.FunctionCall{
+							Name:      "evidence_call",
+							Arguments: `{"path":"mixed-evidence"}`,
+						},
+					},
+				},
+			},
+		)
+		agent.Sessions.AddFullMessage(
+			key,
+			providers.Message{Role: "tool", ToolCallID: fmt.Sprint(i), Content: "full evidence result"},
+		)
 	}
 	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "compressed", "next")); err != nil {
 		t.Fatal(err)
@@ -231,7 +356,8 @@ func TestSeahorseSummaryPromptLabelsUnknownTimestampsAndIncludesMixedParts(t *te
 	if strings.Contains(prompt, "0001-01-01") || !strings.Contains(prompt, "unknown time") {
 		t.Fatal("unknown provenance rendered as a historical date")
 	}
-	if !strings.Contains(prompt, "evidence_call") || !strings.Contains(prompt, "mixed-evidence") || !strings.Contains(prompt, "text beside tool") {
+	if !strings.Contains(prompt, "evidence_call") || !strings.Contains(prompt, "mixed-evidence") ||
+		!strings.Contains(prompt, "text beside tool") {
 		t.Fatal("mixed text/tool parts missing from summary input")
 	}
 }
@@ -244,7 +370,13 @@ type blockedCompactionProvider struct {
 	once     sync.Once
 }
 
-func (p *blockedCompactionProvider) Chat(ctx context.Context, messages []providers.Message, defs []providers.ToolDefinition, model string, opts map[string]any) (*providers.LLMResponse, error) {
+func (p *blockedCompactionProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	defs []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
 	if len(messages) == 1 && messages[0].Role == "user" {
 		p.once.Do(func() { close(p.started) })
 		<-ctx.Done()
@@ -254,10 +386,22 @@ func (p *blockedCompactionProvider) Chat(ctx context.Context, messages []provide
 	}
 	return p.sourceScenarioProvider.Chat(ctx, messages, defs, model, opts)
 }
+
 func TestSeahorseResetCancelsCompactionWithoutWaitingForProviderAndFencesLateSummary(t *testing.T) {
-	p := &blockedCompactionProvider{started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	p := &blockedCompactionProvider{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
 	al, cfg := newSeahorseScenarioLoop(t, p)
-	msg := bus.InboundMessage{Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Sender: bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"}, Peer: bus.Peer{Kind: "direct", ID: "42"}, Content: "OLD_DIALOG"}
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Sender:   bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"},
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "OLD_DIALOG",
+	}
 	if _, err := al.processMessage(t.Context(), msg); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +412,10 @@ func TestSeahorseResetCancelsCompactionWithoutWaitingForProviderAndFencesLateSum
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.ContextWindow = 9000
 	for i := 0; i < 20; i++ {
-		agent.Sessions.AddFullMessage(route.SessionKey, providers.Message{Role: "user", Content: strings.Repeat("OLD_SOURCE ", 500)})
+		agent.Sessions.AddFullMessage(
+			route.SessionKey,
+			providers.Message{Role: "user", Content: strings.Repeat("OLD_SOURCE ", 500)},
+		)
 		agent.Sessions.AddFullMessage(route.SessionKey, providers.Message{Role: "assistant", Content: "old answer"})
 	}
 	done := make(chan error, 1)
@@ -307,8 +454,13 @@ func TestSeahorseResetCancelsCompactionWithoutWaitingForProviderAndFencesLateSum
 		}
 	}
 }
+
 func TestSeahorseCloseWaitsForCanceledCompactionBeforeStorageClose(t *testing.T) {
-	p := &blockedCompactionProvider{started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	p := &blockedCompactionProvider{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
 	al, _ := newSeahorseScenarioLoop(t, p)
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.ContextWindow = 9000
@@ -335,6 +487,7 @@ func TestSeahorseCloseWaitsForCanceledCompactionBeforeStorageClose(t *testing.T)
 	awaitSignal(t, closed, "manager close")
 	awaitSignal(t, turnDone, "turn completion")
 }
+
 func awaitSignal(t *testing.T, ch <-chan struct{}, operation string) {
 	t.Helper()
 	select {
@@ -345,13 +498,20 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, operation string) {
 }
 
 func TestSeahorseReloadCancelsAndWaitsForOldWorkers(t *testing.T) {
-	p := &blockedCompactionProvider{started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	p := &blockedCompactionProvider{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
 	al, cfg := newSeahorseScenarioLoop(t, p)
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.ContextWindow = 9000
 	key := inlineConversationKey("main", "42")
 	for i := 0; i < 20; i++ {
-		agent.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: strings.Repeat("reload source ", 1000)})
+		agent.Sessions.AddFullMessage(
+			key,
+			providers.Message{Role: "user", Content: strings.Repeat("reload source ", 1000)},
+		)
 		agent.Sessions.AddFullMessage(key, providers.Message{Role: "assistant", Content: "answer"})
 	}
 	runCtx, cancel := context.WithCancel(t.Context())
@@ -390,4 +550,261 @@ func TestSeahorseReloadCancelsAndWaitsForOldWorkers(t *testing.T) {
 		t.Fatal("reload did not finish")
 	}
 	awaitSignal(t, turnDone, "old turn completion")
+}
+
+func TestSeahorseCompactionUsesOwningAgentsExactModelConfigurationAndOptions(t *testing.T) {
+	var mu sync.Mutex
+	var compactKeys, answerKeys []string
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Model       string              `json:"model"`
+			Messages    []providers.Message `json:"messages"`
+			Temperature float64             `json:"temperature"`
+			MaxTokens   int                 `json:"max_tokens"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		key := r.Header.Get("Authorization")
+		mu.Lock()
+		defer mu.Unlock()
+		if len(request.Messages) == 1 && request.Messages[0].Role == "user" {
+			compactKeys = append(compactKeys, key)
+			if request.Model != "shared" || request.Temperature != 0.23 || request.MaxTokens != 123 {
+				t.Errorf("compaction ignored owning options: %+v", request)
+			}
+		} else {
+			answerKeys = append(answerKeys, key)
+		}
+		_, _ = w.Write(
+			[]byte(`{"choices":[{"message":{"role":"assistant","content":"COMPACT_SUMMARY"},"finish_reason":"stop"}]}`),
+		)
+	}))
+	defer endpoint.Close()
+	initial, cfg := newSeahorseScenarioLoop(t, &sourceScenarioProvider{})
+	initial.Close()
+	temperature := 0.23
+	cfg.Agents.Defaults.Temperature = &temperature
+	cfg.Agents.Defaults.MaxTokens = 123
+	cfg.Agents.Defaults.ContextWindow = 12000
+	cfg.Agents.Defaults.SummarizeTokenPercent = 100
+	cfg.ModelList = []config.ModelConfig{
+		{ModelName: "test-model", Model: "openai/main", APIBase: endpoint.URL, APIKey: "main-key"},
+		{ModelName: "reviewer-model", Model: "openai/shared", APIBase: endpoint.URL, APIKey: "reviewer-A"},
+		{ModelName: "reviewer-model", Model: "openai/shared", APIBase: endpoint.URL, APIKey: "reviewer-B"},
+	}
+	reviewerWorkspace := t.TempDir()
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "reviewer", Workspace: reviewerWorkspace, Model: &config.AgentModelConfig{Primary: "reviewer-model"}},
+	}
+	cfg.Bindings = []config.AgentBinding{
+		{
+			AgentID: "reviewer",
+			Match:   config.BindingMatch{Channel: "telegram", Peer: &config.PeerMatch{Kind: "direct", ID: "42"}},
+		},
+	}
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	msg := bus.InboundMessage{
+		Channel:  "telegram",
+		ChatID:   "42",
+		SenderID: "telegram:42",
+		Peer:     bus.Peer{Kind: "direct", ID: "42"},
+		Content:  "next",
+	}
+	route, reviewer, err := al.resolveMessageRoute(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		reviewer.Sessions.AddFullMessage(
+			route.SessionKey,
+			providers.Message{Role: "user", Content: strings.Repeat("evidence ", 1500)},
+		)
+		reviewer.Sessions.AddFullMessage(route.SessionKey, providers.Message{Role: "assistant", Content: "answer"})
+	}
+	if _, err = al.processMessage(t.Context(), msg); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(compactKeys) == 0 || len(answerKeys) == 0 {
+		t.Fatalf("calls: compaction=%v answer=%v", compactKeys, answerKeys)
+	}
+	history := reviewer.Sessions.GetHistory(route.SessionKey)
+	if history[len(history)-1].ModelName != "shared" {
+		t.Fatalf("new answer lost model provenance: %q", history[len(history)-1].ModelName)
+	}
+	for _, key := range compactKeys {
+		if key != answerKeys[0] || key == "Bearer main-key" {
+			t.Errorf("agent selection diverged: compact=%s answer=%s", key, answerKeys[0])
+		}
+	}
+	if _, err = os.Stat(filepath.Join(reviewerWorkspace, "sessions", "seahorse-reviewer.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(
+		filepath.Join(cfg.WorkspacePath(), "sessions", "seahorse-reviewer.sqlite"),
+	); !os.IsNotExist(
+		err,
+	) {
+		t.Fatal("reviewer context stored in default agent workspace")
+	}
+}
+
+func TestSeahorseBoundsCompletionAttemptsAndRetainsSourcesOnLimit(t *testing.T) {
+	p := &sourceScenarioProvider{}
+	initial, cfg := newSeahorseScenarioLoop(t, p)
+	initial.Close()
+	cfg.Agents.Defaults.ContextWindow = 9000
+	cfg.Agents.Defaults.ContextManagerConfig.MaxCompletionAttempts = 1
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), p)
+	defer al.Close()
+	agent := al.GetRegistry().GetDefaultAgent()
+	key := inlineConversationKey("main", "42")
+	for i := 0; i < 16; i++ {
+		agent.Sessions.AddFullMessage(
+			key,
+			providers.Message{Role: "user", Content: strings.Repeat("bounded source ", 1500)},
+		)
+		agent.Sessions.AddFullMessage(key, providers.Message{Role: "assistant", Content: "answer"})
+	}
+	_, err := al.processMessage(t.Context(), selectedInlineMessage("42", "bounded", "next"))
+	if err == nil || !strings.Contains(err.Error(), "completion attempt limit") {
+		t.Fatalf("expected visible attempt limit, got %v", err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.summaryPrompts) != 1 {
+		t.Fatalf("provider attempts = %d, want 1", len(p.summaryPrompts))
+	}
+	if len(agent.Sessions.GetHistory(key)) != 32 {
+		t.Fatal("attempt limit truncated canonical evidence")
+	}
+}
+
+type concurrencyCompactionProvider struct {
+	active atomic.Int32
+	peak   atomic.Int32
+	calls  atomic.Int32
+}
+
+func (p *concurrencyCompactionProvider) GetDefaultModel() string { return "test-model" }
+
+func (p *concurrencyCompactionProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	if len(messages) == 1 && messages[0].Role == "user" {
+		p.calls.Add(1)
+		active := p.active.Add(1)
+		defer p.active.Add(-1)
+		for {
+			old := p.peak.Load()
+			if active <= old || p.peak.CompareAndSwap(old, active) {
+				break
+			}
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return &providers.LLMResponse{Content: "answer"}, nil
+}
+
+func TestSeahorseBoundsConcurrentCompactionsAndCancelsQueuedWork(t *testing.T) {
+	workspace := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		p := &concurrencyCompactionProvider{}
+		agent := &AgentInstance{
+			ID:              "main",
+			Workspace:       workspace,
+			Provider:        p,
+			ContextProvider: p,
+			Model:           "test-model",
+			MaxTokens:       256,
+		}
+		manager, err := NewContextManager(agent, "seahorse", config.SeahorseContextConfig{MaxConcurrentCompactions: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var done sync.WaitGroup
+		for _, key := range []string{"conversation:one", "conversation:two"} {
+			snapshot := ContextSnapshot{
+				SessionKey: key,
+				ScopeKey:   key,
+				Provider:   p,
+				Model:      "test-model",
+				Options:    map[string]any{"max_tokens": 256, "temperature": 0.7},
+			}
+			for i := 0; i < 8; i++ {
+				snapshot.History = append(
+					snapshot.History,
+					providers.Message{Role: "user", Content: strings.Repeat("concurrent source ", 1500)},
+					providers.Message{Role: "assistant", Content: "answer"},
+				)
+			}
+			done.Add(1)
+			go func() { defer done.Done(); _ = manager.Compact(ctx, snapshot, 5000) }()
+		}
+		synctest.Wait()
+		if p.calls.Load() != 1 || p.peak.Load() != 1 {
+			t.Errorf("compaction concurrency ignored: calls=%d peak=%d", p.calls.Load(), p.peak.Load())
+		}
+		cancel()
+		done.Wait()
+		if p.calls.Load() != 1 {
+			t.Error("canceled queued compaction called provider")
+		}
+	})
+}
+
+func TestSeahorseRecordsSuccessfulFallbackModelInCanonicalSources(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body.Model == "primary" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid API key"}}`))
+			return
+		}
+		_, _ = w.Write(
+			[]byte(`{"choices":[{"message":{"role":"assistant","content":"backup answer"},"finish_reason":"stop"}]}`),
+		)
+	}))
+	defer endpoint.Close()
+	initial, cfg := newSeahorseScenarioLoop(t, &sourceScenarioProvider{})
+	initial.Close()
+	cfg.ModelList = []config.ModelConfig{
+		{ModelName: "test-model", Model: "openai/primary", APIBase: endpoint.URL, APIKey: "primary-key"},
+		{ModelName: "backup", Model: "openai/backup", APIBase: endpoint.URL, APIKey: "backup-key"},
+	}
+	cfg.Agents.Defaults.ModelFallbacks = []string{"backup"}
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	if _, err = al.processMessage(t.Context(), selectedInlineMessage("42", "fallback", "answer")); err != nil {
+		t.Fatal(err)
+	}
+	history := al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(inlineConversationKey("main", "42"))
+	if history[len(history)-1].ModelName != "backup" {
+		t.Fatalf("fallback source reports model %q", history[len(history)-1].ModelName)
+	}
 }
