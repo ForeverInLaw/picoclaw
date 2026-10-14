@@ -11,6 +11,7 @@ import {
   clearStoredSessionId,
   generateSessionId,
   readStoredSessionId,
+  writeStoredSessionId,
 } from "@/features/chat/state"
 import {
   invalidateSocket,
@@ -349,6 +350,7 @@ export function sendChatMessage(content: string) {
         payload: { content },
       }),
     )
+    writeStoredSessionId(activeSessionIdRef)
     return true
   } catch (error) {
     console.error("Failed to send pico message:", error)

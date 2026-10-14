@@ -47,6 +47,15 @@
       "apikey": "API Key",
       "oauth": "OAuth",
       "local": "Local"
+    },
+    "activity": {
+      "reasoning": "Thought",
+      "retry": "Model recovery",
+      "commentary": "Activity",
+      "started": "In progress",
+      "completed": "Completed",
+      "failed": "Failed",
+      "arguments": "Inputs"
     }
   },
   "header": {

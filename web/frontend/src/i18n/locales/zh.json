@@ -47,6 +47,15 @@
       "apikey": "API Key",
       "oauth": "OAuth",
       "local": "本地模型"
+    },
+    "activity": {
+      "reasoning": "思考",
+      "retry": "模型恢复",
+      "commentary": "活动",
+      "started": "进行中",
+      "completed": "已完成",
+      "failed": "失败",
+      "arguments": "输入"
     }
   },
   "header": {

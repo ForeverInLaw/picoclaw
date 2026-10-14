@@ -147,11 +147,16 @@ export function ChatPage() {
           )}
 
           {messages.map((msg) => (
-            <div key={msg.id} className="flex w-full">
+            <div
+              key={`${msg.role}:${msg.replyToMessageId || msg.id}`}
+              className="flex w-full"
+            >
               {msg.role === "assistant" ? (
                 <AssistantMessage
                   content={msg.content}
                   timestamp={msg.timestamp}
+                  activities={msg.activities}
+                  error={msg.error}
                 />
               ) : (
                 <UserMessage content={msg.content} />

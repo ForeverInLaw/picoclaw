@@ -237,6 +237,8 @@ Open http://localhost:18800 in your browser. The launcher manages the gateway pr
 > [!WARNING]
 The web console requires a password and protects its API, chat, and media with a session cookie. See [dashboard access](docs/dashboard-auth.md) for setup, persistent storage, and password recovery.
 
+Chat displays separate [thought and tool activity](docs/web-chat-activity.md) blocks, streamed answers, and the latest turn after reconnect.
+
 ### Agent Mode (One-shot)
 
 ```bash
