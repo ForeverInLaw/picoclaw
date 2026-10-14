@@ -31,7 +31,9 @@ func TestIndependentMCPServersInitializeConcurrently(t *testing.T) {
 				http.Error(w, "read failed", http.StatusBadRequest)
 				return
 			}
-			var request struct{ Method string }
+			var request struct {
+				Method string `json:"method"`
+			}
 			if json.Unmarshal(body, &request) == nil && request.Method == "initialize" {
 				started <- struct{}{}
 				select {

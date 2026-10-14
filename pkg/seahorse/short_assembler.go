@@ -298,7 +298,11 @@ func (a *Assembler) resolveItem(ctx context.Context, item ContextItem) (resolved
 		if sum.Content != "" {
 			parents, err := a.store.GetSummaryParents(ctx, sum.SummaryID)
 			if err != nil {
-				logger.WarnCF("seahorse", "assemble: get summary parents", map[string]any{"summary_id": sum.SummaryID, "error": err.Error()})
+				logger.WarnCF(
+					"seahorse",
+					"assemble: get summary parents",
+					map[string]any{"summary_id": sum.SummaryID, "error": err.Error()},
+				)
 			}
 			var parentIDs []string
 			for _, parent := range parents {

@@ -10,7 +10,10 @@ import (
 
 func TestConfigDiagnosticsAcceptsCaseInsensitiveFieldNames(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	require.NoError(t, os.WriteFile(path, []byte(`{"VERSION":3,"AGENTS":{"DEFAULTS":{"MODEL_NAME":"case-variant"}}}`), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(path, []byte(`{"VERSION":3,"AGENTS":{"DEFAULTS":{"MODEL_NAME":"case-variant"}}}`), 0o600),
+	)
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
 	require.Equal(t, "case-variant", cfg.Agents.Defaults.ModelName)

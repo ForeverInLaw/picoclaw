@@ -34,8 +34,8 @@ func TestClearSessionWaitsForAdmittedIngestion(t *testing.T) {
 	<-entered
 	go func() { cleared <- engine.ClearSession(t.Context(), "conversation") }()
 	select {
-	case err := <-cleared:
-		require.NoError(t, err)
+	case clearErr := <-cleared:
+		require.NoError(t, clearErr)
 		t.Fatal("clear returned while earlier ingestion could still recreate the session")
 	case <-time.After(50 * time.Millisecond):
 	}
@@ -50,7 +50,10 @@ func TestClearSessionWaitsForAdmittedIngestion(t *testing.T) {
 func TestAssemblyBudgetsRenderedSummaryAndGuidance(t *testing.T) {
 	for _, depth := range []int{0, 2} {
 		t.Run(string(rune('0'+depth)), func(t *testing.T) {
-			engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.sqlite")}, nil)
+			engine, err := seahorse.NewEngine(
+				seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.sqlite")},
+				nil,
+			)
 			require.NoError(t, err)
 			defer engine.Close()
 			store := engine.GetRetrieval().Store()
@@ -66,7 +69,13 @@ func TestAssemblyBudgetsRenderedSummaryAndGuidance(t *testing.T) {
 			require.NoError(t, store.AppendContextSummary(t.Context(), conv.ConversationID, summary.SummaryID))
 			latest := providers.Message{Role: "user", Content: "latest question"}
 			messageTokens := tokenizer.EstimateMessageTokens(latest)
-			message, err := store.AddMessage(t.Context(), conv.ConversationID, latest.Role, latest.Content, messageTokens)
+			message, err := store.AddMessage(
+				t.Context(),
+				conv.ConversationID,
+				latest.Role,
+				latest.Content,
+				messageTokens,
+			)
 			require.NoError(t, err)
 			require.NoError(t, store.AppendContextMessage(t.Context(), conv.ConversationID, message.ID))
 			budget := plainTokens + messageTokens
