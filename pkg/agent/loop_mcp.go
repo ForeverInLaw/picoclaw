@@ -128,7 +128,7 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 						continue
 					}
 
-					mcpTool := tools.NewMCPTool(mcpManager, serverName, tool)
+					mcpTool := tools.NewMCPTool(mcpManager, serverName, tool).WithArtifacts(agent.Artifacts)
 
 					if registerAsHidden {
 						agent.Tools.RegisterHidden(mcpTool)

@@ -216,6 +216,10 @@ Zero-argument tool calls send `arguments: {}` for compatibility with strict MCP 
 
 Manage configuration with picoclaw mcp add, update, list, show, test, remove and edit. See [MCP CLI](mcp-cli.md) for flags, safe editor behavior and connectivity probes.
 
+Large text results use [durable scoped artifacts](mcp-artifacts.md) with a
+configurable inline threshold, bounded preview, and authorized `read_file`
+references. Retention is explicit (no TTL); quota defaults to disabled.
+
 ### Tool Discovery (Lazy Loading)
 
 When connecting to multiple MCP servers, exposing hundreds of tools simultaneously can exhaust the LLM's context window

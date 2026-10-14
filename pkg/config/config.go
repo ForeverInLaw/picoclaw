@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -137,6 +138,31 @@ func (c *Config) FilterSensitiveData(content string) string {
 		return content
 	}
 	return c.security.SensitiveDataReplacer().Replace(content)
+}
+
+// ArtifactFilter protects complete artifact sources before preview or pagination.
+// Artifacts retain their raw data; only the model-facing view is redacted.
+func (c *Config) ArtifactFilter() func(string) string {
+	var values []string
+	if c.security != nil {
+		values = c.security.collectSensitiveValues()
+	}
+	// Runtime keys have already been decoded/dereferenced by LoadConfig. Sidecar
+	// values alone may contain their encrypted/file reference instead.
+	for _, model := range c.ModelList {
+		values = append(values, model.APIKey)
+		values = append(values, model.APIKeys...)
+	}
+	sort.SliceStable(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	seen := make(map[string]bool)
+	pairs := make([]string, 0, len(values)*2)
+	for _, value := range values {
+		if value != "" && !seen[value] {
+			seen[value] = true
+			pairs = append(pairs, value, "[FILTERED]")
+		}
+	}
+	return strings.NewReplacer(pairs...).Replace
 }
 
 type HooksConfig struct {
@@ -1162,8 +1188,16 @@ type MCPServerConfig struct {
 type MCPConfig struct {
 	ToolConfig `                    envPrefix:"PICOCLAW_TOOLS_MCP_"`
 	Discovery  ToolDiscoveryConfig `                                json:"discovery"`
+	Artifacts  MCPArtifactConfig   `                                json:"artifacts,omitempty"`
 	// Servers is a map of server name to server configuration
 	Servers map[string]MCPServerConfig `json:"servers,omitempty"`
+}
+
+type MCPArtifactConfig struct {
+	Directory      string `json:"directory,omitempty"        env:"PICOCLAW_TOOLS_MCP_ARTIFACTS_DIRECTORY"`
+	MaxInlineRunes int    `json:"max_inline_runes,omitempty" env:"PICOCLAW_TOOLS_MCP_ARTIFACTS_MAX_INLINE_RUNES"`
+	PreviewRunes   int    `json:"preview_runes,omitempty"    env:"PICOCLAW_TOOLS_MCP_ARTIFACTS_PREVIEW_RUNES"`
+	MaxDiskBytes   int64  `json:"max_disk_bytes,omitempty"   env:"PICOCLAW_TOOLS_MCP_ARTIFACTS_MAX_DISK_BYTES"`
 }
 
 func LoadConfig(path string) (*Config, error) {
