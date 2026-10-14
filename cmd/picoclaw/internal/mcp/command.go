@@ -8,6 +8,6 @@ func NewMCPCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
 	cmd.SetFlagErrorFunc(func(*cobra.Command, error) error { return invalidFlags() })
-	cmd.AddCommand(newAddCommand())
+	cmd.AddCommand(newAddCommand(false), newAddCommand(true), newRemoveCommand())
 	return cmd
 }

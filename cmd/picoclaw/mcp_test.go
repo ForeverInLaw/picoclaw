@@ -60,3 +60,42 @@ func TestMCPCLIAddsStdioServerThroughExistingV3Persistence(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(security), "second-dummy-key")
 }
+
+func TestMCPCLIUpdatePreservesUnspecifiedServerOptionsAndRemoveReopens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv(config.EnvConfig, path)
+	cfg := config.DefaultConfig()
+	deferred := true
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"local":  {Enabled: false, Command: "original", Args: []string{"old-arg"}, Env: map[string]string{"KEEP": "secret-kept", "REPLACE": "old"}, EnvFile: ".env.mcp", Deferred: &deferred},
+		"remote": {Enabled: false, Type: "streamable-http", URL: "https://example.test/mcp", Headers: map[string]string{"Authorization": "Bearer header-secret", "X-Mode": "kept"}},
+	}
+	require.NoError(t, config.SaveConfig(path, cfg))
+	output, err := executeMCP(t, "add", "--force", "--env", "REPLACE=new", "local", "python", "-u", "server.py")
+	require.NoError(t, err, output)
+	reopened, err := config.LoadConfig(path)
+	require.NoError(t, err)
+	local := reopened.Tools.MCP.Servers["local"]
+	require.False(t, local.Enabled, "updating did not explicitly enable a disabled server")
+	require.Equal(t, "secret-kept", local.Env["KEEP"])
+	require.Equal(t, "new", local.Env["REPLACE"])
+	require.Equal(t, ".env.mcp", local.EnvFile)
+	require.True(t, *local.Deferred)
+	require.Equal(t, []string{"-u", "server.py"}, local.Args)
+	output, err = executeMCP(t, "update", "remote", "https://replacement.test/mcp", "--header", "X-Mode=updated")
+	require.NoError(t, err, output)
+	reopened, err = config.LoadConfig(path)
+	require.NoError(t, err)
+	remote := reopened.Tools.MCP.Servers["remote"]
+	require.Equal(t, "Bearer header-secret", remote.Headers["Authorization"])
+	require.Equal(t, "updated", remote.Headers["X-Mode"])
+	require.False(t, remote.Enabled)
+	output, err = executeMCP(t, "remove", "local")
+	require.NoError(t, err, output)
+	reopened, err = config.LoadConfig(path)
+	require.NoError(t, err)
+	require.Len(t, reopened.Tools.MCP.Servers, 1)
+	require.Equal(t, remote, reopened.Tools.MCP.Servers["remote"])
+	_, err = executeMCP(t, "update", "missing", "npx")
+	require.ErrorContains(t, err, "not found")
+}
