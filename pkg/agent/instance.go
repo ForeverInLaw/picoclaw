@@ -50,6 +50,9 @@ type AgentInstance struct {
 	ImageCandidates           []providers.FallbackCandidate
 	MemoryIndex               *memoryindex.Index
 	ChatMemory                *chatmemory.Service
+	ContextManager            ContextManager
+	ContextManagerError       error
+	ContextProvider           providers.LLMProvider
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -238,7 +241,7 @@ func NewAgentInstance(
 		}
 	}
 
-	return &AgentInstance{
+	instance := &AgentInstance{
 		ID:                        agentID,
 		Name:                      agentName,
 		Model:                     model,
@@ -267,6 +270,43 @@ func NewAgentInstance(
 		Router:                    router,
 		LightCandidates:           lightCandidates,
 	}
+	name, options := contextManagerSettings(agentCfg, defaults)
+
+	instance.ContextProvider = provider
+	ownedContextProvider := false
+	if name == "seahorse" && len(candidates) > 0 {
+		needsClient := model != defaults.GetModelName()
+		if selected, ok := provider.(interface{ ModelConfigKey() string }); ok && selected.ModelConfigKey() != "" {
+			needsClient = selected.ModelConfigKey() != candidates[0].ConfigKey
+		}
+		if needsClient || candidates[0].ConfigKey != "" {
+			if mc, err := modelConfigForCandidate(cfg, candidates[0], workspace); err == nil {
+				instance.ThinkingLevel = parseThinkingLevel(mc.ThinkingLevel)
+				if needsClient {
+					instance.ContextProvider, _, instance.ContextManagerError = providers.CreateProviderFromConfig(mc)
+					ownedContextProvider = instance.ContextManagerError == nil
+				}
+			} else {
+				instance.ContextManagerError = err
+			}
+		}
+	}
+
+	if instance.ContextManagerError == nil {
+		instance.ContextManager, instance.ContextManagerError = NewContextManager(instance, name, options)
+	}
+	if ownedContextProvider {
+		if manager, ok := instance.ContextManager.(*seahorseContextManager); ok {
+			manager.retainProvider(instance.ContextProvider)
+		} else if stateful, ok := instance.ContextProvider.(providers.StatefulProvider); ok {
+			stateful.Close()
+		}
+	}
+	if instance.ContextManager != nil && instance.ContextManager.Name() == "seahorse" {
+		toolsRegistry.Register(&shortContextTool{name: "short_grep"})
+		toolsRegistry.Register(&shortContextTool{name: "short_expand"})
+	}
+	return instance
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.
@@ -336,6 +376,11 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store.
 func (a *AgentInstance) Close() error {
+	if a.ContextManager != nil {
+		if err := a.ContextManager.Close(); err != nil {
+			return err
+		}
+	}
 	if a.MemoryIndex != nil {
 		_ = a.MemoryIndex.Close()
 	}

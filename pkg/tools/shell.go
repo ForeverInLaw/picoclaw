@@ -15,6 +15,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 )
 
 type ExecTool struct {
@@ -26,6 +27,7 @@ type ExecTool struct {
 	allowedPathPatterns []*regexp.Regexp
 	restrictToWorkspace bool
 	allowRemote         bool
+	isolation           config.IsolationConfig
 }
 
 var (
@@ -103,19 +105,21 @@ func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regex
 func NewExecToolWithConfig(
 	workingDir string,
 	restrict bool,
-	config *config.Config,
+	cfg *config.Config,
 	allowPaths ...[]*regexp.Regexp,
 ) (*ExecTool, error) {
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
+	var isolationConfig config.IsolationConfig
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
 
-	if config != nil {
-		execConfig := config.Tools.Exec
+	if cfg != nil {
+		isolationConfig = cfg.Isolation
+		execConfig := cfg.Tools.Exec
 		enableDenyPatterns := execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
 		if enableDenyPatterns {
@@ -146,8 +150,8 @@ func NewExecToolWithConfig(
 	}
 
 	timeout := 60 * time.Second
-	if config != nil && config.Tools.Exec.TimeoutSeconds > 0 {
-		timeout = time.Duration(config.Tools.Exec.TimeoutSeconds) * time.Second
+	if cfg != nil && cfg.Tools.Exec.TimeoutSeconds > 0 {
+		timeout = time.Duration(cfg.Tools.Exec.TimeoutSeconds) * time.Second
 	}
 
 	return &ExecTool{
@@ -159,6 +163,7 @@ func NewExecToolWithConfig(
 		allowedPathPatterns: allowedPathPatterns,
 		restrictToWorkspace: restrict,
 		allowRemote:         allowRemote,
+		isolation:           isolationConfig,
 	}, nil
 }
 
@@ -263,18 +268,25 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 	defer cancel()
 
+	options := isolation.Options{Policy: t.isolation, Workspace: t.workingDir, Dir: cwd, DeclaredEnv: buildExecEnv(ctx)}
 	var cmd *exec.Cmd
+	var launchErr error
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(cmdCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		cmd, launchErr = isolation.Command(
+			cmdCtx,
+			options,
+			"powershell",
+			"-NoProfile",
+			"-NonInteractive",
+			"-Command",
+			command,
+		)
 	} else {
-		cmd = exec.CommandContext(cmdCtx, "sh", "-c", command)
+		cmd, launchErr = isolation.Command(cmdCtx, options, "sh", "-c", command)
 	}
-	if cwd != "" {
-		cmd.Dir = cwd
+	if launchErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to prepare command: %v", launchErr))
 	}
-	cmd.Env = buildExecEnv(ctx)
-
-	prepareCommandForTermination(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -293,7 +305,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	select {
 	case err = <-done:
 	case <-cmdCtx.Done():
-		_ = terminateProcessTree(cmd)
+		_ = isolation.Terminate(cmd)
 		select {
 		case err = <-done:
 		case <-time.After(2 * time.Second):
@@ -362,8 +374,8 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 }
 
-func buildExecEnv(ctx context.Context) []string {
-	env := os.Environ()
+func buildExecEnv(ctx context.Context) map[string]string {
+	env := make(map[string]string)
 
 	channel := strings.TrimSpace(ToolChannel(ctx))
 	chatID := strings.TrimSpace(ToolChatID(ctx))
@@ -373,31 +385,31 @@ func buildExecEnv(ctx context.Context) []string {
 	sender := ToolSender(ctx)
 
 	if channel != "" {
-		env = append(env, "PICOCLAW_CHANNEL="+channel)
+		env["PICOCLAW_CHANNEL"] = channel
 	}
 	if chatID != "" {
-		env = append(env, "PICOCLAW_CHAT_ID="+chatID)
+		env["PICOCLAW_CHAT_ID"] = chatID
 	}
 	if peerKind != "" {
-		env = append(env, "PICOCLAW_PEER_KIND="+peerKind)
+		env["PICOCLAW_PEER_KIND"] = peerKind
 	}
 	if language != "" {
-		env = append(env, "PICOCLAW_LANGUAGE="+language)
+		env["PICOCLAW_LANGUAGE"] = language
 	}
 	if replyToID != "" {
-		env = append(env, "PICOCLAW_REPLY_TO_MESSAGE_ID="+replyToID)
+		env["PICOCLAW_REPLY_TO_MESSAGE_ID"] = replyToID
 	}
 	if sender.CanonicalID != "" {
-		env = append(env, "PICOCLAW_SENDER_ID="+sender.CanonicalID)
+		env["PICOCLAW_SENDER_ID"] = sender.CanonicalID
 	}
 	if strings.TrimSpace(sender.DisplayName) != "" {
-		env = append(env, "PICOCLAW_SENDER_NAME="+sender.DisplayName)
+		env["PICOCLAW_SENDER_NAME"] = sender.DisplayName
 	}
 	if strings.TrimSpace(sender.Username) != "" {
-		env = append(env, "PICOCLAW_SENDER_USERNAME="+sender.Username)
+		env["PICOCLAW_SENDER_USERNAME"] = sender.Username
 	}
 	if (channel == "telegram" || sender.Platform == "telegram") && chatID != "" {
-		env = append(env, "TELEGRAM_CHAT_ID="+chatID)
+		env["TELEGRAM_CHAT_ID"] = chatID
 	}
 
 	return env
