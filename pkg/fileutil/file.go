@@ -50,15 +50,32 @@ import (
 //	// Public readable file
 //	err := utils.WriteFileAtomic("public.txt", data, 0o644)
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomic(path, data, perm, nil)
+}
+
+// WriteFileAtomicInRoot uses the same durable write protocol with root-relative
+// operations, so directory replacement or symlinks cannot escape the owner root.
+func WriteFileAtomicInRoot(root *os.Root, path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomic(path, data, perm, root)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode, root *os.Root) error {
+	mkdirAll, openFile := os.MkdirAll, os.OpenFile
+	remove, rename, open := os.Remove, os.Rename, os.Open
+	if root != nil {
+		mkdirAll, openFile = root.MkdirAll, root.OpenFile
+		remove, rename, open = root.Remove, root.Rename, root.Open
+	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	// Create temp file in the same directory (ensures atomic rename works)
 	// Using a hidden prefix (.tmp-) to avoid issues with some tools
-	tmpFile, err := os.OpenFile(
-		filepath.Join(dir, fmt.Sprintf(".tmp-%d-%d", os.Getpid(), time.Now().UnixNano())),
+	tmpPath := filepath.Join(dir, fmt.Sprintf(".tmp-%d-%d", os.Getpid(), time.Now().UnixNano()))
+	tmpFile, err := openFile(
+		tmpPath,
 		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
 		perm,
 	)
@@ -66,13 +83,12 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 
-	tmpPath := tmpFile.Name()
 	cleanup := true
 
 	defer func() {
 		if cleanup {
 			tmpFile.Close()
-			_ = os.Remove(tmpPath)
+			_ = remove(tmpPath)
 		}
 	}()
 
@@ -102,13 +118,13 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	// Atomic rename: temp file becomes the target
 	// On POSIX: rename() is atomic
 	// On Windows: Rename() is atomic for files
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := rename(tmpPath, path); err != nil {
 		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
 	// Sync directory to ensure rename is durable
 	// This prevents the renamed file from disappearing after a crash
-	if dirFile, err := os.Open(dir); err == nil {
+	if dirFile, err := open(dir); err == nil {
 		_ = dirFile.Sync()
 		dirFile.Close()
 	}

@@ -1,0 +1,7 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# Loaded only on the ephemeral CI runner for the installed Bubblewrap binary.
+profile bwrap /usr/bin/bwrap flags=(default_allow) {
+  userns,
+}

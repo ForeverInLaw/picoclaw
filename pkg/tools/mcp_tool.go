@@ -25,6 +25,12 @@ type MCPTool struct {
 	manager    MCPManager
 	serverName string
 	tool       *mcp.Tool
+	artifacts  *ArtifactStore
+}
+
+func (t *MCPTool) WithArtifacts(store *ArtifactStore) *MCPTool {
+	t.artifacts = store
+	return t
 }
 
 // NewMCPTool creates a new MCP tool wrapper
@@ -214,17 +220,22 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 	// Handle error result from server
 	if result.IsError {
 		errMsg := extractContentText(result.Content)
-		return ErrorResult(fmt.Sprintf("MCP tool returned error: %s", errMsg)).
-			WithError(fmt.Errorf("MCP tool error: %s", errMsg))
+		return t.artifacts.Capture(
+			ToolRequestScope(ctx),
+			ErrorResult(
+				fmt.Sprintf("MCP tool returned error: %s", errMsg),
+			).WithError(fmt.Errorf("MCP tool error: %s", errMsg)),
+			errMsg,
+		)
 	}
 
 	// Extract text content from result
 	output := extractContentText(result.Content)
 
-	return &ToolResult{
+	return t.artifacts.Capture(ToolRequestScope(ctx), &ToolResult{
 		ForLLM:  output,
 		IsError: false,
-	}
+	}, output)
 }
 
 // extractContentText extracts text from MCP content array

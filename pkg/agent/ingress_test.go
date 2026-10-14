@@ -144,9 +144,10 @@ func (p *ingressProvider) Chat(
 
 func startIngressLoop(t *testing.T) (*AgentLoop, *bus.MessageBus, *ingressProvider) {
 	t.Helper()
-	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	al, cfg, mb, _, cleanup := newTestAgentLoop(t)
+	al.Close()
 	provider := &ingressProvider{requests: make(chan ingressRequest, 10)}
-	al.registry.GetDefaultAgent().Provider = provider
+	al = NewAgentLoop(cfg, mb, provider)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- al.Run(ctx) }()

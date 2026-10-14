@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/web/backend/utils"
 )
+
+var browserBootstrapMu sync.Mutex
 
 const (
 	browserDelay    = 500 * time.Millisecond
@@ -58,5 +62,15 @@ func openBrowser() error {
 	if serverAddr == "" {
 		return fmt.Errorf("server address not set")
 	}
-	return utils.OpenBrowser(serverAddr)
+	browserBootstrapMu.Lock()
+	browserURL := serverAddr
+	if localAutoLogin != nil {
+		browserURL += localAutoLogin.URLPath()
+		localAutoLogin = nil
+	} else if dashboardSetupToken != "" {
+		browserURL += "/launcher-setup#setup_token=" + url.QueryEscape(dashboardSetupToken)
+		dashboardSetupToken = ""
+	}
+	browserBootstrapMu.Unlock()
+	return utils.OpenBrowser(browserURL)
 }

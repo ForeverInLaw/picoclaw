@@ -41,6 +41,13 @@ Guest mentions such as `@bot question` are handled through Telegram's
 conversation and retained answer storage as selected inline results. This is
 separate from BotFather's `/setinline` setting for the inline result picker.
 
+Guest replies use Telegram's native reply reference without adding another
+copy of the request inside the answer. Selected inline results keep their
+request quote because the typed query need not appear as a chat message.
+New assistant turns store the model's answer without delivery formatting;
+quotes intentionally written by the model remain part of its answer. Existing
+history is retained without rewriting old messages.
+
 Replies in direct chats, groups, topics, and inline destinations use Telegram's
 native Rich Markdown: headings, lists, tables, code blocks, and LaTeX formulas.
 Inline math uses `$x^2$`; display math uses `$$E = mc^2$$` or a `math` code block.
@@ -71,13 +78,21 @@ The `message` tool sends its content directly and does not create a duplicate
 activity message. With tool feedback enabled, the answer streams into a new
 message after tool activity; the earlier thinking placeholder is not reused.
 
-Executed tools other than `message` in direct chats and groups get a separate activity message,
-including shell commands, file operations, web search, and custom tools. It starts
-with the action preview and is edited with its result or error. Longer output is
-available in a collapsed details block; output beyond the activity limit is
-marked `[truncated]`. Activity delivery retries edit the same message and never
-replace the assistant's answer. Inline tool permissions stay restricted and
-inline destinations do not receive these activity messages.
+Consecutive tools other than `message` in direct chats and groups share one
+quiet activity message, following [Hermes Agent's progress presentation](https://github.com/NousResearch/hermes-agent/blob/300228d24c593f779055204753921fbe9a2163c5/gateway/run_turn_runner.py).
+Built-in tools use an icon and a short action label; custom tools keep their name.
+Only tool starts are shown, with a 40-character argument preview. Shell commands
+use a code block containing the first line. Repeated identical previews collapse
+into `×N`; duplicate delivery of the same invocation does not increment it.
+Tool results, JSON arguments and reasoning are not appended to this journal.
+
+Updates are batched at 1.5-second intervals and flushed before assistant text.
+After an intervening text message, later tools start a new journal below it;
+long journals also roll over before Telegram's plain-message limit. Temporary
+edit failures keep the message identity and honor `retry_after`; deleted or
+expired messages are recreated. Rich-format fallback is quiet too. Final
+answers retain their normal notification behavior. Inline tool permissions stay
+restricted and inline destinations do not receive these activity messages.
 
 ## Answer streaming
 

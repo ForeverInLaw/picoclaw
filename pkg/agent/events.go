@@ -156,7 +156,7 @@ type LLMDeltaPayload struct {
 // LLMRetryPayload describes a retry of an LLM request.
 type LLMRetryPayload struct {
 	Attempt    int
-	MaxRetries int
+	MaxRetries int // Zero means a capacity wait has no attempt limit.
 	Reason     string
 	Error      string
 	Backoff    time.Duration

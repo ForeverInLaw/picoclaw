@@ -15,6 +15,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/isolation"
 )
 
 type ExecTool struct {
@@ -26,6 +27,7 @@ type ExecTool struct {
 	allowedPathPatterns []*regexp.Regexp
 	restrictToWorkspace bool
 	allowRemote         bool
+	isolation           config.IsolationConfig
 }
 
 var (
@@ -103,19 +105,21 @@ func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regex
 func NewExecToolWithConfig(
 	workingDir string,
 	restrict bool,
-	config *config.Config,
+	cfg *config.Config,
 	allowPaths ...[]*regexp.Regexp,
 ) (*ExecTool, error) {
 	denyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
+	var isolationConfig config.IsolationConfig
 	if len(allowPaths) > 0 {
 		allowedPathPatterns = allowPaths[0]
 	}
 
-	if config != nil {
-		execConfig := config.Tools.Exec
+	if cfg != nil {
+		isolationConfig = cfg.Isolation
+		execConfig := cfg.Tools.Exec
 		enableDenyPatterns := execConfig.EnableDenyPatterns
 		allowRemote = execConfig.AllowRemote
 		if enableDenyPatterns {
@@ -146,8 +150,8 @@ func NewExecToolWithConfig(
 	}
 
 	timeout := 60 * time.Second
-	if config != nil && config.Tools.Exec.TimeoutSeconds > 0 {
-		timeout = time.Duration(config.Tools.Exec.TimeoutSeconds) * time.Second
+	if cfg != nil && cfg.Tools.Exec.TimeoutSeconds > 0 {
+		timeout = time.Duration(cfg.Tools.Exec.TimeoutSeconds) * time.Second
 	}
 
 	return &ExecTool{
@@ -159,6 +163,7 @@ func NewExecToolWithConfig(
 		allowedPathPatterns: allowedPathPatterns,
 		restrictToWorkspace: restrict,
 		allowRemote:         allowRemote,
+		isolation:           isolationConfig,
 	}, nil
 }
 
@@ -263,18 +268,25 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 	defer cancel()
 
+	options := isolation.Options{Policy: t.isolation, Workspace: t.workingDir, Dir: cwd, DeclaredEnv: buildExecEnv(ctx)}
 	var cmd *exec.Cmd
+	var launchErr error
 	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(cmdCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		cmd, launchErr = isolation.Command(
+			cmdCtx,
+			options,
+			"powershell",
+			"-NoProfile",
+			"-NonInteractive",
+			"-Command",
+			command,
+		)
 	} else {
-		cmd = exec.CommandContext(cmdCtx, "sh", "-c", command)
+		cmd, launchErr = isolation.Command(cmdCtx, options, "sh", "-c", command)
 	}
-	if cwd != "" {
-		cmd.Dir = cwd
+	if launchErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to prepare command: %v", launchErr))
 	}
-	cmd.Env = buildExecEnv(ctx)
-
-	prepareCommandForTermination(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -293,7 +305,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	select {
 	case err = <-done:
 	case <-cmdCtx.Done():
-		_ = terminateProcessTree(cmd)
+		_ = isolation.Terminate(cmd)
 		select {
 		case err = <-done:
 		case <-time.After(2 * time.Second):
@@ -362,8 +374,8 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 	}
 }
 
-func buildExecEnv(ctx context.Context) []string {
-	env := os.Environ()
+func buildExecEnv(ctx context.Context) map[string]string {
+	env := make(map[string]string)
 
 	channel := strings.TrimSpace(ToolChannel(ctx))
 	chatID := strings.TrimSpace(ToolChatID(ctx))
@@ -373,31 +385,31 @@ func buildExecEnv(ctx context.Context) []string {
 	sender := ToolSender(ctx)
 
 	if channel != "" {
-		env = append(env, "PICOCLAW_CHANNEL="+channel)
+		env["PICOCLAW_CHANNEL"] = channel
 	}
 	if chatID != "" {
-		env = append(env, "PICOCLAW_CHAT_ID="+chatID)
+		env["PICOCLAW_CHAT_ID"] = chatID
 	}
 	if peerKind != "" {
-		env = append(env, "PICOCLAW_PEER_KIND="+peerKind)
+		env["PICOCLAW_PEER_KIND"] = peerKind
 	}
 	if language != "" {
-		env = append(env, "PICOCLAW_LANGUAGE="+language)
+		env["PICOCLAW_LANGUAGE"] = language
 	}
 	if replyToID != "" {
-		env = append(env, "PICOCLAW_REPLY_TO_MESSAGE_ID="+replyToID)
+		env["PICOCLAW_REPLY_TO_MESSAGE_ID"] = replyToID
 	}
 	if sender.CanonicalID != "" {
-		env = append(env, "PICOCLAW_SENDER_ID="+sender.CanonicalID)
+		env["PICOCLAW_SENDER_ID"] = sender.CanonicalID
 	}
 	if strings.TrimSpace(sender.DisplayName) != "" {
-		env = append(env, "PICOCLAW_SENDER_NAME="+sender.DisplayName)
+		env["PICOCLAW_SENDER_NAME"] = sender.DisplayName
 	}
 	if strings.TrimSpace(sender.Username) != "" {
-		env = append(env, "PICOCLAW_SENDER_USERNAME="+sender.Username)
+		env["PICOCLAW_SENDER_USERNAME"] = sender.Username
 	}
-	if channel == "telegram" && chatID != "" {
-		env = append(env, "TELEGRAM_CHAT_ID="+chatID)
+	if (channel == "telegram" || sender.Platform == "telegram") && chatID != "" {
+		env["TELEGRAM_CHAT_ID"] = chatID
 	}
 
 	return env
@@ -478,6 +490,27 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 				}
 			}
 
+			// Skip scheme-less URL paths like "wttr.in/Beijing".
+			// When a /path is immediately preceded by a token that looks
+			// like a domain name and that token does NOT exist as a local
+			// filesystem entry, treat the path as part of a URL and skip
+			// workspace sandbox validation.
+			//
+			// The local-path-exists guard prevents symlink bypass: if
+			// "foo.bar" exists as a local symlink or directory, the path
+			// still undergoes full workspace validation (see #2965).
+			if loc[0] > 0 && raw[0] == '/' {
+				// Find the token immediately before the "/".
+				j := loc[0] - 1
+				for j >= 0 && !isShellTokenBoundary(cmd[j]) {
+					j--
+				}
+				token := cmd[j+1 : loc[0]]
+				if looksLikeDomain(token) && !localPathExists(cwd, token) {
+					continue
+				}
+			}
+
 			p, err := filepath.Abs(raw)
 			if err != nil {
 				continue
@@ -502,6 +535,69 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	}
 
 	return ""
+}
+
+// isShellTokenBoundary returns true when b is a byte that separates
+// tokens in a shell command (space, tab, colon, semicolon, pipe, etc.).
+func isShellTokenBoundary(b byte) bool {
+	switch b {
+	case ' ', '\t', ':', ';', '|', '&', '<', '>', '\'', '"', '`', '\n', '\r':
+		return true
+	}
+	return false
+}
+
+// looksLikeDomain returns true when s looks like a DNS domain name:
+// it contains at least one dot, starts with an alphanumeric character,
+// and does not end with a common file extension.
+func looksLikeDomain(s string) bool {
+	if len(s) < 3 || !strings.ContainsRune(s, '.') {
+		return false
+	}
+	first := s[0]
+	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || (first >= '0' && first <= '9')) {
+		return false
+	}
+	// Exclude tokens ending with common file/programming extensions,
+	// e.g. "script.py", "main.go", "app.exe".
+	if idx := strings.LastIndexByte(s, '.'); idx >= 0 {
+		ext := strings.ToLower(s[idx+1:])
+		if commonFileExtension(ext) {
+			return false
+		}
+	}
+	return true
+}
+
+// commonFileExtension returns true when ext is a file extension that
+// strongly indicates a local file rather than a domain TLD.
+func commonFileExtension(ext string) bool {
+	switch ext {
+	case "py", "js", "ts", "tsx", "jsx", "go", "rs", "rb", "php",
+		"java", "c", "cpp", "h", "hpp", "cs", "swift", "kt", "scala",
+		"sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
+		"txt", "md", "rst", "log", "json", "yaml", "yml", "toml",
+		"xml", "html", "css", "scss", "ini", "cfg", "conf", "env",
+		"exe", "dll", "so", "dylib", "lib", "a", "o", "obj",
+		"zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+		"png", "jpg", "jpeg", "gif", "svg", "ico", "bmp", "webp",
+		"mp3", "mp4", "wav", "avi", "mov", "mkv", "flac",
+		"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+		"pub", "pem", "key", "crt", "cer", "p12", "pfx",
+		"bak", "tmp", "swp", "lock",
+		"ttf", "otf", "woff", "woff2", "eot",
+		"deb", "rpm", "apk", "msi", "dmg",
+		"sql", "sqlite", "db":
+		return true
+	}
+	return false
+}
+
+// localPathExists returns true when the given token resolves to an
+// existing filesystem entry relative to cwd.
+func localPathExists(cwd, token string) bool {
+	info, err := os.Lstat(filepath.Join(cwd, token))
+	return err == nil && info != nil
 }
 
 func (t *ExecTool) SetTimeout(timeout time.Duration) {

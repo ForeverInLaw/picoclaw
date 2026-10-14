@@ -12,6 +12,7 @@ import (
 const (
 	telegramInlineMetadataKey = "telegram_inline"
 	telegramInlineQueryKey    = "inline_query"
+	telegramGuestMetadataKey  = "telegram_guest"
 )
 
 func telegramUserID(msg bus.InboundMessage) string {
@@ -31,13 +32,24 @@ func inlineConversationKey(agentID, userID string) string {
 	return fmt.Sprintf("agent:%s:telegram:inline:user:%s", agentID, userID)
 }
 
-var inlineSafeTools = []string{"web_search", "web_fetch", "fact_check"}
+func inlineConversationKeyForChannel(agentID, userID, channel string) string {
+	if channel == "telegram" {
+		return inlineConversationKey(agentID, userID)
+	}
+	return fmt.Sprintf("agent:%s:%s:inline:user:%s", agentID, channel, userID)
+}
+
+func isTelegramMessage(msg bus.InboundMessage) bool {
+	return msg.Channel == "telegram" || msg.Sender.Platform == "telegram"
+}
+
+var inlineSafeTools = []string{"web_search", "web_fetch", "fact_check", "short_grep", "short_expand"}
 
 func isInlineMessage(msg bus.InboundMessage) bool {
 	if strings.EqualFold(msg.Metadata[telegramInlineMetadataKey], "true") {
 		return true
 	}
-	return msg.Channel == "telegram" && strings.HasPrefix(strings.TrimSpace(msg.ChatID), "inline:")
+	return isTelegramMessage(msg) && strings.HasPrefix(strings.TrimSpace(msg.ChatID), "inline:")
 }
 
 func inlineToolAllowlist() []string {
@@ -45,7 +57,7 @@ func inlineToolAllowlist() []string {
 }
 
 func inlineResponseQuote(msg bus.InboundMessage) string {
-	if !isInlineMessage(msg) {
+	if !isInlineMessage(msg) || strings.EqualFold(msg.Metadata[telegramGuestMetadataKey], "true") {
 		return ""
 	}
 

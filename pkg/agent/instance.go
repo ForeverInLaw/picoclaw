@@ -50,6 +50,10 @@ type AgentInstance struct {
 	ImageCandidates           []providers.FallbackCandidate
 	MemoryIndex               *memoryindex.Index
 	ChatMemory                *chatmemory.Service
+	ContextManager            ContextManager
+	ContextManagerError       error
+	ContextProvider           providers.LLMProvider
+	Artifacts                 *tools.ArtifactStore
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -66,6 +70,7 @@ func NewAgentInstance(
 	defaults *config.AgentDefaults,
 	cfg *config.Config,
 	provider providers.LLMProvider,
+	artifactStores ...*tools.ArtifactStore,
 ) *AgentInstance {
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
@@ -73,7 +78,7 @@ func NewAgentInstance(
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 	imageModel := strings.TrimSpace(defaults.ImageModel)
-	imageFallbacks := append([]string(nil), defaults.ImageModelFallbacks...)
+	imageFallbacks := defaults.ImageModelFallbacks
 
 	restrict := defaults.RestrictToWorkspace
 	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
@@ -83,10 +88,18 @@ func NewAgentInstance(
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 
 	toolsRegistry := tools.NewToolRegistry()
+	var artifacts *tools.ArtifactStore
+	if len(artifactStores) > 0 {
+		artifacts = artifactStores[0]
+	} else {
+		artifacts = tools.NewArtifactStore(cfg.Tools.MCP.Artifacts, cfg.ArtifactFilter())
+	}
 
 	if cfg.Tools.IsToolEnabled("read_file") {
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
-		toolsRegistry.Register(tools.NewReadFileTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
+		toolsRegistry.Register(
+			tools.NewReadFileTool(workspace, readRestrict, maxReadFileSize, allowReadPaths).WithArtifacts(artifacts),
+		)
 	}
 	if cfg.Tools.IsToolEnabled("write_file") {
 		toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict, allowWritePaths))
@@ -172,12 +185,6 @@ func NewAgentInstance(
 		temperature = *defaults.Temperature
 	}
 
-	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
-	}
-	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
-
 	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
 	if summarizeMessageThreshold == 0 {
 		summarizeMessageThreshold = 20
@@ -189,23 +196,28 @@ func NewAgentInstance(
 	}
 
 	// Resolve fallback candidates
-	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
+	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks, provider)
+	var thinkingLevelStr string
+	if len(candidates) > 0 {
+		if mc, err := modelConfigForCandidate(cfg, candidates[0], workspace); err == nil {
+			thinkingLevelStr = mc.ThinkingLevel
+		}
+	}
+	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
 
 	var imageProvider providers.LLMProvider
 	var imageCandidates []providers.FallbackCandidate
 	if imageModel != "" {
-		imageModelCfg := providers.ModelConfig{
-			Primary:   imageModel,
-			Fallbacks: imageFallbacks,
+		if imageModel == model {
+			imageCandidates = resolveModelCandidates(cfg, defaults.Provider, imageModel, imageFallbacks, provider)
+		} else {
+			imageCandidates = resolveModelCandidates(cfg, defaults.Provider, imageModel, imageFallbacks)
 		}
-		imageCandidates = providers.ResolveCandidatesWithLookup(
-			imageModelCfg,
-			defaults.Provider,
-			buildModelListResolver(cfg),
-		)
 		if imageModel == model {
 			imageProvider = provider
-		} else if mc, err := cfg.GetModelConfig(imageModel); err != nil {
+		} else if len(imageCandidates) == 0 {
+			log.Printf("image routing: no candidate for image_model %q for agent %q", imageModel, agentID)
+		} else if mc, err := modelConfigForCandidate(cfg, imageCandidates[0], workspace); err != nil {
 			log.Printf("image routing: image_model %q not found in model_list for agent %q: %v",
 				imageModel, agentID, err)
 		} else {
@@ -239,7 +251,7 @@ func NewAgentInstance(
 		}
 	}
 
-	return &AgentInstance{
+	instance := &AgentInstance{
 		ID:                        agentID,
 		Name:                      agentName,
 		Model:                     model,
@@ -257,6 +269,7 @@ func NewAgentInstance(
 		Provider:                  provider,
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,
+		Artifacts:                 artifacts,
 		Tools:                     toolsRegistry,
 		Subagents:                 subagents,
 		SkillsFilter:              skillsFilter,
@@ -268,6 +281,46 @@ func NewAgentInstance(
 		Router:                    router,
 		LightCandidates:           lightCandidates,
 	}
+	name, options := contextManagerSettings(agentCfg, defaults)
+
+	instance.ContextProvider = provider
+	ownedContextProvider := false
+	if (name == "seahorse" || name == "legacy") && len(candidates) > 0 {
+		needsClient := model != defaults.GetModelName()
+		if selected, ok := provider.(interface{ ModelConfigKey() string }); ok && selected.ModelConfigKey() != "" {
+			needsClient = selected.ModelConfigKey() != candidates[0].ConfigKey
+		}
+		if needsClient || candidates[0].ConfigKey != "" {
+			if mc, err := modelConfigForCandidate(cfg, candidates[0], workspace); err == nil {
+				instance.ThinkingLevel = parseThinkingLevel(mc.ThinkingLevel)
+				if needsClient {
+					instance.ContextProvider, _, instance.ContextManagerError = providers.CreateProviderFromConfig(mc)
+					ownedContextProvider = instance.ContextManagerError == nil
+				}
+			} else {
+				instance.ContextManagerError = err
+			}
+		}
+	}
+
+	if instance.ContextManagerError == nil {
+		instance.ContextManager, instance.ContextManagerError = NewContextManager(instance, name, options)
+	}
+	if manager, ok := instance.ContextManager.(*seahorseContextManager); ok {
+		manager.errorText = func(err error) string { return safeErrorText(cfg, err) }
+	}
+	if ownedContextProvider {
+		if manager, ok := instance.ContextManager.(contextProviderOwner); ok {
+			manager.retainProvider(instance.ContextProvider)
+		} else if stateful, ok := instance.ContextProvider.(providers.StatefulProvider); ok {
+			stateful.Close()
+		}
+	}
+	if instance.ContextManager != nil && instance.ContextManager.Name() == "seahorse" {
+		toolsRegistry.Register(&shortContextTool{name: "short_grep"})
+		toolsRegistry.Register(&shortContextTool{name: "short_expand"})
+	}
+	return instance
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.
@@ -337,6 +390,11 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store.
 func (a *AgentInstance) Close() error {
+	if a.ContextManager != nil {
+		if err := a.ContextManager.Close(); err != nil {
+			return err
+		}
+	}
 	if a.MemoryIndex != nil {
 		_ = a.MemoryIndex.Close()
 	}
@@ -433,7 +491,7 @@ func initChatMemoryService(
 			log.Printf("chatmemory: embedding model %q not found: %v", defaults.MemoryIndex.Embeddings.ModelName, err)
 		}
 	}
-	return chatmemory.New(idx, defaults.MemoryIndex, embedder)
+	return chatmemory.New(idx, defaults.MemoryIndex, embedder, cfg.EffectiveChannelList())
 }
 
 func expandHome(path string) string {

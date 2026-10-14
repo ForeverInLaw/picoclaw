@@ -34,6 +34,7 @@ func DefaultConfig() *Config {
 				MaxTokens:                 32768,
 				Temperature:               nil, // nil means use provider default
 				MaxToolIterations:         50,
+				ContextManager:            "seahorse",
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
 				MemoryIndex: MemoryIndexConfig{
@@ -562,6 +563,11 @@ func DefaultConfig() *Config {
 			MCP: MCPConfig{
 				ToolConfig: ToolConfig{
 					Enabled: false,
+				},
+				Artifacts: MCPArtifactConfig{
+					Directory:      filepath.Join(homePath, "artifacts", "mcp"),
+					MaxInlineRunes: 16 * 1024,
+					PreviewRunes:   1000,
 				},
 				Discovery: ToolDiscoveryConfig{
 					Enabled:          false,

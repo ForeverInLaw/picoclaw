@@ -13,6 +13,7 @@ import { Link } from "@tanstack/react-router"
 import * as React from "react"
 import { useTranslation } from "react-i18next"
 
+import { LauncherAuthMenu } from "@/components/launcher-auth-menu"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -135,6 +136,7 @@ export function AppHeader() {
       </AlertDialog>
 
       <div className="text-muted-foreground flex items-center gap-1 text-sm font-medium md:gap-2">
+        <LauncherAuthMenu />
         {restartRequired && (
           <Tooltip delayDuration={700}>
             <TooltipTrigger asChild>

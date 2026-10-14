@@ -45,7 +45,11 @@ func (r *recordingProvider) Chat(
 	model string,
 	opts map[string]any,
 ) (*providers.LLMResponse, error) {
-	r.lastMessages = append([]providers.Message(nil), messages...)
+	// Record conversation input. Maintenance calls send a standalone user
+	// prompt and must not replace the answer request inspected by scenarios.
+	if len(messages) > 0 && messages[0].Role == "system" {
+		r.lastMessages = append([]providers.Message(nil), messages...)
+	}
 	return &providers.LLMResponse{
 		Content:   "Mock response",
 		ToolCalls: []providers.ToolCall{},
@@ -71,6 +75,7 @@ func newTestAgentLoop(
 				Model:             "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
+				ContextManager:    "legacy",
 			},
 		},
 	}

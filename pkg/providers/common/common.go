@@ -378,6 +378,7 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 		)
 	}
 	var details struct {
+		Code  string `json:"code"`
 		Error struct {
 			Code string `json:"code"`
 			Type string `json:"type"`
@@ -387,6 +388,9 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	code := details.Error.Code
 	if code == "" {
 		code = details.Error.Type
+	}
+	if code == "" {
+		code = details.Code
 	}
 	return &protocoltypes.HTTPError{
 		StatusCode: resp.StatusCode,

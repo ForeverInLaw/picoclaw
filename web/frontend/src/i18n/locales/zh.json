@@ -47,6 +47,27 @@
       "apikey": "API Key",
       "oauth": "OAuth",
       "local": "本地模型"
+    },
+    "activity": {
+      "reasoning": "思考",
+      "retry": "模型恢复",
+      "commentary": "活动",
+      "started": "进行中",
+      "completed": "已完成",
+      "failed": "失败",
+      "arguments": "输入"
+    },
+    "images": {
+      "select": "添加图片",
+      "remove": "移除图片",
+      "send": "发送消息",
+      "drop": "将图片拖到此处",
+      "cancel": "取消上传",
+      "uploading": "正在上传图片…",
+      "canceled": "图片上传已取消。文本和预览已保留。",
+      "disconnected": "发送前聊天已断开。请重新连接后重试。",
+      "limitsUnavailable": "暂时无法获取图片上传限制。连接后请重试。",
+      "uploadFailed": "图片上传失败。请重试。"
     }
   },
   "header": {
@@ -212,9 +233,20 @@
     },
     "edit": {
       "title": "配置 {{name}}",
-      "apiKeyHint": "已设置 API Key，留空表示不修改。",
+      "apiKeyHint": "留空将保留同一服务商、端点和代理的已保存密钥。更改这些设置时，请输入新密钥。",
       "oauthNote": "该服务商使用 OAuth 认证，无需 API Key。",
       "saveError": "保存失败"
+    },
+    "probe": {
+      "title": "检查当前配置",
+      "description": "验证仅检查配置字段。测试会向当前模型发送一次简短请求，可能产生用量费用。配置修改不会保存。",
+      "validate": "验证配置",
+      "test": "测试模型（可能产生费用）",
+      "validating": "正在验证配置…",
+      "testing": "正在等待当前模型回复…",
+      "valid": "配置有效。未发送模型请求。",
+      "success": "模型已成功回复（{{latency}} 毫秒）。",
+      "canceled": "模型测试已取消。"
     }
   },
   "channels": {
@@ -356,7 +388,29 @@
         "loading_detail": "正在加载技能内容...",
         "load_detail_error": "加载技能内容失败。",
         "path": "技能路径",
-        "no_description": "未提供描述。"
+        "no_description": "未提供描述。",
+        "hub": {
+          "title": "技能中心",
+          "description": "搜索已配置的技能库，并将技能安装到工作区。",
+          "searchLabel": "查找技能",
+          "search": "搜索",
+          "disabled": "请在工具设置中启用 skills 和 find_skills。",
+          "empty": "未找到技能。请尝试其他搜索。",
+          "latest": "最新版本",
+          "details": "详情",
+          "more": "加载更多",
+          "detailDescription": "技能库详情",
+          "installed": "已安装 {{name}}",
+          "installedLabel": "已安装",
+          "install": "安装技能",
+          "installing": "正在安装…",
+          "cancel": "取消安装",
+          "canceled": "安装请求已取消。重试前请检查已安装的技能。",
+          "blocked": "此技能已被标记为恶意，无法安装。",
+          "suspicious": "技能库将此技能标记为可疑。",
+          "installDisabled": "请在工具设置中启用 skills 和 install_skill。",
+          "yourSkills": "已安装的技能"
+        }
       },
       "tools": {
         "description": "这里展示每个 Agent 工具当前是已启用、已禁用，还是被依赖条件阻塞。",
@@ -479,5 +533,26 @@
       "clear": "清空日志",
       "empty": "等待日志中..."
     }
+  },
+  "dashboardAuth": {
+    "loginTitle": "登录 PicoClaw",
+    "setupTitle": "设置仪表盘密码",
+    "setupToken": "设置代码",
+    "setupTokenDescription": "在服务器上读取 launcher-auth.db 旁的 launcher-setup-token。此代码仅用于首次设置密码。",
+    "changeTitle": "更改仪表盘密码",
+    "loginDescription": "输入仪表盘密码以继续。",
+    "setupDescription": "至少使用 8 个字符。此密码保护仪表盘设置、聊天和文件。",
+    "changeDescription": "更改密码将注销所有仪表盘会话。",
+    "password": "密码",
+    "confirm": "确认密码",
+    "loginSubmit": "登录",
+    "setupSubmit": "设置密码",
+    "changeSubmit": "更改密码",
+    "loading": "请稍候…",
+    "mismatch": "密码不匹配。",
+    "retry": "重试",
+    "account": "仪表盘访问",
+    "logout": "退出登录",
+    "logoutError": "无法退出登录，请重试。"
   }
 }

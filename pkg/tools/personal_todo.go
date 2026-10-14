@@ -228,12 +228,12 @@ func detectPersonalTodoMode(channel, chatID, peerKind string, sender bus.SenderI
 		return todoDirect
 	}
 	if peerKind != "" && peerKind != "direct" {
-		if channel == "telegram" {
+		if channel == "telegram" || sender.Platform == "telegram" {
 			return todoTelegramGroup
 		}
 		return todoUnsupportedGroup
 	}
-	if channel == "telegram" {
+	if channel == "telegram" || sender.Platform == "telegram" {
 		if sender.PlatformID != "" && chatID == sender.PlatformID {
 			return todoDirect
 		}
@@ -274,7 +274,7 @@ func (t *PersonalTodoTool) respond(
 		if strings.TrimSpace(sender.PlatformID) == "" {
 			return ErrorResult(tr.telegramSenderRequired)
 		}
-		if err := t.send(ctx, "telegram", sender.PlatformID, privateContent); err != nil {
+		if err := t.send(ctx, channel, sender.PlatformID, privateContent); err != nil {
 			failClosed := tr.failClosedOpenDM
 			if ackErr := t.send(ctx, channel, chatID, failClosed); ackErr != nil {
 				return ErrorResult(fmt.Sprintf(tr.privateDeliveryFailedFmt, err)).WithError(err)

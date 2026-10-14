@@ -8,11 +8,12 @@ export async function loadSessionMessages(
   const detail = await getSessionHistory(sessionId)
   const fallbackTime = detail.updated
 
-  return detail.messages.map((message, index) => ({
+  return detail.messages.map<ChatMessage>((message, index) => ({
     id: `hist-${index}-${Date.now()}`,
     role: message.role,
     content: message.content,
     timestamp: fallbackTime,
+    source: "history",
   }))
 }
 
@@ -50,11 +51,23 @@ export function mergeHistoryMessages(
   const currentSignatures = new Set(
     currentMessages.map((message) => messageSignature(message)),
   )
+  const historyFinal = historyMessages.at(-1)
+  const replayedFinal = currentMessages.at(-1)
+  // Replay can precede history hydration. Only match its trailing answer when
+  // no new local user turn has been added, preserving repeated later answers.
+  const replayedHistoryId =
+    !currentMessages.some((message) => message.role === "user") &&
+    historyFinal?.role === "assistant" &&
+    replayedFinal?.status === "final" &&
+    replayedFinal.content === historyFinal.content
+      ? historyFinal.id
+      : undefined
 
   const merged = [
     ...historyMessages.filter(
       (message) =>
         !currentIds.has(message.id) &&
+        message.id !== replayedHistoryId &&
         !currentSignatures.has(messageSignature(message)),
     ),
     ...currentMessages,

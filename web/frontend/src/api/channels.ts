@@ -8,6 +8,7 @@ export interface SupportedChannel {
   display_name?: string
   config_key: string
   variant?: string
+  type?: string
 }
 
 interface ChannelsCatalogResponse {
@@ -49,7 +50,30 @@ export async function getChannelsCatalog(): Promise<ChannelsCatalogResponse> {
 }
 
 export async function getAppConfig(): Promise<AppConfig> {
-  return request<AppConfig>("/api/config")
+  const config = await request<AppConfig>("/api/config")
+  const entries = config.channel_list
+  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+    return config
+  }
+  // Keep established flat forms behind an adapter; API documents use v3.
+  const channels: Record<string, ChannelConfig> = {}
+  for (const [name, value] of Object.entries(entries)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue
+    const common = { ...(value as ChannelConfig) }
+    const settings = common.settings
+    delete common.settings
+    delete common.type
+    channels[name] = {
+      ...(settings && typeof settings === "object" && !Array.isArray(settings)
+        ? settings
+        : {}),
+      ...common,
+    }
+    if ((value as ChannelConfig).type === "whatsapp_native") {
+      channels[name].use_native = true
+    }
+  }
+  return { ...config, channels }
 }
 
 export async function patchAppConfig(

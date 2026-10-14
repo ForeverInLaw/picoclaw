@@ -89,7 +89,10 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 			workspacePath = defaultAgent.Workspace
 		}
 
-		if err := mcpManager.LoadFromMCPConfig(ctx, al.cfg.Tools.MCP, workspacePath); err != nil {
+		if err := mcpManager.LoadFromMCPConfig(ctx, al.cfg.Tools.MCP, workspacePath, al.cfg.Isolation); err != nil {
+			if al.cfg.Isolation.Enabled {
+				al.mcp.setInitErr(err)
+			}
 			logger.WarnCF("agent", "Failed to load MCP servers, MCP tools will not be available",
 				map[string]any{
 					"error": err.Error(),
@@ -125,7 +128,7 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 						continue
 					}
 
-					mcpTool := tools.NewMCPTool(mcpManager, serverName, tool)
+					mcpTool := tools.NewMCPTool(mcpManager, serverName, tool).WithArtifacts(agent.Artifacts)
 
 					if registerAsHidden {
 						agent.Tools.RegisterHidden(mcpTool)

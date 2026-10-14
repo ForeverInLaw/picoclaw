@@ -15,6 +15,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+
+	mainconfig "github.com/sipeed/picoclaw/pkg/config"
 )
 
 func (a *App) newChannelsPage() tview.Primitive {
@@ -41,9 +43,22 @@ func (a *App) newChannelsPage() tview.Primitive {
 		}
 		configPath := filepath.Join(home, ".picoclaw", "config.json")
 
-		var cfg map[string]any
-		if data, err := os.ReadFile(configPath); err == nil {
-			_ = json.Unmarshal(data, &cfg)
+		cfg := make(map[string]any)
+		if loaded, err := mainconfig.LoadConfig(configPath); err == nil {
+			channels := make(map[string]any)
+			for name, ch := range loaded.EffectiveChannelList() {
+				var settings map[string]any
+				_ = json.Unmarshal(ch.Settings, &settings)
+				data, _ := json.Marshal(ch)
+				var common map[string]any
+				_ = json.Unmarshal(data, &common)
+				delete(common, "settings")
+				for key, value := range common {
+					settings[key] = value
+				}
+				channels[name] = settings
+			}
+			cfg["channels"] = channels
 		}
 
 		if chRaw, ok := cfg["channels"].(map[string]any); ok {
@@ -117,22 +132,10 @@ func (a *App) showChannelEditForm(configPath, channelName string, existing map[s
 	}
 
 	form.AddButton("SAVE", func() {
-		var cfg map[string]any
-		if data, err := os.ReadFile(configPath); err == nil {
-			if err := json.Unmarshal(data, &cfg); err != nil {
-				cfg = make(map[string]any)
-			}
-		} else {
-			cfg = make(map[string]any)
-		}
-
-		if _, ok := cfg["channels"]; !ok {
-			cfg["channels"] = make(map[string]any)
-		}
-		channels, ok := cfg["channels"].(map[string]any)
-		if !ok {
-			channels = make(map[string]any)
-			cfg["channels"] = channels
+		cfg, err := mainconfig.LoadConfig(configPath)
+		if err != nil {
+			a.showError(err.Error())
+			return
 		}
 
 		finalName := channelName
@@ -156,29 +159,36 @@ func (a *App) showChannelEditForm(configPath, channelName string, existing map[s
 				updated[k] = true
 			} else if val == "false" {
 				updated[k] = false
-			} else if num, err := strconv.Atoi(val); err == nil {
+			} else if num, parseErr := strconv.Atoi(val); parseErr == nil {
 				updated[k] = num
 			} else {
 				updated[k] = val
 			}
 		}
 
-		if channelName != "" && finalName != channelName {
-			delete(channels, channelName)
+		channelType, _ := updated["type"].(string)
+		if channelType == "" {
+			channelType = finalName
 		}
-		channels[finalName] = updated
-
-		data, err := json.MarshalIndent(cfg, "", "  ")
+		delete(updated, "type")
+		data, err := json.Marshal(updated)
 		if err != nil {
-			a.showError(fmt.Sprintf("Failed to save config: %v", err))
+			a.showError(err.Error())
 			return
 		}
-		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-			a.showError(fmt.Sprintf("Failed to create config directory: %v", err))
+		entry, err := mainconfig.ChannelFromLegacy(channelType, data)
+		if err != nil {
+			a.showError(err.Error())
 			return
 		}
-		if err := os.WriteFile(configPath, data, 0o600); err != nil {
-			a.showError(fmt.Sprintf("Failed to write config: %v", err))
+		cfg.ChannelList = cfg.EffectiveChannelList()
+		cfg.ChannelList[finalName] = entry
+		if err := cfg.ValidateChannels(); err != nil {
+			a.showError(err.Error())
+			return
+		}
+		if err := mainconfig.SaveConfig(configPath, cfg); err != nil {
+			a.showError(err.Error())
 			return
 		}
 

@@ -94,7 +94,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.MaxTokensField,
 			cfg.RequestTimeout,
 			cfg.ExtraBody,
-		), modelID, nil
+		).withModelConfig(cfg), modelID, nil
 
 	case "azure", "azure-openai":
 		// Azure OpenAI uses deployment-based URLs, api-key header auth,
@@ -134,7 +134,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.MaxTokensField,
 			cfg.RequestTimeout,
 			cfg.ExtraBody,
-		), modelID, nil
+		).withModelConfig(cfg), modelID, nil
 
 	case "anthropic":
 		if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
@@ -160,7 +160,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.MaxTokensField,
 			cfg.RequestTimeout,
 			cfg.ExtraBody,
-		), modelID, nil
+		).withModelConfig(cfg), modelID, nil
 
 	case "anthropic-messages":
 		// Anthropic Messages API with native format (HTTP-based, no SDK)
@@ -234,6 +234,8 @@ func getDefaultAPIBase(protocol string) string {
 	switch protocol {
 	case "openai":
 		return "https://api.openai.com/v1"
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
 	case "openrouter":
 		return "https://openrouter.ai/api/v1"
 	case "litellm":
@@ -287,4 +289,10 @@ func getDefaultAPIBase(protocol string) string {
 	default:
 		return ""
 	}
+}
+
+// DefaultAPIBaseForProtocol exposes the factory's endpoint defaults to
+// configuration interfaces that compare credential destinations.
+func DefaultAPIBaseForProtocol(protocol string) string {
+	return getDefaultAPIBase(protocol)
 }

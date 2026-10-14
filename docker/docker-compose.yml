@@ -1,10 +1,18 @@
+x-build-args: &build-args
+  VERSION: ${PICOCLAW_BUILD_VERSION:-dev}
+  VCS_REF: ${PICOCLAW_BUILD_REVISION:-dev}
+
 services:
   # ─────────────────────────────────────────────
   # PicoClaw Agent (one-shot query)
   #   docker compose -f docker/docker-compose.yml run --rm picoclaw-agent -m "Hello"
   # ─────────────────────────────────────────────
   picoclaw-agent:
-    image: docker.io/sipeed/picoclaw:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args: *build-args
+    image: picoclaw:local
     container_name: picoclaw-agent
     profiles:
       - agent
@@ -12,7 +20,9 @@ services:
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/root/.picoclaw
+      - ./data:/data
+    environment:
+      - PICOCLAW_HOME=/data
     entrypoint: ["picoclaw", "agent"]
     stdin_open: true
     tty: true
@@ -22,7 +32,11 @@ services:
   #   docker compose -f docker/docker-compose.yml --profile gateway up
   # ─────────────────────────────────────────────
   picoclaw-gateway:
-    image: docker.io/sipeed/picoclaw:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args: *build-args
+    image: picoclaw:local
     container_name: picoclaw-gateway
     restart: on-failure
     profiles:
@@ -31,22 +45,29 @@ services:
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/root/.picoclaw
+      - ./data:/data
+    environment:
+      - PICOCLAW_HOME=/data
 
   # ─────────────────────────────────────────────
   # PicoClaw Launcher (Web Console + Gateway)
   #   docker compose -f docker/docker-compose.yml --profile launcher up
   # ─────────────────────────────────────────────
   picoclaw-launcher:
-    image: docker.io/sipeed/picoclaw:launcher
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.launcher
+      args: *build-args
+    image: picoclaw:launcher-local
     container_name: picoclaw-launcher
     restart: on-failure
     profiles:
       - launcher
     environment:
+      - PICOCLAW_HOME=/data
       - PICOCLAW_GATEWAY_HOST=0.0.0.0
     ports:
       - "127.0.0.1:18800:18800"
       - "127.0.0.1:18790:18790"
     volumes:
-      - ./data:/root/.picoclaw
+      - ./data:/data

@@ -16,6 +16,11 @@ func (al *AgentLoop) resetConversation(agent *AgentInstance, key string) error {
 	if !ok {
 		return fmt.Errorf("session backend does not support conversation reset")
 	}
+	if agent.ContextManager != nil {
+		if err := agent.ContextManager.Clear(context.Background(), key); err != nil {
+			return err
+		}
+	}
 	if err := store.ResetConversation(key); err != nil {
 		return err
 	}
@@ -38,7 +43,7 @@ func (al *AgentLoop) handleActiveReset(ctx context.Context, msg bus.InboundMessa
 	if err != nil {
 		return false
 	}
-	key, err := messageConversationKey(msg, route, agent)
+	key, err := al.messageConversationKey(msg, route, agent)
 	if err != nil {
 		return false
 	}

@@ -1,10 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -78,22 +80,45 @@ func (f *FlexibleStringSlice) UnmarshalText(text []byte) error {
 
 //nolint:recvcheck // Value MarshalJSON preserves Config value serialization; runtime methods need pointer receivers.
 type Config struct {
-	Agents    AgentsConfig    `json:"agents"`
-	Bindings  []AgentBinding  `json:"bindings,omitempty"`
-	Session   SessionConfig   `json:"session,omitempty"`
-	Channels  ChannelsConfig  `json:"channels"`
-	Providers ProvidersConfig `json:"providers,omitempty"`
-	ModelList []ModelConfig   `json:"model_list"` // New model-centric provider configuration
-	Gateway   GatewayConfig   `json:"gateway"`
-	Hooks     HooksConfig     `json:"hooks,omitempty"`
-	Tools     ToolsConfig     `json:"tools"`
-	Heartbeat HeartbeatConfig `json:"heartbeat"`
-	Devices   DevicesConfig   `json:"devices"`
-	Voice     VoiceConfig     `json:"voice"`
+	Version  int            `json:"version"`
+	Agents   AgentsConfig   `json:"agents"`
+	Bindings []AgentBinding `json:"bindings,omitempty"`
+	Session  SessionConfig  `json:"session,omitempty"`
+	// Channels is the typed adapter for legacy, default-named channel consumers.
+	// Serialized configurations always use ChannelList.
+	Channels    ChannelsConfig  `json:"-"`
+	ChannelList ChannelList     `json:"channel_list"`
+	Providers   ProvidersConfig `json:"providers,omitempty"`
+	ModelList   []ModelConfig   `json:"model_list"` // New model-centric provider configuration
+	Gateway     GatewayConfig   `json:"gateway"`
+	Hooks       HooksConfig     `json:"hooks,omitempty"`
+	Tools       ToolsConfig     `json:"tools"`
+	Heartbeat   HeartbeatConfig `json:"heartbeat"`
+	Devices     DevicesConfig   `json:"devices"`
+	Voice       VoiceConfig     `json:"voice"`
+	Isolation   IsolationConfig `json:"isolation,omitempty" envPrefix:"PICOCLAW_ISOLATION_"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
 
-	security *SecurityConfig
+	security              *SecurityConfig
+	legacyChannelBaseline map[string]json.RawMessage
+	configuredModels      []ModelConfig
+	runtimeModelBaseline  json.RawMessage
+}
+
+// IsolationConfig applies to Shell and local MCP processes; zero values preserve
+// ordinary execution. Network access is available unless explicitly disabled.
+type IsolationConfig struct {
+	Enabled        bool         `json:"enabled"                   env:"ENABLED"`
+	DisableNetwork bool         `json:"disable_network,omitempty" env:"DISABLE_NETWORK"`
+	EnvAllowlist   []string     `json:"env_allowlist,omitempty"   env:"ENV_ALLOWLIST"`
+	ExposePaths    []ExposePath `json:"expose_paths,omitempty"`
+}
+
+type ExposePath struct {
+	Source string `json:"source"`
+	Target string `json:"target,omitempty"`
+	Mode   string `json:"mode"`
 }
 
 // FilterSensitiveData filters sensitive values from content before sending to LLM.
@@ -113,6 +138,31 @@ func (c *Config) FilterSensitiveData(content string) string {
 		return content
 	}
 	return c.security.SensitiveDataReplacer().Replace(content)
+}
+
+// ArtifactFilter protects complete artifact sources before preview or pagination.
+// Artifacts retain their raw data; only the model-facing view is redacted.
+func (c *Config) ArtifactFilter() func(string) string {
+	var values []string
+	if c.security != nil {
+		values = c.security.collectSensitiveValues()
+	}
+	// Runtime keys have already been decoded/dereferenced by LoadConfig. Sidecar
+	// values alone may contain their encrypted/file reference instead.
+	for _, model := range c.ModelList {
+		values = append(values, model.APIKey)
+		values = append(values, model.APIKeys...)
+	}
+	sort.SliceStable(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	seen := make(map[string]bool)
+	pairs := make([]string, 0, len(values)*2)
+	for _, value := range values {
+		if value != "" && !seen[value] {
+			seen[value] = true
+			pairs = append(pairs, value, "[FILTERED]")
+		}
+	}
+	return strings.NewReplacer(pairs...).Replace
 }
 
 type HooksConfig struct {
@@ -156,6 +206,9 @@ type BuildInfo struct {
 // MarshalJSON implements custom JSON marshaling for Config
 // to omit providers section when empty and session when empty
 func (c Config) MarshalJSON() ([]byte, error) {
+	c.Version = CurrentVersion
+	c.ChannelList = c.EffectiveChannelList()
+	c.ModelList = c.modelsForSave()
 	type Alias Config
 	aux := &struct {
 		Providers *ProvidersConfig `json:"providers,omitempty"`
@@ -223,13 +276,15 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 }
 
 type AgentConfig struct {
-	ID        string            `json:"id"`
-	Default   bool              `json:"default,omitempty"`
-	Name      string            `json:"name,omitempty"`
-	Workspace string            `json:"workspace,omitempty"`
-	Model     *AgentModelConfig `json:"model,omitempty"`
-	Skills    []string          `json:"skills,omitempty"`
-	Subagents *SubagentsConfig  `json:"subagents,omitempty"`
+	ContextManager       string                 `json:"context_manager,omitempty"`
+	ContextManagerConfig *SeahorseContextConfig `json:"context_manager_config,omitempty"`
+	ID                   string                 `json:"id"`
+	Default              bool                   `json:"default,omitempty"`
+	Name                 string                 `json:"name,omitempty"`
+	Workspace            string                 `json:"workspace,omitempty"`
+	Model                *AgentModelConfig      `json:"model,omitempty"`
+	Skills               []string               `json:"skills,omitempty"`
+	Subagents            *SubagentsConfig       `json:"subagents,omitempty"`
 }
 
 type SubagentsConfig struct {
@@ -322,28 +377,37 @@ type ToolFeedbackConfig struct {
 }
 
 type AgentDefaults struct {
-	Workspace                 string             `json:"workspace"                       env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool               `json:"restrict_to_workspace"           env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool               `json:"allow_read_outside_workspace"    env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string             `json:"provider"                        env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string             `json:"model_name"                      env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
-	Model                     string             `json:"model,omitempty"                 env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
-	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
-	ImageModel                string             `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int                `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int                `json:"context_window,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64           `json:"temperature,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int                `json:"max_tool_iterations"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                `json:"summarize_message_threshold"     env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int                `json:"summarize_token_percent"         env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int                `json:"max_media_size,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	MemoryIndex               MemoryIndexConfig  `json:"memory_index,omitempty"`
-	Routing                   *RoutingConfig     `json:"routing,omitempty"`
-	SteeringMode              string             `json:"steering_mode,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
-	SubTurn                   SubTurnConfig      `json:"subturn"                                                                                     envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
-	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
-	LogLevel                  string             `json:"log_level,omitempty"             env:"PICOCLAW_LOG_LEVEL"`
+	ContextManager            string                `json:"context_manager,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
+	ContextManagerConfig      SeahorseContextConfig `json:"context_manager_config,omitempty"`
+	Workspace                 string                `json:"workspace"                        env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace       bool                  `json:"restrict_to_workspace"            env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool                  `json:"allow_read_outside_workspace"     env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                  string                `json:"provider"                         env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                 string                `json:"model_name"                       env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
+	Model                     string                `json:"model,omitempty"                  env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
+	ModelFallbacks            []string              `json:"model_fallbacks,omitempty"`
+	ImageModel                string                `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks       []string              `json:"image_model_fallbacks,omitempty"`
+	MaxTokens                 int                   `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow             int                   `json:"context_window,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature               *float64              `json:"temperature,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations         int                   `json:"max_tool_iterations"              env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold int                   `json:"summarize_message_threshold"      env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent     int                   `json:"summarize_token_percent"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize              int                   `json:"max_media_size,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	MemoryIndex               MemoryIndexConfig     `json:"memory_index,omitempty"`
+	Routing                   *RoutingConfig        `json:"routing,omitempty"`
+	SteeringMode              string                `json:"steering_mode,omitempty"          env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
+	SubTurn                   SubTurnConfig         `json:"subturn"                                                                                      envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	ToolFeedback              ToolFeedbackConfig    `json:"tool_feedback,omitempty"`
+	LogLevel                  string                `json:"log_level,omitempty"              env:"PICOCLAW_LOG_LEVEL"`
+}
+
+type SeahorseContextConfig struct {
+	CompactTimeoutSeconds    int `json:"compact_timeout_seconds,omitempty"`
+	MaxCompactIterations     int `json:"max_compact_iterations,omitempty"`
+	MaxCompletionAttempts    int `json:"max_completion_attempts,omitempty"`
+	MaxConcurrentCompactions int `json:"max_concurrent_compactions,omitempty"`
 }
 
 const (
@@ -672,16 +736,17 @@ type WeixinConfig struct {
 }
 
 type PicoConfig struct {
-	Enabled         bool                `json:"enabled"                     env:"PICOCLAW_CHANNELS_PICO_ENABLED"`
-	Token           string              `json:"token"                       env:"PICOCLAW_CHANNELS_PICO_TOKEN"`
-	AllowTokenQuery bool                `json:"allow_token_query,omitempty"`
-	AllowOrigins    []string            `json:"allow_origins,omitempty"`
-	PingInterval    int                 `json:"ping_interval,omitempty"`
-	ReadTimeout     int                 `json:"read_timeout,omitempty"`
-	WriteTimeout    int                 `json:"write_timeout,omitempty"`
-	MaxConnections  int                 `json:"max_connections,omitempty"`
-	AllowFrom       FlexibleStringSlice `json:"allow_from"                  env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
-	Placeholder     PlaceholderConfig   `json:"placeholder,omitempty"`
+	Enabled           bool                `json:"enabled"                       env:"PICOCLAW_CHANNELS_PICO_ENABLED"`
+	Token             string              `json:"token"                         env:"PICOCLAW_CHANNELS_PICO_TOKEN"`
+	AllowTokenQuery   bool                `json:"allow_token_query,omitempty"`
+	AllowOrigins      []string            `json:"allow_origins,omitempty"`
+	AllowedImageTypes []string            `json:"allowed_image_types,omitempty"`
+	PingInterval      int                 `json:"ping_interval,omitempty"`
+	ReadTimeout       int                 `json:"read_timeout,omitempty"`
+	WriteTimeout      int                 `json:"write_timeout,omitempty"`
+	MaxConnections    int                 `json:"max_connections,omitempty"`
+	AllowFrom         FlexibleStringSlice `json:"allow_from"                    env:"PICOCLAW_CHANNELS_PICO_ALLOW_FROM"`
+	Placeholder       PlaceholderConfig   `json:"placeholder,omitempty"`
 }
 
 type PicoClientConfig struct {
@@ -1123,8 +1188,16 @@ type MCPServerConfig struct {
 type MCPConfig struct {
 	ToolConfig `                    envPrefix:"PICOCLAW_TOOLS_MCP_"`
 	Discovery  ToolDiscoveryConfig `                                json:"discovery"`
+	Artifacts  MCPArtifactConfig   `                                json:"artifacts,omitempty"`
 	// Servers is a map of server name to server configuration
 	Servers map[string]MCPServerConfig `json:"servers,omitempty"`
+}
+
+type MCPArtifactConfig struct {
+	Directory      string `json:"directory,omitempty"        env:"PICOCLAW_TOOLS_MCP_ARTIFACTS_DIRECTORY"`
+	MaxInlineRunes int    `json:"max_inline_runes,omitempty" env:"PICOCLAW_TOOLS_MCP_ARTIFACTS_MAX_INLINE_RUNES"`
+	PreviewRunes   int    `json:"preview_runes,omitempty"    env:"PICOCLAW_TOOLS_MCP_ARTIFACTS_PREVIEW_RUNES"`
+	MaxDiskBytes   int64  `json:"max_disk_bytes,omitempty"   env:"PICOCLAW_TOOLS_MCP_ARTIFACTS_MAX_DISK_BYTES"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -1155,6 +1228,49 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	if parseErr := env.Parse(&cfg.Providers); parseErr != nil {
+		return nil, parseErr
+	}
+	if parseErr := env.Parse(&cfg.Agents.Defaults); parseErr != nil {
+		return nil, parseErr
+	}
+
+	if len(data) > 0 && cfg.HasProvidersConfig() {
+		var raw map[string]json.RawMessage
+		_ = json.Unmarshal(data, &raw)
+		if _, exists := raw["model_list"]; !exists {
+			cfg.ModelList = nil
+		}
+	}
+	legacyModelMigration := len(cfg.ModelList) == 0 && cfg.HasProvidersConfig()
+	// Auto-migrate: if only legacy providers config exists, convert to model_list
+	if len(cfg.ModelList) == 0 && cfg.HasProvidersConfig() {
+		cfg.ModelList = ConvertProvidersToModelList(cfg)
+	}
+	if len(cfg.ModelList) == 0 {
+		cfg.ModelList = DefaultConfig().ModelList
+	}
+
+	if legacyModelMigration {
+		selected := cfg.Agents.Defaults.GetModelName()
+		for i := range cfg.ModelList {
+			_, model, _ := strings.Cut(cfg.ModelList[i].Model, "/")
+			if selected != "" && (model == selected || cfg.ModelList[i].Model == selected) {
+				cfg.ModelList[i].ModelName = selected
+				break
+			}
+		}
+	}
+
+	// Inherit credentials from providers to model_list entries (#1635).
+	// When both providers and model_list are present, model_list entries
+	// whose api_key/api_base are empty will inherit from the matching
+	// provider (matched by protocol prefix).  Explicit model_list values
+	// always take precedence.
+	if cfg.HasProvidersConfig() {
+		InheritProviderCredentials(cfg.ModelList, cfg.Providers)
+	}
+
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
 		for _, m := range cfg.ModelList {
 			if m.APIKey != "" && !strings.HasPrefix(m.APIKey, "enc://") &&
@@ -1168,47 +1284,44 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
-	if parseErr := env.Parse(cfg); parseErr != nil {
-		return nil, parseErr
-	}
-
 	sec, err := loadSecurityConfig(securityPath(path))
 	if err != nil {
 		return nil, err
 	}
 	cfg.security = sec
+	if err := cfg.applySecurity(sec); err != nil {
+		return nil, err
+	}
+	if parseErr := env.Parse(cfg); parseErr != nil {
+		return nil, parseErr
+	}
+	if err := cfg.applyNamedChannelEnv(); err != nil {
+		return nil, err
+	}
 
 	if err := resolveAPIKeys(cfg.ModelList, filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 
 	// Expand multi-key configs into separate entries for key-level failover
+	cfg.configuredModels = cloneModels(cfg.ModelList)
 	cfg.ModelList = ExpandMultiKeyModels(cfg.ModelList)
+	cfg.runtimeModelBaseline, _ = json.Marshal(cfg.ModelList)
 
 	// Migrate legacy channel config fields to new unified structures
 	cfg.migrateChannelConfigs()
-
-	// Auto-migrate: if only legacy providers config exists, convert to model_list
-	if len(cfg.ModelList) == 0 && cfg.HasProvidersConfig() {
-		cfg.ModelList = ConvertProvidersToModelList(cfg)
-	}
-	if len(cfg.ModelList) == 0 {
-		cfg.ModelList = DefaultConfig().ModelList
-	}
-
-	// Inherit credentials from providers to model_list entries (#1635).
-	// When both providers and model_list are present, model_list entries
-	// whose api_key/api_base are empty will inherit from the matching
-	// provider (matched by protocol prefix).  Explicit model_list values
-	// always take precedence.
-	if cfg.HasProvidersConfig() {
-		InheritProviderCredentials(cfg.ModelList, cfg.Providers)
-	}
 
 	// Validate model_list for uniqueness and required fields
 	if err := cfg.ValidateModelList(); err != nil {
 		return nil, err
 	}
+	if err := cfg.ValidateContextManagers(); err != nil {
+		return nil, err
+	}
+	if err := cfg.ValidateChannels(); err != nil {
+		return nil, err
+	}
+	cfg.cacheRuntimeSecrets()
 
 	return cfg, nil
 }
@@ -1225,16 +1338,22 @@ func encryptPlaintextAPIKeys(models []ModelConfig, passphrase string) ([]ModelCo
 	changed := false
 	for i := range sealed {
 		m := &sealed[i]
-		if m.APIKey == "" || strings.HasPrefix(m.APIKey, "enc://") ||
-			strings.HasPrefix(m.APIKey, "file://") {
-			continue
+		m.APIKeys = append([]string(nil), m.APIKeys...)
+		keys := []*string{&m.APIKey}
+		for j := range m.APIKeys {
+			keys = append(keys, &m.APIKeys[j])
 		}
-		encrypted, err := credential.Encrypt(passphrase, "", m.APIKey)
-		if err != nil {
-			return nil, fmt.Errorf("cannot seal api_key for model %q: %w", m.ModelName, err)
+		for _, key := range keys {
+			if *key == "" || strings.HasPrefix(*key, "enc://") || strings.HasPrefix(*key, "file://") {
+				continue
+			}
+			encrypted, err := credential.Encrypt(passphrase, "", *key)
+			if err != nil {
+				return nil, fmt.Errorf("cannot seal api_key for model %q: %w", m.ModelName, err)
+			}
+			*key = encrypted
+			changed = true
 		}
-		m.APIKey = encrypted
-		changed = true
 	}
 	if !changed {
 		return nil, nil
@@ -1287,6 +1406,24 @@ func (c *Config) migrateChannelConfigs() {
 }
 
 func SaveConfig(path string, cfg *Config) error {
+	return saveConfig(path, cfg, true)
+}
+
+// PrepareConfig writes a standalone v3 snapshot without editing the source or
+// any shared security sidecar. Callers choose a separate, new output path.
+func PrepareConfig(source, output string) error {
+	cfg, err := LoadConfig(source)
+	if err != nil {
+		return err
+	}
+	return saveConfig(output, cfg, false)
+}
+
+func saveConfig(path string, cfg *Config, syncSidecar bool) error {
+	copyCfg := *cfg
+	copyCfg.ModelList = cfg.modelsForSave()
+	copyCfg.runtimeModelBaseline = nil
+	cfg = &copyCfg
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
 		sealed, err := encryptPlaintextAPIKeys(cfg.ModelList, passphrase)
 		if err != nil {
@@ -1303,7 +1440,31 @@ func SaveConfig(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	if syncSidecar {
+		if err := saveExistingSecurityConfig(path, cfg); err != nil {
+			return err
+		}
+	}
 	return fileutil.WriteFileAtomic(path, data, 0o600)
+}
+
+func cloneModels(models []ModelConfig) []ModelConfig {
+	data, _ := json.Marshal(models)
+	var cloned []ModelConfig
+	_ = json.Unmarshal(data, &cloned)
+	return cloned
+}
+
+// Keep configured multi-key entries on disk; expanded fallback entries are a
+// runtime concern. An edited runtime list remains an explicit operator change.
+func (c *Config) modelsForSave() []ModelConfig {
+	if c.runtimeModelBaseline != nil {
+		data, err := json.Marshal(c.ModelList)
+		if err == nil && bytes.Equal(data, c.runtimeModelBaseline) {
+			return c.configuredModels
+		}
+	}
+	return c.ModelList
 }
 
 func (c *Config) WorkspacePath() string {
@@ -1572,4 +1733,42 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 	default:
 		return true
 	}
+}
+
+// ValidateContextManagers keeps selection errors visible before any agent
+// storage opens. Zero bounds use the engine defaults; negative values fail.
+func (c *Config) ValidateContextManagers() error {
+	validate := func(path, name string, options SeahorseContextConfig) error {
+		switch strings.TrimSpace(name) {
+		case "", "legacy", "seahorse":
+		default:
+			return fmt.Errorf("%s.context_manager: unknown engine %q (choose legacy or seahorse)", path, name)
+		}
+		for _, bound := range []struct {
+			name  string
+			value int
+		}{{"compact_timeout_seconds", options.CompactTimeoutSeconds}, {"max_compact_iterations", options.MaxCompactIterations}, {"max_completion_attempts", options.MaxCompletionAttempts}, {"max_concurrent_compactions", options.MaxConcurrentCompactions}} {
+			if bound.value < 0 {
+				return fmt.Errorf("%s.context_manager_config.%s: must be nonnegative", path, bound.name)
+			}
+		}
+		return nil
+	}
+	if err := validate(
+		"agents.defaults",
+		c.Agents.Defaults.ContextManager,
+		c.Agents.Defaults.ContextManagerConfig,
+	); err != nil {
+		return err
+	}
+	for i, agent := range c.Agents.List {
+		options := c.Agents.Defaults.ContextManagerConfig
+		if agent.ContextManagerConfig != nil {
+			options = *agent.ContextManagerConfig
+		}
+		if err := validate(fmt.Sprintf("agents.list[%d]", i), agent.ContextManager, options); err != nil {
+			return err
+		}
+	}
+	return nil
 }

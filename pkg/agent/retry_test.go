@@ -87,6 +87,11 @@ func TestTransientModelFailuresRecoverInDirectAndInlineTurns(t *testing.T) {
 }
 
 func TestModelRetryPolicyBoundsAttemptsAndServerWaitInBothModes(t *testing.T) {
+	capacity := &protocoltypes.HTTPError{
+		StatusCode: 503,
+		Code:       "capacity_unavailable",
+		Wrapped:    errors.New("no capacity"),
+	}
 	cases := []struct {
 		name     string
 		failures []error
@@ -95,6 +100,30 @@ func TestModelRetryPolicyBoundsAttemptsAndServerWaitInBothModes(t *testing.T) {
 		success  bool
 	}{
 		{"timeout", []error{context.DeadlineExceeded}, 2, time.Second, true},
+		{"capacity_recovery", []error{capacity, capacity, capacity, capacity}, 5, 15 * time.Second, true},
+		{
+			"capacity_server_wait",
+			[]error{&protocoltypes.HTTPError{
+				StatusCode: 503,
+				Code:       "capacity_unavailable",
+				RetryAfter: time.Minute,
+				Wrapped:    errors.New("no capacity"),
+			}},
+			2, time.Minute, true,
+		},
+		{
+			"capacity_code_requires_503",
+			[]error{
+				&protocoltypes.HTTPError{
+					StatusCode: 401,
+					Code:       "capacity_unavailable",
+					Wrapped:    errors.New("invalid API key"),
+				},
+			},
+			1,
+			0,
+			false,
+		},
 		{
 			"exhausted",
 			[]error{fmt.Errorf("status: 503"), fmt.Errorf("status: 503"), fmt.Errorf("status: 503")},
@@ -162,6 +191,89 @@ func TestModelRetryPolicyBoundsAttemptsAndServerWaitInBothModes(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestCapacityWaitKeepsCandidateAndStopsOnCancellation(t *testing.T) {
+	for _, chat := range []string{"42", "inline:chosen"} {
+		t.Run(chat, func(t *testing.T) {
+			withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
+				p := &retryScriptProvider{}
+				for range 20 {
+					p.failures = append(p.failures, &protocoltypes.HTTPError{
+						StatusCode: 503, Code: "capacity_unavailable", Wrapped: errors.New("no capacity"),
+					})
+				}
+				a := al.registry.GetDefaultAgent()
+				a.Provider = p
+				a.Candidates = []providers.FallbackCandidate{
+					{Provider: "openai", Model: "one"},
+					{Provider: "openai", Model: "two"},
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				go func() { time.Sleep(35 * time.Second); cancel() }()
+				start := time.Now()
+				got, err := al.processMessage(ctx, bus.InboundMessage{
+					Channel: "telegram", ChatID: chat, SenderID: "telegram:42", Content: "hello",
+				})
+				if got != "" || !errors.Is(err, context.Canceled) || p.calls != 6 ||
+					time.Since(start) != 35*time.Second {
+					t.Fatalf("answer=%q err=%v calls=%d elapsed=%v", got, err, p.calls, time.Since(start))
+				}
+				for _, model := range p.models {
+					if model != "one" {
+						t.Fatalf("capacity wait changed candidate to %s", model)
+					}
+				}
+				var last bus.OutboundMessage
+				for {
+					select {
+					case last = <-mb.OutboundChan():
+					default:
+						if last.Progress == nil || last.Progress.State != bus.ProgressFailed ||
+							!strings.Contains(last.Content, "canceled") {
+							t.Fatalf("cancellation left stale capacity status: %+v", last)
+						}
+						return
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestCapacityWaitRetainsCompletedToolWithoutReplay(t *testing.T) {
+	withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
+		tool := &recordingActionTool{}
+		al.RegisterTool(tool)
+		capacity := &protocoltypes.HTTPError{
+			StatusCode: 503,
+			Code:       "capacity_unavailable",
+			Wrapped:    errors.New("no capacity"),
+		}
+		p := &retryScriptProvider{
+			failures: []error{nil, capacity, capacity, capacity, capacity},
+			responses: map[int]*providers.LLMResponse{
+				0: {ToolCalls: []providers.ToolCall{{ID: "recorded", Name: "mock_custom"}}},
+			},
+		}
+		al.registry.GetDefaultAgent().Provider = p
+		got, err := al.processMessage(t.Context(), bus.InboundMessage{
+			Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Content: "run action",
+		})
+		if err != nil || got != "recovered" || tool.executions != 1 || p.calls != 6 {
+			t.Fatalf("answer=%q err=%v executions=%d calls=%d", got, err, tool.executions, p.calls)
+		}
+		for _, messages := range p.messages[1:] {
+			retained := false
+			for _, msg := range messages {
+				retained = retained || msg.Role == "tool" && msg.Content == "action completed once"
+			}
+			if !retained {
+				t.Fatal("capacity retry lost completed tool output")
+			}
+		}
+	})
 }
 
 func TestCancellationStopsModelRetryInBothModes(t *testing.T) {

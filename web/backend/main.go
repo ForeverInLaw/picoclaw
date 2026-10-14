@@ -12,9 +12,11 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,6 +28,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/web/backend/api"
+	"github.com/sipeed/picoclaw/web/backend/dashboardauth"
 	"github.com/sipeed/picoclaw/web/backend/launcherconfig"
 	"github.com/sipeed/picoclaw/web/backend/middleware"
 	"github.com/sipeed/picoclaw/web/backend/utils"
@@ -42,7 +45,9 @@ var (
 	serverAddr string
 	apiHandler *api.Handler
 
-	noBrowser *bool
+	noBrowser           *bool
+	localAutoLogin      *middleware.LauncherDashboardLocalAutoLogin
+	dashboardSetupToken string
 )
 
 func main() {
@@ -153,6 +158,11 @@ func main() {
 	} else {
 		addr = "127.0.0.1:" + effectivePort
 	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		logger.Fatalf("Server failed to start: %v", err)
+	}
+	defer listener.Close()
 
 	// Initialize Server components
 	mux := http.NewServeMux()
@@ -161,11 +171,44 @@ func main() {
 	apiHandler = api.NewHandler(absPath)
 	apiHandler.SetServerOptions(portNum, effectivePublic, explicitPublic, launcherCfg.AllowedCIDRs)
 	apiHandler.RegisterRoutes(mux)
+	sessions := middleware.NewLauncherDashboardSessions()
+	defer sessions.RevokeAll()
+	authStore, authErr := dashboardauth.New(filepath.Dir(absPath))
+	authOpts := api.LauncherAuthRouteOpts{Sessions: sessions, StoreError: authErr}
+	if authErr != nil {
+		logger.ErrorC("web", fmt.Sprintf("Dashboard password storage unavailable: %v", authErr))
+	} else {
+		defer authStore.Close()
+		authOpts.PasswordStore = authStore
+		initialized, authQueryErr := authStore.IsInitialized(context.Background())
+		if authQueryErr != nil {
+			logger.ErrorC("web", fmt.Sprintf("Dashboard password storage unreadable: %v", authQueryErr))
+		} else if !initialized {
+			token, tokenPath, tokenErr := createDashboardSetupToken(authStore.DBPath())
+			if tokenErr != nil {
+				logger.ErrorC("web", fmt.Sprintf("Dashboard setup unavailable: %v", tokenErr))
+			} else {
+				authOpts.SetupToken = token
+				dashboardSetupToken = token
+				logger.InfoC("web", fmt.Sprintf("Dashboard setup code: read %s on this machine", tokenPath))
+			}
+		} else if !*noBrowser {
+			localAutoLogin, err = middleware.NewLauncherDashboardLocalAutoLogin(5 * time.Minute)
+			if err != nil {
+				logger.ErrorC("web", fmt.Sprintf("Dashboard bootstrap unavailable: %v", err))
+			}
+		}
+	}
+	api.RegisterLauncherAuthRoutes(mux, authOpts)
 
 	// Frontend Embedded Assets
 	registerEmbedRoutes(mux)
 
-	accessControlledMux, err := middleware.IPAllowlist(launcherCfg.AllowedCIDRs, mux)
+	authenticatedMux := middleware.LauncherDashboardAuth(middleware.LauncherDashboardAuthConfig{
+		Sessions:       sessions,
+		LocalAutoLogin: localAutoLogin,
+	}, mux)
+	accessControlledMux, err := middleware.IPAllowlist(launcherCfg.AllowedCIDRs, authenticatedMux)
 	if err != nil {
 		logger.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
@@ -215,7 +258,7 @@ func main() {
 	server = &http.Server{Addr: addr, Handler: handler}
 	go func() {
 		logger.InfoC("web", fmt.Sprintf("Server listening on %s", addr))
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("Server failed to start: %v", err)
 		}
 	}()

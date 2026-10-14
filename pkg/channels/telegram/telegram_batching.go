@@ -87,7 +87,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 
 	chatIDStr := fmt.Sprintf("%d", chatID)
 	messageIDStr := fmt.Sprintf("%d", message.MessageID)
-	scope := channels.BuildMediaScope("telegram", chatIDStr, messageIDStr)
+	scope := channels.BuildMediaScope(c.Name(), chatIDStr, messageIDStr)
 
 	storeMedia := func(localPath, filename string) string {
 		if store := c.GetMediaStore(); store != nil {
@@ -248,6 +248,16 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 			content += "\n"
 		}
 		content += message.Caption
+	}
+	if message.Location != nil {
+		if content != "" {
+			content += "\n"
+		}
+		content += fmt.Sprintf(
+			"[User location: lat=%.6f, lng=%.6f]",
+			message.Location.Latitude,
+			message.Location.Longitude,
+		)
 	}
 
 	if len(message.Photo) > 0 {

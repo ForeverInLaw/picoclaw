@@ -50,6 +50,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install Linux isolation dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap apparmor
+
+      - name: Allow Bubblewrap user namespaces on the test runner
+        run: |
+          sudo install -m 644 .github/ci/bwrap.apparmor /etc/apparmor.d/bwrap
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          bwrap --unshare-user --unshare-pid --unshare-net --cap-drop ALL --ro-bind / / --proc /proc --dev /dev -- /bin/true
+
       - name: Setup Go
         uses: actions/setup-go@v6
         with:

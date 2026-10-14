@@ -47,6 +47,27 @@
       "apikey": "API Key",
       "oauth": "OAuth",
       "local": "Local"
+    },
+    "activity": {
+      "reasoning": "Thought",
+      "retry": "Model recovery",
+      "commentary": "Activity",
+      "started": "In progress",
+      "completed": "Completed",
+      "failed": "Failed",
+      "arguments": "Inputs"
+    },
+    "images": {
+      "select": "Attach images",
+      "remove": "Remove image",
+      "send": "Send message",
+      "drop": "Drop images here",
+      "cancel": "Cancel upload",
+      "uploading": "Uploading images…",
+      "canceled": "Image upload canceled. Your text and previews are kept.",
+      "disconnected": "Chat disconnected before send. Reconnect and try again.",
+      "limitsUnavailable": "Image upload limits are unavailable. Try again after connecting.",
+      "uploadFailed": "Image upload failed. Try again."
     }
   },
   "header": {
@@ -212,9 +233,20 @@
     },
     "edit": {
       "title": "Configure {{name}}",
-      "apiKeyHint": "A key is already set. Leave blank to keep it unchanged.",
+      "apiKeyHint": "Leave blank to keep the saved key for the same provider, endpoint and proxy. Enter a new key when changing them.",
       "oauthNote": "This provider uses OAuth — no API key required.",
       "saveError": "Failed to save"
+    },
+    "probe": {
+      "title": "Check this configuration",
+      "description": "Validation checks fields only. Testing sends one short request to this model and may incur provider usage. Changes are not saved.",
+      "validate": "Validate configuration",
+      "test": "Test model (may incur usage)",
+      "validating": "Validating configuration…",
+      "testing": "Waiting for this model to reply…",
+      "valid": "Configuration is valid. No model request was sent.",
+      "success": "Model replied successfully ({{latency}} ms).",
+      "canceled": "Model test canceled."
     }
   },
   "channels": {
@@ -356,7 +388,29 @@
         "loading_detail": "Loading skill content...",
         "load_detail_error": "Failed to load skill content.",
         "path": "Skill Path",
-        "no_description": "No description provided."
+        "no_description": "No description provided.",
+        "hub": {
+          "title": "Skill Hub",
+          "description": "Search the configured registry and install skills into your workspace.",
+          "searchLabel": "Find skills",
+          "search": "Search",
+          "disabled": "Enable skills and find_skills in tool settings to search the Hub.",
+          "empty": "No skills found. Try another search.",
+          "latest": "Latest",
+          "details": "Details",
+          "more": "Load more",
+          "detailDescription": "Registry skill details",
+          "installed": "Installed {{name}}",
+          "installedLabel": "Installed",
+          "install": "Install skill",
+          "installing": "Installing…",
+          "cancel": "Cancel install",
+          "canceled": "Install request canceled. Check your installed skills before retrying.",
+          "blocked": "This skill is flagged as malicious and cannot be installed.",
+          "suspicious": "The registry flagged this skill as suspicious.",
+          "installDisabled": "Enable skills and install_skill in tool settings to install.",
+          "yourSkills": "Installed skills"
+        }
       },
       "tools": {
         "description": "This view reflects whether each agent tool is enabled, disabled, or blocked by a missing prerequisite.",
@@ -479,5 +533,26 @@
       "clear": "Clear logs",
       "empty": "Waiting for logs..."
     }
+  },
+  "dashboardAuth": {
+    "loginTitle": "Sign in to PicoClaw",
+    "setupTitle": "Set your dashboard password",
+    "setupToken": "Setup code",
+    "setupTokenDescription": "Read launcher-setup-token beside launcher-auth.db on the server. This code is required only for the first password.",
+    "changeTitle": "Change dashboard password",
+    "loginDescription": "Enter your dashboard password to continue.",
+    "setupDescription": "Use at least 8 characters. This password protects dashboard settings, chat, and files.",
+    "changeDescription": "Changing the password signs out all dashboard sessions.",
+    "password": "Password",
+    "confirm": "Confirm password",
+    "loginSubmit": "Sign in",
+    "setupSubmit": "Set password",
+    "changeSubmit": "Change password",
+    "loading": "Please wait…",
+    "mismatch": "Passwords do not match.",
+    "retry": "Try again",
+    "account": "Dashboard access",
+    "logout": "Sign out",
+    "logoutError": "Could not sign out. Try again."
   }
 }

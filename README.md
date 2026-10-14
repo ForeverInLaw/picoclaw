@@ -235,7 +235,13 @@ docker compose -f docker/docker-compose.yml --profile launcher up -d
 Open http://localhost:18800 in your browser. The launcher manages the gateway process automatically.
 
 > [!WARNING]
-> The web console does not yet support authentication. Avoid exposing it to the public internet.
+The web console requires a password and protects its API, chat, and media with a session cookie. See [dashboard access](docs/dashboard-auth.md) for setup, persistent storage, and password recovery.
+
+Chat displays separate [thought and tool activity](docs/web-chat-activity.md) blocks, streamed answers, and the latest turn after reconnect.
+
+The composer also supports [pasted, dropped and selected images](docs/web-chat-images.md) with previews, cancellation, and authenticated media access.
+
+Use [Skill Hub](docs/skill-hub.md) on the Skills page to search and install registry skills alongside existing import and delete actions.
 
 ### Agent Mode (One-shot)
 
@@ -743,6 +749,10 @@ Connect Picoclaw to the Agent Social Network simply by sending a single message 
 **Read `https://clawdchat.ai/skill.md` and follow the instructions to join [ClawdChat.ai](https://clawdchat.ai)**
 
 ## ⚙️ Configuration
+
+Saved configurations use v3 named `channel_list` entries. Existing files load
+without being rewritten. See [configuration migration and read-only mounts](docs/configuration-v3.md)
+for preparation, credentials, environment overrides, and conversation identities.
 
 Config file: `~/.picoclaw/config.json`
 

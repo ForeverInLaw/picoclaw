@@ -8,60 +8,70 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
-func buildModelListResolver(cfg *config.Config) func(raw string) (string, bool) {
-	ensureProtocol := func(model string) string {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			return ""
-		}
-		if strings.Contains(model, "/") {
-			return model
-		}
-		return "openai/" + model
-	}
-
-	return func(raw string) (string, bool) {
-		raw = strings.TrimSpace(raw)
-		if raw == "" || cfg == nil {
-			return "", false
-		}
-
-		if mc, err := cfg.GetModelConfig(raw); err == nil && mc != nil && strings.TrimSpace(mc.Model) != "" {
-			return ensureProtocol(mc.Model), true
-		}
-
-		for i := range cfg.ModelList {
-			fullModel := strings.TrimSpace(cfg.ModelList[i].Model)
-			if fullModel == "" {
-				continue
-			}
-			if fullModel == raw {
-				return ensureProtocol(fullModel), true
-			}
-			_, modelID := providers.ExtractProtocol(fullModel)
-			if modelID == raw {
-				return ensureProtocol(fullModel), true
-			}
-		}
-
-		return "", false
-	}
-}
-
 func resolveModelCandidates(
 	cfg *config.Config,
 	defaultProvider string,
 	primary string,
 	fallbacks []string,
+	selected ...providers.LLMProvider,
 ) []providers.FallbackCandidate {
-	return providers.ResolveCandidatesWithLookup(
-		providers.ModelConfig{
-			Primary:   primary,
-			Fallbacks: fallbacks,
-		},
-		defaultProvider,
-		buildModelListResolver(cfg),
-	)
+	var candidates []providers.FallbackCandidate
+	seen := make(map[string]bool)
+	add := func(raw, selectedKey string) *config.ModelConfig {
+		var mc *config.ModelConfig
+		if cfg != nil && selectedKey != "" {
+			for i := range cfg.ModelList {
+				_, id := providers.ExtractProtocol(cfg.ModelList[i].Model)
+				matches := cfg.ModelList[i].ModelName == raw || cfg.ModelList[i].Model == raw || id == raw
+				if matches && providers.ModelConfigKey(&cfg.ModelList[i]) == selectedKey {
+					clone := cfg.ModelList[i]
+					mc = &clone
+					break
+				}
+			}
+		}
+		if mc == nil {
+			mc, _ = resolvedModelConfig(cfg, raw, "")
+		}
+		var candidate providers.FallbackCandidate
+		if mc != nil {
+			candidate = candidateFromConfig(mc)
+		} else if ref := providers.ParseModelRef(raw, defaultProvider); ref != nil {
+			candidate = providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model}
+		}
+		if candidate.Model != "" && !seen[candidate.StableKey()] {
+			seen[candidate.StableKey()] = true
+			candidates = append(candidates, candidate)
+		}
+		return mc
+	}
+	selectedKey := ""
+	if len(selected) > 0 {
+		if configured, ok := selected[0].(interface{ ModelConfigKey() string }); ok {
+			selectedKey = configured.ModelConfigKey()
+		}
+	}
+	primaryConfig := add(primary, selectedKey)
+	if fallbacks == nil && primaryConfig != nil {
+		fallbacks = primaryConfig.Fallbacks
+	}
+	for _, raw := range fallbacks {
+		add(raw, "")
+	}
+	return candidates
+}
+
+func candidateFromConfig(mc *config.ModelConfig) providers.FallbackCandidate {
+	ref := providers.ParseModelRef(mc.Model, "openai")
+	if ref == nil {
+		return providers.FallbackCandidate{}
+	}
+	return providers.FallbackCandidate{
+		Provider:   ref.Provider,
+		Model:      ref.Model,
+		ConfigName: mc.ModelName,
+		ConfigKey:  providers.ModelConfigKey(mc),
+	}
 }
 
 func resolvedCandidateModel(candidates []providers.FallbackCandidate, fallback string) string {
@@ -110,51 +120,72 @@ func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*conf
 	return &clone, nil
 }
 
-// candidateProviderResolver keeps one resolved credential/endpoint per turn,
-// including request-local retries, while preserving the injected primary client.
+// modelConfigForCandidate never borrows another alias's credentials after
+// configuration identity was selected.
+func modelConfigForCandidate(
+	cfg *config.Config,
+	candidate providers.FallbackCandidate,
+	workspace string,
+) (*config.ModelConfig, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	if candidate.ConfigKey != "" {
+		for _, mc := range cfg.ModelList {
+			if providers.ModelConfigKey(&mc) == candidate.ConfigKey {
+				if mc.Workspace == "" {
+					mc.Workspace = workspace
+				}
+				return &mc, nil
+			}
+		}
+		return nil, fmt.Errorf("selected model configuration %q is no longer available", candidate.ConfigName)
+	}
+	if candidate.ConfigName != "" {
+		return resolvedModelConfig(cfg, candidate.ConfigName, workspace)
+	}
+	matching := *cfg
+	matching.ModelList = nil
+	for _, mc := range cfg.ModelList {
+		protocol, id := providers.ExtractProtocol(mc.Model)
+		if providers.NormalizeProvider(protocol) == providers.NormalizeProvider(candidate.Provider) &&
+			id == candidate.Model {
+			matching.ModelList = append(matching.ModelList, mc)
+		}
+	}
+	if len(matching.ModelList) == 0 {
+		return nil, fmt.Errorf("no model configuration for fallback %s/%s", candidate.Provider, candidate.Model)
+	}
+	return resolvedModelConfig(&matching, matching.ModelList[0].ModelName, workspace)
+}
+
+// candidateProviderResolver keeps one exact endpoint/key selection per turn.
 func candidateProviderResolver(
 	cfg *config.Config,
 	workspace string,
 	primary providers.LLMProvider,
 	candidates []providers.FallbackCandidate,
-) func(string, string) (providers.LLMProvider, error) {
+) func(providers.FallbackCandidate) (providers.LLMProvider, error) {
 	clients := make(map[string]providers.LLMProvider)
 	primaryProvider := ""
 	if len(candidates) > 0 {
 		primaryProvider = candidates[0].Provider
-		clients[providers.ModelKey(primaryProvider, candidates[0].Model)] = primary
+		if configured, ok := primary.(interface{ ModelConfigKey() string }); !ok || configured.ModelConfigKey() == "" ||
+			configured.ModelConfigKey() == candidates[0].ConfigKey {
+			clients[candidates[0].StableKey()] = primary
+		}
 	}
-	return func(provider, model string) (providers.LLMProvider, error) {
-		key := providers.ModelKey(provider, model)
+	return func(candidate providers.FallbackCandidate) (providers.LLMProvider, error) {
+		key := candidate.StableKey()
 		if client := clients[key]; client != nil {
 			return client, nil
 		}
-		name := ""
-		for _, candidate := range candidates {
-			if candidate.Provider == provider && candidate.Model == model {
-				name = candidate.ConfigName
-				break
-			}
-		}
-		if name == "" && cfg != nil {
-			for _, mc := range cfg.ModelList {
-				protocol, id := providers.ExtractProtocol(mc.Model)
-				if providers.NormalizeProvider(protocol) == providers.NormalizeProvider(provider) && id == model {
-					name = mc.ModelName
-					break
-				}
-			}
-		}
-		if name == "" {
-			// Programmatically supplied candidates may share an injected client.
-			if provider == primaryProvider {
+		mc, err := modelConfigForCandidate(cfg, candidate, workspace)
+		if err != nil {
+			if candidate.ConfigKey == "" && candidate.ConfigName == "" && candidate.Provider == primaryProvider {
 				clients[key] = primary
 				return primary, nil
 			}
-			return nil, fmt.Errorf("no model configuration for fallback %s/%s", provider, model)
-		}
-		mc, err := resolvedCandidateConfig(cfg, name, workspace, provider, model)
-		if err != nil {
 			return nil, err
 		}
 		client, _, err := providers.CreateProviderFromConfig(mc)
@@ -164,33 +195,4 @@ func candidateProviderResolver(
 		clients[key] = client
 		return client, nil
 	}
-}
-
-// An alias may round-robin across different provider/model references. Factory
-// selection must stay within the already-selected reference, including retries.
-func resolvedCandidateConfig(cfg *config.Config, name, workspace, provider, model string) (*config.ModelConfig, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("config is nil")
-	}
-	alias := false
-	for _, mc := range cfg.ModelList {
-		if mc.ModelName == name {
-			alias = true
-			break
-		}
-	}
-	matching := *cfg
-	matching.ModelList = nil
-	for _, mc := range cfg.ModelList {
-		protocol, id := providers.ExtractProtocol(mc.Model)
-		nameMatches := mc.ModelName == name
-		if !alias {
-			nameMatches = mc.Model == name || id == name
-		}
-		if nameMatches && providers.NormalizeProvider(protocol) == providers.NormalizeProvider(provider) &&
-			id == model {
-			matching.ModelList = append(matching.ModelList, mc)
-		}
-	}
-	return resolvedModelConfig(&matching, name, workspace)
 }

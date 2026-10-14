@@ -30,6 +30,7 @@ func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (chann
 	cfg := c.config.Channels.Telegram.Streaming
 	stream := &telegramStreamer{
 		channel:          c,
+		activityChatID:   chatID,
 		deliveryCtx:      bus.EnsureDeliveryID(ctx),
 		replyTo:          bus.StreamReplyTo(ctx),
 		draftID:          cryptoRandInt(),
@@ -50,6 +51,7 @@ func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (chann
 
 type telegramStreamer struct {
 	channel          *TelegramChannel
+	activityChatID   string
 	chatID           int64
 	threadID         int
 	replyTo          string
@@ -83,6 +85,9 @@ func (s *telegramStreamer) Update(ctx context.Context, content string) error {
 		return nil
 	}
 	preview := richAnswerPreview(content, telegramRichMessageLimit)
+	if s.lastLen == 0 {
+		s.channel.finishActivities(ctx, s.activityChatID, s.replyTo, false)
+	}
 	var err error
 	switch {
 	case s.inlineMessageID != "":
@@ -187,6 +192,7 @@ func (s *telegramStreamer) Finalize(ctx context.Context, content string) error {
 		s.finalized = true
 		return nil
 	}
+	s.channel.finishActivities(ctx, s.activityChatID, s.replyTo, true)
 	var err error
 	switch {
 	case s.inlineMessageID != "":

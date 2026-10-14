@@ -1,12 +1,11 @@
 import dayjs from "dayjs"
-import { useAtomValue } from "jotai"
 
 import {
   newChatSession,
   sendChatMessage,
   switchChatSession,
 } from "@/features/chat/controller"
-import { chatAtom } from "@/store/chat"
+import { useChatStore } from "@/store/chat"
 
 const UNIX_MS_THRESHOLD = 1e12
 
@@ -55,8 +54,10 @@ export function formatMessageTime(dateRaw: number | string | Date): string {
 }
 
 export function usePicoChat() {
-  const { messages, connectionState, isTyping, activeSessionId } =
-    useAtomValue(chatAtom)
+  const messages = useChatStore((state) => state.messages)
+  const connectionState = useChatStore((state) => state.connectionState)
+  const isTyping = useChatStore((state) => state.isTyping)
+  const activeSessionId = useChatStore((state) => state.activeSessionId)
 
   return {
     messages,

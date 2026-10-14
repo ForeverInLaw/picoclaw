@@ -1,4 +1,5 @@
 .PHONY: all build install uninstall clean help test
+.PHONY: docker-build docker-build-full docker-build-launcher docker-test-packaging
 
 # Build variables
 BINARY_NAME=picoclaw
@@ -13,6 +14,7 @@ BUILD_TIME=$(shell date +%FT%T%z)
 GO_VERSION=$(shell $(GO) version | awk '{print $$3}')
 CONFIG_PKG=github.com/sipeed/picoclaw/pkg/config
 LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -s -w
+DOCKER_BUILD_ENV=PICOCLAW_BUILD_VERSION="$(VERSION)" PICOCLAW_BUILD_REVISION="$(GIT_COMMIT)"
 
 # Go variables
 GO?=CGO_ENABLED=0 go
@@ -119,9 +121,9 @@ build-launcher:
 	@mkdir -p $(BUILD_DIR)
 	@if [ ! -f web/backend/dist/index.html ]; then \
 		echo "Building frontend..."; \
-		cd web/frontend && pnpm install && pnpm build:backend; \
+		cd web/frontend && pnpm install --frozen-lockfile && pnpm build:backend; \
 	fi
-	@$(WEB_GO) build $(GOFLAGS) -o $(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH) ./web/backend
+	@$(WEB_GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/picoclaw-launcher-$(PLATFORM)-$(ARCH) ./web/backend
 	@ln -sf picoclaw-launcher-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/picoclaw-launcher
 	@echo "Build complete: $(BUILD_DIR)/picoclaw-launcher"
 
@@ -262,12 +264,20 @@ run: build
 ## docker-build: Build Docker image (minimal Alpine-based)
 docker-build:
 	@echo "Building minimal Docker image (Alpine-based)..."
-	docker compose -f docker/docker-compose.yml build picoclaw-agent picoclaw-gateway
+	$(DOCKER_BUILD_ENV) docker compose -f docker/docker-compose.yml build picoclaw-agent picoclaw-gateway
 
 ## docker-build-full: Build Docker image with full MCP support (Node.js 24)
 docker-build-full:
 	@echo "Building full-featured Docker image (Node.js 24)..."
-	docker compose -f docker/docker-compose.full.yml build picoclaw-agent picoclaw-gateway
+	$(DOCKER_BUILD_ENV) docker compose -f docker/docker-compose.full.yml build picoclaw-agent picoclaw-gateway
+
+## docker-build-launcher: Build launcher with the locked embedded frontend
+docker-build-launcher:
+	$(DOCKER_BUILD_ENV) docker compose -f docker/docker-compose.yml build picoclaw-launcher
+
+## docker-test-packaging: Verify built images with temporary state and fake endpoints
+docker-test-packaging:
+	python3 scripts/test-docker-packaging.py
 
 ## docker-test: Test MCP tools in Docker container
 docker-test:
