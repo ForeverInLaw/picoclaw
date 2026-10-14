@@ -38,6 +38,9 @@ func (e *Engine) ReconcileCanonical(ctx context.Context, key string, messages []
 				Keys:    make([]string, len(messages)),
 			}
 			for i, msg := range messages {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				digest, err := canonicalDigest(msg, key, i)
 				if err != nil {
 					return err
@@ -57,7 +60,23 @@ func (e *Engine) ReconcileCanonical(ctx context.Context, key string, messages []
 				return err
 			}
 			plan = stored
+			var current bool
+			if err := e.store.db.QueryRowContext(ctx,
+				`SELECT EXISTS(SELECT 1 FROM context_checkpoints cp JOIN context_imports ci USING(import_id) WHERE cp.conversation_id=? AND cp.import_id=? AND ci.completed=1)`,
+				conv.ConversationID, importID).Scan(&current); err != nil {
+				return err
+			}
+			if current {
+				return nil
+			}
+			known, err := e.store.canonicalSourceKeys(ctx, conv.ConversationID)
+			if err != nil {
+				return err
+			}
 			for i, msg := range messages {
+				if known[plan.Keys[i]] {
+					continue
+				}
 				if err := e.store.appendSource(ctx, conv.ConversationID, plan.Keys[i], msg); err != nil {
 					return err
 				}
@@ -179,6 +198,9 @@ func (s *Store) canonicalPlan(
 		}
 	}
 	reuseCanonicalKeys(previous, &plan)
+	if err := s.reuseRevisionKeys(ctx, convID, &plan); err != nil {
+		return 0, plan, err
+	}
 	for i := range plan.Keys {
 		if plan.Keys[i] == "" {
 			plan.Keys[i] = fmt.Sprintf("import:%s:%d", fingerprint, i)
@@ -233,6 +255,71 @@ func reuseCanonicalKeys(previous canonicalPlan, next *canonicalPlan) {
 	copy(next.Keys[:overlap], previous.Keys[len(previous.Keys)-overlap:])
 }
 
+func (s *Store) canonicalSourceKeys(ctx context.Context, convID int64) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT source_key FROM source_messages WHERE conversation_id=?", convID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err = rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys[key] = true
+	}
+	return keys, rows.Err()
+}
+
+// Ordinary append plans are replaced by the new checkpoint. Retained revision
+// boundaries keep keys recoverable after a legacy rewrite or snapshot restore.
+func (s *Store) reuseRevisionKeys(ctx context.Context, convID int64, next *canonicalPlan) error {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT plan FROM context_imports WHERE conversation_id=? AND retained=1 ORDER BY import_id DESC", convID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	used := map[string]bool{}
+	for _, key := range next.Keys {
+		if key != "" {
+			used[key] = true
+		}
+	}
+	for rows.Next() {
+		var encoded string
+		if err = rows.Scan(&encoded); err != nil {
+			return err
+		}
+		var previous canonicalPlan
+		if err = json.Unmarshal([]byte(encoded), &previous); err != nil {
+			return err
+		}
+		hint := canonicalPlan{Digests: next.Digests, Summary: next.Summary, Keys: make([]string, len(next.Keys))}
+		reuseCanonicalKeys(previous, &hint)
+		for i, key := range hint.Keys {
+			if key != "" && next.Keys[i] == "" && !used[key] {
+				next.Keys[i] = key
+				used[key] = true
+			}
+		}
+	}
+	return rows.Err()
+}
+
+func canonicalExtends(previous, next canonicalPlan) bool {
+	if previous.Summary != next.Summary || len(previous.Digests) > len(next.Digests) {
+		return false
+	}
+	for i, digest := range previous.Digests {
+		if digest != next.Digests[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, plan canonicalPlan) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -247,6 +334,21 @@ func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, pl
 	}
 	if current == importID {
 		return nil
+	}
+	if current != 0 {
+		var encoded string
+		if err = tx.QueryRowContext(ctx, "SELECT plan FROM context_imports WHERE import_id=?", current).Scan(&encoded); err != nil {
+			return err
+		}
+		var previous canonicalPlan
+		if err = json.Unmarshal([]byte(encoded), &previous); err != nil {
+			return err
+		}
+		if !canonicalExtends(previous, plan) {
+			if _, err = tx.ExecContext(ctx, "UPDATE context_imports SET retained=1 WHERE import_id IN (?,?)", current, importID); err != nil {
+				return err
+			}
+		}
 	}
 	// Drop only raw active projection entries no longer present in the effective
 	// canonical history. Source rows and all existing summary DAG nodes survive.
@@ -304,6 +406,10 @@ func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, pl
 		convID,
 		importID,
 	); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx,
+		"DELETE FROM context_imports WHERE conversation_id=? AND import_id<>? AND retained=0", convID, importID); err != nil {
 		return err
 	}
 	return tx.Commit()
