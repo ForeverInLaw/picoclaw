@@ -13,14 +13,19 @@ RUN go mod download
 
 # Copy source and build
 COPY . .
-RUN make build
+ARG VERSION=dev
+ARG VCS_REF=dev
+RUN --mount=type=cache,target=/root/.cache/go-build make build VERSION=${VERSION} GIT_COMMIT=${VCS_REF}
 
 # ============================================================
 # Stage 2: Minimal runtime image
 # ============================================================
 FROM alpine:3.23
+ARG VERSION=dev
+ARG VCS_REF=dev
+LABEL org.opencontainers.image.version=${VERSION} org.opencontainers.image.revision=${VCS_REF}
 
-RUN apk add --no-cache ca-certificates tzdata curl
+RUN apk add --no-cache ca-certificates tzdata curl bubblewrap
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
@@ -31,7 +36,10 @@ COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
 
 # Create non-root user and group
 RUN addgroup -g 1000 picoclaw && \
-    adduser -D -u 1000 -G picoclaw picoclaw
+    adduser -D -u 1000 -G picoclaw picoclaw && \
+    mkdir -p /data && chown picoclaw:picoclaw /data
+
+ENV PICOCLAW_HOME=/data
 
 # Switch to non-root user
 USER picoclaw

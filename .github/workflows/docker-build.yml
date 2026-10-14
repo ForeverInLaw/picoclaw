@@ -59,12 +59,17 @@ jobs:
           echo "ghcr_latest=${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:latest" >> "$GITHUB_OUTPUT"
           echo "dockerhub_tag=${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}:${tag}" >> "$GITHUB_OUTPUT"
           echo "dockerhub_latest=${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}:latest" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # ── Build & Push ──────────────────────────
       - name: 🚀 Build and push Docker image
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: docker/Dockerfile
+          build-args: |
+            VERSION=${{ inputs.tag }}
+            VCS_REF=${{ steps.tags.outputs.revision }}
           push: true
           tags: |
             ${{ steps.tags.outputs.ghcr_tag }}

@@ -1,0 +1,38 @@
+# Build the selected UI with the repository lockfile and pinned package manager.
+FROM node:24-alpine3.23 AS frontend
+ARG PNPM_VERSION=11.26.0
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+WORKDIR /src/web/frontend
+COPY web/frontend/package.json web/frontend/pnpm-lock.yaml web/frontend/pnpm-workspace.yaml ./
+RUN CI=true pnpm install --frozen-lockfile
+COPY web/frontend/ ./
+RUN pnpm lint && pnpm build:backend
+
+FROM golang:1.27.2-alpine AS builder
+RUN apk add --no-cache git make
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+COPY --from=frontend /src/web/backend/dist web/backend/dist
+ARG VERSION=dev
+ARG VCS_REF=dev
+RUN --mount=type=cache,target=/root/.cache/go-build make build build-launcher VERSION=${VERSION} GIT_COMMIT=${VCS_REF}
+
+FROM alpine:3.23
+ARG VERSION=dev
+ARG VCS_REF=dev
+LABEL org.opencontainers.image.version=${VERSION} org.opencontainers.image.revision=${VCS_REF}
+RUN apk add --no-cache ca-certificates tzdata curl bubblewrap && \
+    addgroup -g 1000 picoclaw && adduser -D -u 1000 -G picoclaw picoclaw && \
+    mkdir -p /data && chown picoclaw:picoclaw /data
+COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
+COPY --from=builder /src/build/picoclaw-launcher /usr/local/bin/picoclaw-launcher
+ENV PICOCLAW_HOME=/data
+USER picoclaw
+RUN picoclaw onboard
+EXPOSE 18800 18790
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O /dev/null http://localhost:18800/api/auth/status || exit 1
+ENTRYPOINT ["picoclaw-launcher"]
+CMD ["-console", "-public", "-no-browser"]

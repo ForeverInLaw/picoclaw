@@ -1,19 +1,28 @@
+x-build-args: &build-args
+  VERSION: ${PICOCLAW_BUILD_VERSION:-dev}
+  VCS_REF: ${PICOCLAW_BUILD_REVISION:-dev}
+
 services:
   # ─────────────────────────────────────────────
   # PicoClaw Agent (one-shot query) - Full MCP Support
   #   docker compose -f docker/docker-compose.full.yml run --rm picoclaw-agent -m "Hello"
   # ─────────────────────────────────────────────
   picoclaw-agent:
+    image: picoclaw:full-local
     build:
       context: ..
       dockerfile: docker/Dockerfile.full
+      args: *build-args
     container_name: picoclaw-agent-full
     profiles:
       - agent
     volumes:
-      - ../config/config.json:/root/.picoclaw/config.json:ro
-      - picoclaw-workspace:/root/.picoclaw/workspace
-      - picoclaw-npm-cache:/root/.npm # npm cache for faster MCP server installs
+      - picoclaw-state:/data
+      - ../config/config.json:/data/config.json:ro
+      - picoclaw-workspace:/data/workspace
+      - picoclaw-npm-cache:/home/node/.npm # npm cache for faster MCP server installs
+    environment:
+      - PICOCLAW_HOME=/data
     entrypoint: ["picoclaw", "agent"]
     stdin_open: true
     tty: true
@@ -23,22 +32,28 @@ services:
   #   docker compose -f docker/docker-compose.full.yml --profile gateway up
   # ─────────────────────────────────────────────
   picoclaw-gateway:
+    image: picoclaw:full-local
     build:
       context: ..
       dockerfile: docker/Dockerfile.full
+      args: *build-args
     container_name: picoclaw-gateway-full
     restart: unless-stopped
     profiles:
       - gateway
     volumes:
+      - picoclaw-state:/data
       # Configuration file
-      - ../config/config.json:/root/.picoclaw/config.json:ro
+      - ../config/config.json:/data/config.json:ro
       # Persistent workspace (sessions, memory, logs)
-      - picoclaw-workspace:/root/.picoclaw/workspace
+      - picoclaw-workspace:/data/workspace
       # NPM cache for faster MCP server installs
-      - picoclaw-npm-cache:/root/.npm
+      - picoclaw-npm-cache:/home/node/.npm
+    environment:
+      - PICOCLAW_HOME=/data
     command: ["gateway"]
 
 volumes:
+  picoclaw-state:
   picoclaw-workspace:
   picoclaw-npm-cache: # Cache npm packages to speed up MCP server installations

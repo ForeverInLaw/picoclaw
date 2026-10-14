@@ -1,0 +1,17 @@
+# Explicit opt-in for hosts matching the verified Docker Linux prerequisites.
+# Keep config isolation.enabled=true; omitting these grants fails closed.
+x-isolation: &isolation
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+    - seccomp:./seccomp-bubblewrap.json
+    - apparmor:unconfined
+    - systempaths=unconfined
+
+services:
+  picoclaw-agent:
+    <<: *isolation
+  picoclaw-gateway:
+    <<: *isolation
+  picoclaw-launcher:
+    <<: *isolation
