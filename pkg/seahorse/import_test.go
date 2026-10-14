@@ -3,6 +3,7 @@ package seahorse_test
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/seahorse"
@@ -65,6 +66,53 @@ func TestCanonicalImportCheckpointRollsBackPublicationAndResumesAfterReopen(t *t
 	}
 	if persisted != 1 || summaries != 1 || completed != 1 {
 		t.Fatalf("resumed publication: sources=%d summaries=%d complete=%d", persisted, summaries, completed)
+	}
+}
+
+func TestCanonicalReconciliationRestoresKnownSourcesInOrderWithoutDuplicatingEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.sqlite")
+	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: path}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	sources := []seahorse.Message{
+		{Role: "user", Content: "first original", TokenCount: 10},
+		{Role: "assistant", Content: "retained original", TokenCount: 10},
+	}
+	for _, state := range []struct {
+		messages []seahorse.Message
+		summary  string
+	}{
+		{sources, ""},
+		{sources[1:], "legacy truncation"},
+		{sources, ""},
+	} {
+		if err = engine.ReconcileCanonical(t.Context(), "generation", state.messages, state.summary); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assembled, err := engine.Assemble(t.Context(), "generation", seahorse.AssembleInput{Budget: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assembled.Messages) != 2 || assembled.Messages[0].Content != sources[0].Content || assembled.Messages[1].Content != sources[1].Content {
+		t.Fatalf("canonical restoration lost order or sources: %+v", assembled.Messages)
+	}
+	if strings.Contains(assembled.Summary, "legacy truncation") {
+		t.Fatal("replaced canonical summary remained active")
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var persisted int
+	if err = database.QueryRow("SELECT COUNT(*) FROM source_messages").Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != 2 {
+		t.Fatal("canonical restoration duplicated evidence")
 	}
 }
 

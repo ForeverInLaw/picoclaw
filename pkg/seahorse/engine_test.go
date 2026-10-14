@@ -101,8 +101,20 @@ func TestForcedCompactionRetainsCompleteSourceGraphThroughCondensationAndReopen(
 	if len(seen) != len(source) {
 		t.Fatalf("source graph lost evidence: %d of %d", len(seen), len(source))
 	}
-	if err = engine.SyncSources(t.Context(), "agent:main:current", source); err != nil {
+	if err = engine.ReconcileCanonical(t.Context(), "agent:main:current", source, ""); err != nil {
 		t.Fatal(err)
+	}
+	reconciled, err := store.GetContextItems(t.Context(), conv.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reconciled) != len(items) {
+		t.Fatal("canonical import rebuilt the existing compacted projection")
+	}
+	for i, item := range items {
+		if reconciled[i].SummaryID != item.SummaryID || reconciled[i].MessageID != item.MessageID {
+			t.Fatal("canonical import replaced existing DAG references")
+		}
 	}
 	found, err := engine.GetRetrieval().
 		Grep(t.Context(), seahorse.GrepInput{ConversationID: conv.ConversationID, Pattern: "%evidence%", Scope: "message", Limit: 100})

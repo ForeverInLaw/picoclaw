@@ -289,54 +289,11 @@ func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, pl
 			return err
 		}
 	}
-	if plan.Summary != "" {
-		summaryID := fmt.Sprintf("sum_%x", sha256.Sum256([]byte(fmt.Sprint(convID)+":"+plan.Summary)))
-		result, err := tx.ExecContext(
-			ctx,
-			`INSERT OR IGNORE INTO summaries(summary_id,conversation_id,kind,depth,content,token_count,model) VALUES(?,?,'imported',0,?,?,'legacy')`,
-			summaryID,
-			convID,
-			plan.Summary,
-			EstimateMessageTokens(Message{Content: plan.Summary}),
-		)
-		if err != nil {
-			return err
-		}
-		added, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if added > 0 {
-			if _, err = tx.ExecContext(
-				ctx,
-				`DELETE FROM context_items WHERE conversation_id=? AND summary_id IN (SELECT summary_id FROM summaries WHERE kind='imported')`,
-				convID,
-			); err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(
-				ctx,
-				`INSERT INTO context_items(conversation_id,ordinal,item_type,summary_id,token_count) SELECT ?,COALESCE(MIN(ordinal),0)-?,'summary',?,? FROM context_items WHERE conversation_id=?`,
-				convID,
-				OrdinalStep,
-				summaryID,
-				EstimateMessageTokens(Message{Content: plan.Summary}),
-				convID,
-			); err != nil {
-				return err
-			}
-			for i, id := range removed {
-				if _, err = tx.ExecContext(
-					ctx,
-					"INSERT OR IGNORE INTO summary_messages(summary_id,message_id,ordinal) VALUES(?,?,?)",
-					summaryID,
-					id,
-					i,
-				); err != nil {
-					return err
-				}
-			}
-		}
+	if err = publishImportedSummary(ctx, tx, convID, plan.Summary, removed); err != nil {
+		return err
+	}
+	if err = rebuildCanonicalProjection(ctx, tx, convID, plan.Keys); err != nil {
+		return err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE context_imports SET completed=1 WHERE import_id=?", importID); err != nil {
 		return err
@@ -350,4 +307,95 @@ func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, pl
 		return err
 	}
 	return tx.Commit()
+}
+
+// Imported summary replacement changes only active projection entries. Existing
+// summary records and their source links remain available for explicit recovery.
+func publishImportedSummary(ctx context.Context, tx *sql.Tx, convID int64, content string, removed []int64) error {
+	id := ""
+	if content != "" {
+		id = fmt.Sprintf("sum_%x", sha256.Sum256([]byte(fmt.Sprint(convID)+":"+content)))
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM context_items WHERE conversation_id=? AND summary_id IN (SELECT summary_id FROM summaries WHERE kind='imported' AND summary_id<>?)`,
+		convID, id); err != nil {
+		return err
+	}
+	if id == "" {
+		return nil
+	}
+	tokens := EstimateMessageTokens(Message{Content: content})
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO summaries(summary_id,conversation_id,kind,depth,content,token_count,model) VALUES(?,?,'imported',0,?,?,'legacy')`,
+		id, convID, content, tokens); err != nil {
+		return err
+	}
+	var represented bool
+	if err := tx.QueryRowContext(ctx, activeSummaryGraph+` SELECT EXISTS(SELECT 1 FROM active_summaries WHERE summary_id=?)`, convID, id).
+		Scan(&represented); err != nil {
+		return err
+	}
+	if !represented {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO context_items(conversation_id,ordinal,item_type,summary_id,token_count) SELECT ?,COALESCE(MIN(ordinal),0)-?,'summary',?,? FROM context_items WHERE conversation_id=?`,
+			convID, OrdinalStep, id, tokens, convID); err != nil {
+			return err
+		}
+	}
+	for i, messageID := range removed {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO summary_messages(summary_id,message_id,ordinal) VALUES(?,?,?)", id, messageID, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const activeSummaryGraph = `WITH RECURSIVE active_summaries(summary_id) AS (
+	SELECT summary_id FROM context_items WHERE conversation_id=? AND item_type='summary'
+	UNION SELECT sp.parent_summary_id FROM summary_parents sp JOIN active_summaries a ON sp.summary_id=a.summary_id
+)`
+
+// Rebuild only the raw projection in canonical order. Sources already represented
+// by a retained active summary are kept compressed, including condensed DAGs.
+func rebuildCanonicalProjection(ctx context.Context, tx *sql.Tx, convID int64, keys []string) error {
+	rows, err := tx.QueryContext(ctx, activeSummaryGraph+` SELECT DISTINCT message_id FROM summary_messages JOIN active_summaries USING(summary_id)`, convID)
+	if err != nil {
+		return err
+	}
+	covered := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		covered[id] = true
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if _, err = tx.ExecContext(ctx, "DELETE FROM context_items WHERE conversation_id=? AND item_type='message'", convID); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		var id int64
+		var tokens int
+		if err = tx.QueryRowContext(ctx,
+			`SELECT sm.message_id,m.token_count FROM source_messages sm JOIN messages m ON m.message_id=sm.message_id WHERE sm.conversation_id=? AND sm.source_key=?`,
+			convID, key).Scan(&id, &tokens); err != nil {
+			return err
+		}
+		if covered[id] {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO context_items(conversation_id,ordinal,item_type,message_id,token_count) SELECT ?,COALESCE(MAX(ordinal),0)+?,'message',?,? FROM context_items WHERE conversation_id=?`,
+			convID, OrdinalStep, id, tokens, convID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
