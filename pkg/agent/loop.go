@@ -2886,6 +2886,10 @@ turnLoop:
 					),
 					ts.opts.Sender,
 				)
+				toolExecCtx = tools.WithRequestScope(toolExecCtx, tools.RequestScope{
+					AgentID: ts.agent.ID, SessionKey: ts.sessionKey,
+					Inline: ts.opts.ConversationContext.Inline,
+				})
 				toolResult = ts.agent.Tools.ExecuteWithContext(
 					toolExecCtx,
 					toolName,

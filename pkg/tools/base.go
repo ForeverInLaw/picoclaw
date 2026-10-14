@@ -31,7 +31,25 @@ var (
 	ctxKeyLanguage  = &toolCtxKey{"language"}
 	ctxKeyReplyToID = &toolCtxKey{"replyToMessageID"}
 	ctxKeySender    = &toolCtxKey{"sender"}
+	ctxKeyScope     = &toolCtxKey{"scope"}
 )
+
+// RequestScope is captured by the owning turn, never inferred from tool arguments.
+// SessionKey is the base conversation identity, so explicit artifacts survive reset.
+type RequestScope struct {
+	AgentID    string
+	SessionKey string
+	Inline     bool
+}
+
+func WithRequestScope(ctx context.Context, scope RequestScope) context.Context {
+	return context.WithValue(ctx, ctxKeyScope, scope)
+}
+
+func ToolRequestScope(ctx context.Context) RequestScope {
+	scope, _ := ctx.Value(ctxKeyScope).(RequestScope)
+	return scope
+}
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {

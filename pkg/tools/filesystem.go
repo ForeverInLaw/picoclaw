@@ -249,8 +249,15 @@ func isWithinWorkspace(candidate, workspace string) bool {
 }
 
 type ReadFileTool struct {
-	fs      fileSystem
-	maxSize int64
+	fs        fileSystem
+	maxSize   int64
+	workspace string
+	artifacts *ArtifactStore
+}
+
+func (t *ReadFileTool) WithArtifacts(store *ArtifactStore) *ReadFileTool {
+	t.artifacts = store
+	return t
 }
 
 func NewReadFileTool(
@@ -270,8 +277,9 @@ func NewReadFileTool(
 	}
 
 	return &ReadFileTool{
-		fs:      buildFs(workspace, restrict, patterns),
-		maxSize: maxSize,
+		fs:        buildFs(workspace, restrict, patterns),
+		maxSize:   maxSize,
+		workspace: workspace,
 	}
 }
 
@@ -333,7 +341,17 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		length = t.maxSize
 	}
 
-	file, err := t.fs.Open(path)
+	var file fs.File
+	if strings.HasPrefix(path, artifactPrefix) {
+		if t.artifacts == nil {
+			return ErrorResult("artifact access unavailable")
+		}
+		file, err = t.artifacts.Open(ToolRequestScope(ctx), path)
+	} else if t.artifacts.ProtectPath(path) || t.artifacts.ProtectPath(filepath.Join(t.workspace, path)) {
+		return ErrorResult("artifact access denied: use an authorized artifact reference")
+	} else {
+		file, err = t.fs.Open(path)
+	}
 	if err != nil {
 		return ErrorResult(err.Error())
 	}

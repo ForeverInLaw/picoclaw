@@ -564,6 +564,11 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: false,
 				},
+				Artifacts: MCPArtifactConfig{
+					Directory:      filepath.Join(homePath, "artifacts", "mcp"),
+					MaxInlineRunes: 16 * 1024,
+					PreviewRunes:   1000,
+				},
 				Discovery: ToolDiscoveryConfig{
 					Enabled:          false,
 					TTL:              5,

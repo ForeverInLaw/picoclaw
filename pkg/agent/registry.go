@@ -28,19 +28,20 @@ func NewAgentRegistry(
 	}
 
 	agentConfigs := cfg.Agents.List
+	artifacts := tools.NewArtifactStore(cfg.Tools.MCP.Artifacts, cfg.ArtifactFilter())
 	if len(agentConfigs) == 0 {
 		implicitAgent := &config.AgentConfig{
 			ID:      "main",
 			Default: true,
 		}
-		instance := NewAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider)
+		instance := NewAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider, artifacts)
 		registry.agents["main"] = instance
 		logger.InfoCF("agent", "Created implicit main agent (no agents.list configured)", nil)
 	} else {
 		for i := range agentConfigs {
 			ac := &agentConfigs[i]
 			id := routing.NormalizeAgentID(ac.ID)
-			instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+			instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider, artifacts)
 			registry.agents[id] = instance
 			logger.InfoCF("agent", "Registered agent",
 				map[string]any{
