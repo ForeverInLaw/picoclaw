@@ -18,6 +18,9 @@ func loadConfig() (*config.Config, error) {
 }
 
 func saveConfig(cfg *config.Config) error {
+	if err := cfg.Tools.MCP.Validate(); err != nil {
+		return err
+	}
 	if err := config.SaveConfig(internal.GetConfigPath(), cfg); err != nil {
 		return fmt.Errorf("failed to save config; check file permissions and security settings")
 	}
