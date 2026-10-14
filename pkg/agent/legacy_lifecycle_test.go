@@ -64,7 +64,7 @@ func TestLegacySummaryUsesOwningAgentsExactConfiguredProviderAndModel(t *testing
 	cfg.ModelList = []config.ModelConfig{
 		{ModelName: "main-model", Model: "openai/actual-main", APIKey: "main-key", APIBase: endpoint.URL},
 		{ModelName: "reviewer-model", Model: "openai/actual-reviewer", APIKey: "reviewer-key-A", APIBase: endpoint.URL},
-		{ModelName: "reviewer-model", Model: "openai/actual-reviewer", APIKey: "reviewer-key-B", APIBase: endpoint.URL},
+		{ModelName: "reviewer-spare", Model: "openai/actual-reviewer", APIKey: "reviewer-key-B", APIBase: endpoint.URL},
 	}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "main", Default: true},
