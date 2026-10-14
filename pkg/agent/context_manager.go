@@ -86,42 +86,53 @@ func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 	return snapshot
 }
 
-type legacyContextManager struct{}
+type legacyContextManager struct {
+	*contextWorkers
+	background sync.Map
+}
 
-func (legacyContextManager) Name() string { return "legacy" }
-func (legacyContextManager) Assemble(_ context.Context, s ContextSnapshot) (ContextAssembly, error) {
+func (*legacyContextManager) Name() string { return "legacy" }
+func (*legacyContextManager) Assemble(_ context.Context, s ContextSnapshot) (ContextAssembly, error) {
 	return ContextAssembly{History: s.History, Summary: s.Summary}, s.ReadError
 }
 
-func (legacyContextManager) Ingest(ctx context.Context, snapshot ContextSnapshot) error { return nil }
+func (*legacyContextManager) Ingest(ctx context.Context, snapshot ContextSnapshot) error { return nil }
 
-func (legacyContextManager) Compact(ctx context.Context, snapshot ContextSnapshot, budget int) error {
+func (*legacyContextManager) Compact(ctx context.Context, snapshot ContextSnapshot, budget int) error {
 	return nil
 }
-func (legacyContextManager) Clear(ctx context.Context, sessionKey string) error { return nil }
-func (legacyContextManager) Close() error                                       { return nil }
+
+func (m *legacyContextManager) Clear(_ context.Context, sessionKey string) error {
+	return m.clear(sessionKey)
+}
+func (m *legacyContextManager) Close() error { return m.close(nil) }
+
+func (m *legacyContextManager) scheduleSummary(ctx context.Context, s ContextSnapshot, work func(context.Context)) {
+	if _, loaded := m.background.LoadOrStore(s.ScopeKey, true); loaded {
+		return
+	}
+	tracked, done, err := m.begin(ctx, s.SessionKey)
+	if err != nil {
+		m.background.Delete(s.ScopeKey)
+		return
+	}
+	go func() {
+		defer done()
+		defer m.background.Delete(s.ScopeKey)
+		bounded, cancel := context.WithTimeout(tracked, 120*time.Second)
+		defer cancel()
+		work(bounded)
+	}()
+}
 
 type seahorseContextManager struct {
+	*contextWorkers
 	engine            *seahorse.Engine
 	options           config.SeahorseContextConfig
-	lifetime          context.Context
-	cancel            context.CancelFunc
-	mu                sync.Mutex
-	closing           bool
-	retainedProviders []providers.StatefulProvider
-	closed            chan struct{}
-	closeErr          error
-	nextOperation     uint64
-	operations        map[uint64]contextOperation
-	workers           sync.WaitGroup
 	compactionSlots   chan struct{}
 	conversationSlots [256]chan struct{}
 	background        sync.Map
 	errorText         func(error) string
-}
-type contextOperation struct {
-	key    string
-	cancel context.CancelFunc
 }
 type (
 	completionBudgetKey struct{}
@@ -139,7 +150,7 @@ func NewContextManager(
 		name = "seahorse"
 	}
 	if name == "legacy" {
-		return legacyContextManager{}, nil
+		return &legacyContextManager{contextWorkers: newContextWorkers()}, nil
 	}
 	if name != "seahorse" {
 		return nil, fmt.Errorf("unknown context_manager %q", name)
@@ -156,13 +167,9 @@ func NewContextManager(
 	if options.MaxConcurrentCompactions <= 0 {
 		options.MaxConcurrentCompactions = 2
 	}
-	lifetime, cancel := context.WithCancel(context.Background())
 	m := &seahorseContextManager{
+		contextWorkers:  newContextWorkers(),
 		options:         options,
-		lifetime:        lifetime,
-		cancel:          cancel,
-		closed:          make(chan struct{}),
-		operations:      map[uint64]contextOperation{},
 		compactionSlots: make(chan struct{}, options.MaxConcurrentCompactions),
 		errorText: func(err error) string {
 			if err == nil {
@@ -182,7 +189,7 @@ func NewContextManager(
 		m.complete,
 	)
 	if err != nil {
-		cancel()
+		m.cancel()
 		return nil, err
 	}
 	m.engine = engine
@@ -192,29 +199,14 @@ func NewContextManager(
 func (*seahorseContextManager) Name() string { return "seahorse" }
 
 func (m *seahorseContextManager) begin(ctx context.Context, s ContextSnapshot) (context.Context, func(), error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closing {
-		return nil, nil, fmt.Errorf("context manager is closed")
+	ctx, done, err := m.contextWorkers.begin(ctx, s.SessionKey)
+	if err != nil {
+		return nil, nil, err
 	}
-	ctx, cancel := context.WithCancel(ctx)
 	ctx = context.WithValue(ctx, contextRuntimeKey{}, s)
 	ctx = seahorse.WithCompletionModel(ctx, s.Model)
-	stop := context.AfterFunc(m.lifetime, cancel)
 	if s.Guard != nil {
 		ctx = seahorse.WithCommitGuard(ctx, s.Guard.CommitIfCurrent)
-	}
-	m.nextOperation++
-	id := m.nextOperation
-	m.operations[id] = contextOperation{key: s.SessionKey, cancel: cancel}
-	m.workers.Add(1)
-	done := func() {
-		stop()
-		cancel()
-		m.mu.Lock()
-		delete(m.operations, id)
-		m.mu.Unlock()
-		m.workers.Done()
 	}
 	return ctx, done, nil
 }
@@ -353,33 +345,11 @@ func (m *seahorseContextManager) complete(
 // Clear cancels operations belonging to the old conversation. Reset advances
 // its generation in ConversationStore; source graphs remain archived on disk.
 func (m *seahorseContextManager) Clear(_ context.Context, key string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, operation := range m.operations {
-		if operation.key == key {
-			operation.cancel()
-		}
-	}
-	return nil
+	return m.clear(key)
 }
 
 func (m *seahorseContextManager) Close() error {
-	m.mu.Lock()
-	if m.closing {
-		m.mu.Unlock()
-		<-m.closed
-		return m.closeErr
-	}
-	m.closing = true
-	m.cancel()
-	m.mu.Unlock()
-	m.workers.Wait()
-	m.closeErr = m.engine.Close()
-	for _, provider := range m.retainedProviders {
-		provider.Close()
-	}
-	close(m.closed)
-	return m.closeErr
+	return m.close(m.engine.Close)
 }
 
 func toSeahorseMessage(msg providers.Message, scope string, index int) seahorse.Message {
@@ -584,28 +554,4 @@ func (m *seahorseContextManager) scheduleCompact(ctx context.Context, s ContextS
 			)
 		}
 	}()
-}
-
-// Providers captured by earlier compactions remain usable until every worker
-// has joined, including when a command switches the agent's answer model.
-func (m *seahorseContextManager) retainProvider(provider providers.LLMProvider) {
-	stateful, ok := provider.(providers.StatefulProvider)
-	if !ok {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, existing := range m.retainedProviders {
-		if existing == stateful {
-			return
-		}
-	}
-	if m.closing {
-		m.mu.Unlock()
-		<-m.closed
-		stateful.Close()
-		m.mu.Lock()
-		return
-	}
-	m.retainedProviders = append(m.retainedProviders, stateful)
 }

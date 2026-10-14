@@ -274,7 +274,7 @@ func NewAgentInstance(
 
 	instance.ContextProvider = provider
 	ownedContextProvider := false
-	if name == "seahorse" && len(candidates) > 0 {
+	if (name == "seahorse" || name == "legacy") && len(candidates) > 0 {
 		needsClient := model != defaults.GetModelName()
 		if selected, ok := provider.(interface{ ModelConfigKey() string }); ok && selected.ModelConfigKey() != "" {
 			needsClient = selected.ModelConfigKey() != candidates[0].ConfigKey
@@ -299,7 +299,7 @@ func NewAgentInstance(
 		manager.errorText = func(err error) string { return safeErrorText(cfg, err) }
 	}
 	if ownedContextProvider {
-		if manager, ok := instance.ContextManager.(*seahorseContextManager); ok {
+		if manager, ok := instance.ContextManager.(contextProviderOwner); ok {
 			manager.retainProvider(instance.ContextProvider)
 		} else if stateful, ok := instance.ContextProvider.(providers.StatefulProvider); ok {
 			stateful.Close()

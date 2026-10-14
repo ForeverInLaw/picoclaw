@@ -28,6 +28,14 @@ Text beside tool calls or media, roles, tool IDs, thought signatures, response p
 
 A reset cancels that conversation's operations before advancing its durable generation. Persistence and summary publication use the existing generation gate; provider calls occur outside the gate. Earlier source graphs stay on disk but cannot enter active assembly or retrieval after reset. Shutdown and reload cancel and join owned operations before closing SQLite and retired providers.
 
+Explicit legacy selection uses the same worker admission, reset cancellation,
+shutdown join and provider-retention boundary. Its existing summary/truncation
+policy, three-attempt retry limit and 120-second timeout remain. Maintenance
+captures the owning agent's exact provider, resolved model and output settings;
+model switching retains captured clients until workers finish. Canceled work
+neither retries nor publishes a late summary, and reset does not wait for an
+unresponsive provider while holding the conversation generation gate.
+
 Canonical transcripts continue through the existing session store. Active compaction does not truncate that transcript, relocate archive/index/embedding data or change Saved facts. New Seahorse turns remain available after restarting with explicit legacy selection.
 
 The first use lazily imports the effective current generation's history and legacy summary, including summary-only conversations. It reads the session store's active view and never scans archived generation files. A legacy summary is labeled `kind="imported"`, with unknown source times; any retained source evidence is linked when available. Summary-only imports do not invent original messages.

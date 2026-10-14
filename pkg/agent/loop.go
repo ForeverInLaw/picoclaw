@@ -49,7 +49,6 @@ type AgentLoop struct {
 
 	// Runtime state
 	running        atomic.Bool
-	summarizing    sync.Map
 	fallback       *providers.FallbackChain
 	channelManager *channels.Manager
 	mediaStore     media.MediaStore
@@ -144,7 +143,6 @@ func NewAgentLoop(
 		registry:    registry,
 		state:       stateManager,
 		eventBus:    eventBus,
-		summarizing: sync.Map{},
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:    newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
@@ -3398,13 +3396,16 @@ func (al *AgentLoop) maybeSummarize(
 	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
 
 	if len(newHistory) > agent.SummarizeMessageThreshold || requestTokens > threshold {
-		summarizeKey := agent.ID + ":" + sessionKey
-		if _, loading := al.summarizing.LoadOrStore(summarizeKey, true); !loading {
-			go func() {
-				defer al.summarizing.Delete(summarizeKey)
+		if manager, ok := agent.ContextManager.(*legacyContextManager); ok {
+			summaryAgent := *agent
+			if agent.ContextProvider != nil {
+				summaryAgent.Provider = agent.ContextProvider
+			}
+			summaryAgent.Model = resolvedCandidateModel(agent.Candidates, agent.Model)
+			manager.scheduleSummary(ctx, snapshotContext(agent, sessionKey), func(workCtx context.Context) {
 				logger.Debug("Memory threshold reached. Optimizing conversation history...")
-				al.summarizeSession(agent, sessionKey, turnScope)
-			}()
+				al.summarizeSession(workCtx, &summaryAgent, sessionKey, turnScope)
+			})
 		}
 	}
 }
@@ -3590,9 +3591,15 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 }
 
 // summarizeSession summarizes the conversation history for a session.
-func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, turnScope turnEventScope) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
+func (al *AgentLoop) summarizeSession(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+	turnScope turnEventScope,
+) {
+	if ctx.Err() != nil {
+		return
+	}
 
 	history := agent.Sessions.GetHistory(sessionKey)
 	summary := agent.Sessions.GetSummary(sessionKey)
@@ -3667,6 +3674,10 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, t
 		finalSummary, _ = al.summarizeBatch(ctx, agent, validMessages, summary)
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
+
 	if omitted && finalSummary != "" {
 		finalSummary += "\n[Note: Some oversized messages were omitted from this summary for efficiency.]"
 	}
@@ -3728,6 +3739,9 @@ func (al *AgentLoop) retryLLMCall(
 	var err error
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		if canceled := ctx.Err(); canceled != nil {
+			return resp, canceled
+		}
 		al.activeRequests.Add(1)
 		resp, err = func() (*providers.LLMResponse, error) {
 			defer al.activeRequests.Done()
@@ -3743,12 +3757,17 @@ func (al *AgentLoop) retryLLMCall(
 				},
 			)
 		}()
+		if canceled := ctx.Err(); canceled != nil {
+			return resp, canceled
+		}
 
 		if err == nil && resp != nil && resp.Content != "" {
 			return resp, nil
 		}
 		if attempt < maxRetries-1 {
-			time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+			if waitErr := sleepWithContext(ctx, time.Duration(attempt+1)*100*time.Millisecond); waitErr != nil {
+				return resp, waitErr
+			}
 		}
 	}
 
@@ -3935,8 +3954,9 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
 
 			if oldProvider != nil && oldProvider != nextProvider {
-				if manager, ok := agent.ContextManager.(*seahorseContextManager); ok {
+				if manager, ok := agent.ContextManager.(contextProviderOwner); ok {
 					manager.retainProvider(oldProvider)
+					manager.retainProvider(nextProvider)
 				} else if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
 					stateful.Close()
 				}
