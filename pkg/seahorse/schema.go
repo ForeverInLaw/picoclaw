@@ -34,6 +34,8 @@ func runSchema(db *sql.DB) error {
 	}
 
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS context_imports (import_id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL, fingerprint TEXT NOT NULL, plan TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0, retained INTEGER NOT NULL DEFAULT 0, UNIQUE(conversation_id,fingerprint))`,
+		`CREATE TABLE IF NOT EXISTS context_checkpoints (conversation_id INTEGER PRIMARY KEY, import_id INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS conversations (
 			conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_key     TEXT NOT NULL UNIQUE,
@@ -172,6 +174,15 @@ func runSchema(db *sql.DB) error {
 	}
 	if err := ensureMessagesModelNameColumn(db); err != nil {
 		return err
+	}
+	hasRetained, err := tableHasColumn(db, "context_imports", "retained")
+	if err != nil {
+		return err
+	}
+	if !hasRetained {
+		if _, err := db.Exec("ALTER TABLE context_imports ADD COLUMN retained INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

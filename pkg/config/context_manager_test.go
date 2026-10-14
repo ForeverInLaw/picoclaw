@@ -25,3 +25,25 @@ func TestContextManagerSelectionRejectsInvalidEngineAndBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestContextManagerDefaultsToSeahorseAndRetainsExplicitLegacySelection(t *testing.T) {
+	if DefaultConfig().Agents.Defaults.ContextManager != "seahorse" {
+		t.Fatal("new configuration did not select Seahorse")
+	}
+	for _, tc := range []struct{ input, want string }{
+		{`{}`, "seahorse"},
+		{`{"agents":{"defaults":{"context_manager":"legacy"}}}`, "legacy"},
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(tc.input), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Agents.Defaults.ContextManager != tc.want {
+			t.Fatalf("loaded context manager=%q, want %q", cfg.Agents.Defaults.ContextManager, tc.want)
+		}
+	}
+}

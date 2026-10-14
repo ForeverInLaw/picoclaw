@@ -75,6 +75,7 @@ func newTestAgentLoop(
 				Model:             "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
+				ContextManager:    "legacy",
 			},
 		},
 	}

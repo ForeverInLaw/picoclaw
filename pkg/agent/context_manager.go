@@ -32,14 +32,16 @@ type ContextManager interface {
 }
 
 type ContextSnapshot struct {
-	SessionKey string
-	ScopeKey   string
-	Guard      session.ConversationTurn
-	History    []providers.Message
-	Summary    string
-	Provider   providers.LLMProvider
-	Model      string
-	Options    map[string]any
+	SessionKey           string
+	ScopeKey             string
+	Guard                session.ConversationTurn
+	History              []providers.Message
+	Summary              string
+	Provider             providers.LLMProvider
+	Model                string
+	Options              map[string]any
+	CanonicalFingerprint string
+	ReadError            error
 }
 
 type ContextAssembly struct {
@@ -51,8 +53,6 @@ func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 	snapshot := ContextSnapshot{
 		SessionKey: key,
 		ScopeKey:   key,
-		History:    agent.Sessions.GetHistory(key),
-		Summary:    agent.Sessions.GetSummary(key),
 		Provider:   agent.ContextProvider,
 		Model:      resolvedCandidateModel(agent.Candidates, agent.Model),
 		Options: map[string]any{
@@ -60,6 +60,16 @@ func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 			"max_tokens":       agent.MaxTokens,
 			"prompt_cache_key": "seahorse:" + agent.ID,
 		},
+	}
+	if reader, ok := agent.Sessions.(session.ContextReader); ok {
+		state, err := reader.ReadContext(key)
+		snapshot.History, snapshot.Summary, snapshot.ReadError = state.History, state.Summary, err
+		if err == nil {
+			snapshot.CanonicalFingerprint, snapshot.ReadError = state.Fingerprint()
+		}
+	} else {
+		snapshot.History = agent.Sessions.GetHistory(key)
+		snapshot.Summary = agent.Sessions.GetSummary(key)
 	}
 	if snapshot.Provider == nil {
 		snapshot.Provider = agent.Provider
@@ -80,7 +90,7 @@ type legacyContextManager struct{}
 
 func (legacyContextManager) Name() string { return "legacy" }
 func (legacyContextManager) Assemble(_ context.Context, s ContextSnapshot) (ContextAssembly, error) {
-	return ContextAssembly{History: s.History, Summary: s.Summary}, nil
+	return ContextAssembly{History: s.History, Summary: s.Summary}, s.ReadError
 }
 
 func (legacyContextManager) Ingest(ctx context.Context, snapshot ContextSnapshot) error { return nil }
@@ -124,7 +134,10 @@ func NewContextManager(
 	name string,
 	options config.SeahorseContextConfig,
 ) (ContextManager, error) {
-	if name == "" || name == "legacy" {
+	if name == "" {
+		name = "seahorse"
+	}
+	if name == "legacy" {
 		return legacyContextManager{}, nil
 	}
 	if name != "seahorse" {
@@ -200,6 +213,9 @@ func (m *seahorseContextManager) begin(ctx context.Context, s ContextSnapshot) (
 }
 
 func (m *seahorseContextManager) Ingest(ctx context.Context, s ContextSnapshot) error {
+	if s.ReadError != nil {
+		return fmt.Errorf("read canonical context: %w", s.ReadError)
+	}
 	ctx, done, err := m.begin(ctx, s)
 	if err != nil {
 		return err
@@ -212,7 +228,12 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, s ContextSnapshot) 
 		}
 		messages[i] = toSeahorseMessage(msg, s.ScopeKey, i)
 	}
-	return m.engine.SyncSources(ctx, s.ScopeKey, messages)
+	if guard, ok := s.Guard.(session.ContextTurn); ok && s.CanonicalFingerprint != "" {
+		ctx = seahorse.WithCommitGuard(ctx, func(operation func() error) (bool, error) {
+			return guard.CommitContextIfCurrent(s.SessionKey, s.CanonicalFingerprint, operation)
+		})
+	}
+	return m.engine.ReconcileCanonical(ctx, s.ScopeKey, messages, s.Summary)
 }
 
 func (m *seahorseContextManager) Assemble(ctx context.Context, s ContextSnapshot) (ContextAssembly, error) {
@@ -230,18 +251,12 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, s ContextSnapshot
 	if err != nil {
 		return ContextAssembly{}, err
 	}
-	result := ContextAssembly{Summary: s.Summary}
+	result := ContextAssembly{}
 	if assembled != nil {
 		for _, msg := range assembled.Messages {
 			result.History = append(result.History, fromSeahorseMessage(msg))
 		}
-		if assembled.Summary != "" {
-			activeSummary := scopedContextReferences(assembled.Summary, s.ScopeKey)
-			if result.Summary != "" {
-				result.Summary += "\n\n"
-			}
-			result.Summary += activeSummary
-		}
+		result.Summary = scopedContextReferences(assembled.Summary, s.ScopeKey)
 	}
 	if s.Guard != nil {
 		current, guardErr := s.Guard.IsCurrent()
@@ -453,6 +468,9 @@ func contextManagerSettings(
 			options = *agent.ContextManagerConfig
 		}
 	}
+	if name == "" {
+		name = "seahorse"
+	}
 	return name, options
 }
 
@@ -478,7 +496,7 @@ func contextHistory(ctx context.Context, agent *AgentInstance, key string, prote
 		return ContextAssembly{}, agent.ContextManagerError
 	}
 	if agent.ContextManager == nil {
-		return ContextAssembly{History: append(s.History, tail...), Summary: s.Summary}, nil
+		return ContextAssembly{History: append(s.History, tail...), Summary: s.Summary}, s.ReadError
 	}
 	result, err := agent.ContextManager.Assemble(ctx, s)
 	result.History = append(result.History, tail...)
@@ -546,7 +564,12 @@ func (m *seahorseContextManager) scheduleCompact(ctx context.Context, s ContextS
 	go func() {
 		defer done()
 		defer m.background.Delete(s.ScopeKey)
-		if err := m.Compact(tracked, s, budget); err != nil && !errors.Is(err, context.Canceled) {
+		if err := m.Compact(
+			tracked,
+			s,
+			budget,
+		); err != nil && !errors.Is(err, context.Canceled) &&
+			!errors.Is(err, session.ErrContextChanged) {
 			logger.WarnCF(
 				"agent",
 				"Context compaction failed",
