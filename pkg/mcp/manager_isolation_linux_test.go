@@ -87,7 +87,7 @@ func TestIsolationMCPServerProcess(t *testing.T) {
 				"setsid",
 				"sh",
 				"-c",
-				"i=0; while :; do i=$((i+1)); printf '%s' \"$i\" > heartbeat; sleep 0.03; done",
+				"i=0; while :; do i=$((i+1)); printf '%s\\n' \"$i\" >> heartbeat; sleep 0.03; done",
 			)
 			if err := child.Start(); err != nil {
 				return nil, err
@@ -305,7 +305,7 @@ func TestLocalMCPStartupTimeoutStopsItsProcessNamespace(t *testing.T) {
 				Command: "/bin/sh",
 				Args: []string{
 					"-c",
-					"setsid sh -c 'i=0; while :; do i=$((i+1)); printf \"%s\" \"$i\" > heartbeat; sleep 0.03; done' & wait",
+					"setsid sh -c 'i=0; while :; do i=$((i+1)); printf \"%s\\n\" \"$i\" >> heartbeat; sleep 0.03; done' & wait",
 				},
 			},
 		},
@@ -361,13 +361,23 @@ func TestLocalMCPCloseInterruptsInflightCallAndStopsDescendants(t *testing.T) {
 
 func assertHeartbeatStopped(t *testing.T, heartbeat string) {
 	t.Helper()
-	time.Sleep(80 * time.Millisecond)
-	before, err := os.ReadFile(heartbeat)
+	previous, err := os.ReadFile(heartbeat)
 	require.NoError(t, err)
-	time.Sleep(100 * time.Millisecond)
-	after, err := os.ReadFile(heartbeat)
-	require.NoError(t, err)
-	require.Equal(t, string(before), string(after), "detached child survived termination")
+	require.NotEmpty(t, previous, "detached child never started")
+	stableSamples := 0
+	// Kernel namespace teardown may complete after the launcher exits. Require
+	// a stable append-only heartbeat instead of sampling a partially written file.
+	require.Eventually(t, func() bool {
+		time.Sleep(100 * time.Millisecond)
+		current, err := os.ReadFile(heartbeat)
+		if err == nil && string(previous) == string(current) {
+			stableSamples++
+		} else {
+			stableSamples = 0
+		}
+		previous = current
+		return stableSamples >= 2
+	}, time.Second, 10*time.Millisecond, "detached child survived termination")
 }
 
 func TestLocalMCPIsolationFiltersEnvironmentAndKeepsDeclaredVariables(t *testing.T) {
