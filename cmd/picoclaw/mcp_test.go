@@ -2,13 +2,22 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func executeMCP(t *testing.T, args ...string) (string, error) {
@@ -21,6 +30,76 @@ func executeMCP(t *testing.T, args ...string) (string, error) {
 	cmd.SetArgs(append([]string{"mcp"}, args...))
 	err := cmd.ExecuteContext(t.Context())
 	return output.String(), err
+}
+
+func TestMCPCLIReadOnlyProbesAndRedactedDiagnostics(t *testing.T) {
+	var initializes, lists, calls atomic.Int32
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "server http-secret", Version: "1"}, nil)
+	server.AddTool(&sdkmcp.Tool{
+		Name: "read_echo", Description: "Read evidence http-secret query-secret",
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}, "required": []string{"path"}},
+	}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		calls.Add(1)
+		return &sdkmcp.CallToolResult{}, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, &sdkmcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			require.Equal(t, "Bearer http-secret", r.Header.Get("Authorization"))
+			require.Equal(t, "declared-value", r.Header.Get("X-Declared"))
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			var request struct {
+				Method string `json:"method"`
+			}
+			require.NoError(t, json.Unmarshal(body, &request))
+			if request.Method == "initialize" {
+				initializes.Add(1)
+			}
+			if request.Method == "tools/list" {
+				lists.Add(1)
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer endpoint.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv(config.EnvConfig, path)
+	cfg := config.DefaultConfig()
+	cfg.Tools.FilterSensitiveData = false
+	cfg.Isolation.Enabled = true
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"remote":   {Enabled: true, Type: "streamable-http", URL: strings.Replace(endpoint.URL, "http://", "http://user-secret:password-secret@", 1) + "?token=query-secret", Headers: map[string]string{"Authorization": "Bearer http-secret", "X-Declared": "declared-value"}},
+		"disabled": {Enabled: false, Command: "npx", Args: []string{"argument-secret"}, Env: map[string]string{"TOKEN": "env-secret"}},
+	}
+	require.NoError(t, config.SaveConfig(path, cfg))
+	logPath := filepath.Join(dir, "diagnostics.log")
+	level := logger.GetLevel()
+	logger.SetLevel(logger.DEBUG)
+	require.NoError(t, logger.EnableFileLogging(logPath))
+	defer func() { logger.DisableFileLogging(); logger.SetLevel(level) }()
+	for _, args := range [][]string{{"list"}, {"show", "disabled"}, {"list", "--status"}, {"show", "remote"}, {"test", "remote"}} {
+		output, err := executeMCP(t, args...)
+		require.NoError(t, err, output)
+		for _, secret := range []string{"http-secret", "user-secret", "password-secret", "query-secret", "argument-secret", "env-secret"} {
+			require.NotContains(t, output, secret)
+		}
+		if args[0] == "show" && args[1] == "remote" {
+			require.Contains(t, output, "read_echo")
+			require.Contains(t, output, "path")
+		}
+	}
+	require.Equal(t, int32(3), initializes.Load())
+	require.Equal(t, int32(3), lists.Load())
+	require.Zero(t, calls.Load(), "probes must never invoke tools")
+	logs, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(logs), "http-secret")
+	require.NotContains(t, string(logs), "query-secret")
+	_, err = executeMCP(t, "test", "missing")
+	require.ErrorContains(t, err, "not found")
 }
 
 func TestMCPCLIAddsStdioServerThroughExistingV3Persistence(t *testing.T) {

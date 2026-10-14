@@ -119,7 +119,14 @@ func (c *ServerConnection) stopProcess() {
 }
 
 // Manager manages multiple MCP server connections
+// ManagerOptions controls operator probes without changing normal runtime logging.
+type ManagerOptions struct {
+	QuietDiagnostics bool
+	RequireToolsList bool
+}
+
 type Manager struct {
+	options     ManagerOptions
 	servers     map[string]*ServerConnection
 	mu          sync.RWMutex
 	closed      atomic.Bool    // changed from bool to atomic.Bool to avoid TOCTOU race
@@ -131,9 +138,14 @@ type Manager struct {
 }
 
 // NewManager creates a new MCP manager
-func NewManager() *Manager {
+func NewManager(options ...ManagerOptions) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
+	var selected ManagerOptions
+	if len(options) > 0 {
+		selected = options[0]
+	}
 	return &Manager{
+		options:  selected,
 		servers:  make(map[string]*ServerConnection),
 		lifetime: ctx,
 		cancel:   cancel,
@@ -160,16 +172,16 @@ func (m *Manager) LoadFromMCPConfig(
 	}
 	m.mu.Unlock()
 	if !mcpCfg.Enabled {
-		logger.InfoCF("mcp", "MCP integration is disabled", nil)
+		m.log(logger.InfoCF, "mcp", "MCP integration is disabled", nil)
 		return nil
 	}
 
 	if len(mcpCfg.Servers) == 0 {
-		logger.InfoCF("mcp", "No MCP servers configured", nil)
+		m.log(logger.InfoCF, "mcp", "No MCP servers configured", nil)
 		return nil
 	}
 
-	logger.InfoCF("mcp", "Initializing MCP servers",
+	m.log(logger.InfoCF, "mcp", "Initializing MCP servers",
 		map[string]any{
 			"count": len(mcpCfg.Servers),
 		})
@@ -180,7 +192,7 @@ func (m *Manager) LoadFromMCPConfig(
 
 	for name, serverCfg := range mcpCfg.Servers {
 		if !serverCfg.Enabled {
-			logger.DebugCF("mcp", "Skipping disabled server",
+			m.log(logger.DebugCF, "mcp", "Skipping disabled server",
 				map[string]any{
 					"server": name,
 				})
@@ -200,7 +212,7 @@ func (m *Manager) LoadFromMCPConfig(
 						serverCfg.EnvFile,
 						name,
 					)
-					logger.ErrorCF("mcp", "Invalid MCP server configuration",
+					m.log(logger.ErrorCF, "mcp", "Invalid MCP server configuration",
 						map[string]any{
 							"server":   name,
 							"env_file": serverCfg.EnvFile,
@@ -213,7 +225,7 @@ func (m *Manager) LoadFromMCPConfig(
 			}
 
 			if err := m.ConnectServer(ctx, name, serverCfg); err != nil {
-				logger.ErrorCF("mcp", "Failed to connect to MCP server",
+				m.log(logger.ErrorCF, "mcp", "Failed to connect to MCP server",
 					map[string]any{
 						"server": name,
 						"error":  err.Error(),
@@ -236,7 +248,7 @@ func (m *Manager) LoadFromMCPConfig(
 
 	// If all enabled servers failed to connect, return aggregated error
 	if enabledCount > 0 && connectedCount == 0 {
-		logger.ErrorCF("mcp", "All MCP servers failed to connect",
+		m.log(logger.ErrorCF, "mcp", "All MCP servers failed to connect",
 			map[string]any{
 				"failed": len(allErrors),
 				"total":  enabledCount,
@@ -245,7 +257,7 @@ func (m *Manager) LoadFromMCPConfig(
 	}
 
 	if len(allErrors) > 0 {
-		logger.WarnCF("mcp", "Some MCP servers failed to connect",
+		m.log(logger.WarnCF, "mcp", "Some MCP servers failed to connect",
 			map[string]any{
 				"failed":    len(allErrors),
 				"connected": connectedCount,
@@ -254,7 +266,7 @@ func (m *Manager) LoadFromMCPConfig(
 		// Don't fail completely if some servers successfully connected
 	}
 
-	logger.InfoCF("mcp", "MCP server initialization complete",
+	m.log(logger.InfoCF, "mcp", "MCP server initialization complete",
 		map[string]any{
 			"connected": connectedCount,
 			"total":     enabledCount,
@@ -284,7 +296,7 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 	stopStartup := context.AfterFunc(m.lifetime, cancelStartup)
 	defer func() { stopStartup(); cancelStartup() }()
 	ctx = startupCtx
-	logger.InfoCF("mcp", "Connecting to MCP server",
+	m.log(logger.InfoCF, "mcp", "Connecting to MCP server",
 		map[string]any{
 			"server":     name,
 			"command":    cfg.Command,
@@ -310,25 +322,14 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 			_ = isolation.Terminate(command)
 		}
 	}()
-	transportType := cfg.Type
-
-	// Auto-detect: if URL is provided, use SSE; if command is provided, use stdio
-	if transportType == "" {
-		if cfg.URL != "" {
-			transportType = "sse"
-		} else if cfg.Command != "" {
-			transportType = "stdio"
-		} else {
-			return fmt.Errorf("either URL or command must be provided")
-		}
-	}
+	transportType := config.EffectiveMCPTransportType(cfg)
 
 	switch transportType {
 	case "sse", "http":
 		if cfg.URL == "" {
 			return fmt.Errorf("URL is required for SSE/HTTP transport")
 		}
-		logger.DebugCF("mcp", "Using SSE/HTTP transport",
+		m.log(logger.DebugCF, "mcp", "Using SSE/HTTP transport",
 			map[string]any{
 				"server": name,
 				"url":    cfg.URL,
@@ -347,7 +348,7 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 					headers: cfg.Headers,
 				},
 			}
-			logger.DebugCF("mcp", "Added custom HTTP headers",
+			m.log(logger.DebugCF, "mcp", "Added custom HTTP headers",
 				map[string]any{
 					"server":       name,
 					"header_count": len(cfg.Headers),
@@ -359,7 +360,7 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 		if cfg.Command == "" {
 			return fmt.Errorf("command is required for stdio transport")
 		}
-		logger.DebugCF("mcp", "Using stdio transport",
+		m.log(logger.DebugCF, "mcp", "Using stdio transport",
 			map[string]any{
 				"server":  name,
 				"command": cfg.Command,
@@ -377,7 +378,7 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 			for k, v := range envVars {
 				envMap[k] = v
 			}
-			logger.DebugCF("mcp", "Loaded environment variables from file",
+			m.log(logger.DebugCF, "mcp", "Loaded environment variables from file",
 				map[string]any{
 					"server":    name,
 					"envFile":   cfg.EnvFile,
@@ -433,7 +434,7 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 
 	// Get server info
 	initResult := session.InitializeResult()
-	logger.InfoCF("mcp", "Connected to MCP server",
+	m.log(logger.InfoCF, "mcp", "Connected to MCP server",
 		map[string]any{
 			"server":        name,
 			"serverName":    initResult.ServerInfo.Name,
@@ -446,7 +447,15 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 	if initResult.Capabilities.Tools != nil {
 		for tool, err := range session.Tools(ctx, nil) {
 			if err != nil {
-				logger.WarnCF("mcp", "Error listing tool",
+				if m.options.RequireToolsList {
+					if command != nil {
+						cancelProcess()
+						_ = isolation.Terminate(command)
+					}
+					_ = session.Close()
+					return fmt.Errorf("failed to list MCP tools: %w", err)
+				}
+				m.log(logger.WarnCF, "mcp", "Error listing tool",
 					map[string]any{
 						"server": name,
 						"error":  err.Error(),
@@ -456,7 +465,7 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 			tools = append(tools, tool)
 		}
 
-		logger.InfoCF("mcp", "Listed tools from MCP server",
+		m.log(logger.InfoCF, "mcp", "Listed tools from MCP server",
 			map[string]any{
 				"server":    name,
 				"toolCount": len(tools),
@@ -641,7 +650,7 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	logger.InfoCF("mcp", "Closing all MCP server connections",
+	m.log(logger.InfoCF, "mcp", "Closing all MCP server connections",
 		map[string]any{
 			"count": len(m.servers),
 		})
@@ -654,7 +663,7 @@ func (m *Manager) Close() error {
 			if conn.command != nil && (errors.As(err, &exitErr) || errors.Is(err, context.Canceled)) {
 				continue // Forced termination is expected for owned local processes.
 			}
-			logger.ErrorCF("mcp", "Failed to close server connection",
+			m.log(logger.ErrorCF, "mcp", "Failed to close server connection",
 				map[string]any{
 					"server": name,
 					"error":  err.Error(),
@@ -684,4 +693,10 @@ func (m *Manager) GetAllTools() map[string][]*mcp.Tool {
 		}
 	}
 	return result
+}
+
+func (m *Manager) log(write func(string, string, map[string]any), component, message string, fields map[string]any) {
+	if !m.options.QuietDiagnostics {
+		write(component, message, fields)
+	}
 }

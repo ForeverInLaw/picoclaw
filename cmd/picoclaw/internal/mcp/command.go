@@ -9,5 +9,6 @@ func NewMCPCommand() *cobra.Command {
 	}
 	cmd.SetFlagErrorFunc(func(*cobra.Command, error) error { return invalidFlags() })
 	cmd.AddCommand(newAddCommand(false), newAddCommand(true), newRemoveCommand())
+	cmd.AddCommand(newListCommand(), newProbeCommand("show"), newProbeCommand("test"))
 	return cmd
 }
