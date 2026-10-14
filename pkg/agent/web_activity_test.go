@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/channels/pico"
@@ -19,7 +21,14 @@ import (
 
 type webActivityProvider struct{ scriptedToolProvider }
 
-func (p *webActivityProvider) ChatStreamContent(ctx context.Context, messages []providers.Message, defs []providers.ToolDefinition, model string, opts map[string]any, update func(providers.StreamContent)) (*providers.LLMResponse, error) {
+func (p *webActivityProvider) ChatStreamContent(
+	ctx context.Context,
+	messages []providers.Message,
+	defs []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+	update func(providers.StreamContent),
+) (*providers.LLMResponse, error) {
 	update(providers.StreamContent{Phase: providers.ContentPhaseReasoning, Content: "Provider-supplied thought"})
 	response, err := p.Chat(ctx, messages, defs, model, opts)
 	response.ReasoningContent = "Provider-supplied thought"
@@ -31,7 +40,13 @@ func (p *webActivityProvider) ChatStreamContent(ctx context.Context, messages []
 
 type webNonStreamingProvider struct{ scriptedToolProvider }
 
-func (p *webNonStreamingProvider) Chat(ctx context.Context, messages []providers.Message, defs []providers.ToolDefinition, model string, opts map[string]any) (*providers.LLMResponse, error) {
+func (p *webNonStreamingProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	defs []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
 	response, err := p.scriptedToolProvider.Chat(ctx, messages, defs, model, opts)
 	response.Reasoning = "Non-stream supplied thought"
 	return response, err
@@ -44,17 +59,31 @@ func TestWebChatNonStreamingThoughtAndToolErrorKeepAnswerSeparate(t *testing.T) 
 	defer mb.Close()
 	provider := &webNonStreamingProvider{}
 	al.GetRegistry().GetDefaultAgent().Provider = provider
-	al.RegisterTool(&activityContractTool{result: tools.ErrorResult("PRIVATE_LLM_TOOL_DETAIL").WithActivity("Public tool failure")})
+	al.RegisterTool(
+		&activityContractTool{result: tools.ErrorResult("PRIVATE_LLM_TOOL_DETAIL").WithActivity("Public tool failure")},
+	)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- al.Run(ctx) }()
 	defer func() { cancel(); <-done }()
-	publishIncoming(t, mb, bus.InboundMessage{Channel: "pico", SenderID: "pico:pico-user", ChatID: "pico:non-stream", MessageID: "request-error", Content: "run tool", Peer: bus.Peer{Kind: "direct", ID: "pico:non-stream"}})
+	publishIncoming(
+		t,
+		mb,
+		bus.InboundMessage{
+			Channel:   "pico",
+			SenderID:  "pico:pico-user",
+			ChatID:    "pico:non-stream",
+			MessageID: "request-error",
+			Content:   "run tool",
+			Peer:      bus.Peer{Kind: "direct", ID: "pico:non-stream"},
+		},
+	)
 	var sawThought, sawError bool
 	for {
 		select {
 		case event := <-mb.OutboundChan():
-			if strings.Contains(event.Content, "PRIVATE_") || event.Progress != nil && strings.Contains(event.Progress.Result+event.Progress.Error, "PRIVATE_") {
+			if strings.Contains(event.Content, "PRIVATE_") ||
+				event.Progress != nil && strings.Contains(event.Progress.Result+event.Progress.Error, "PRIVATE_") {
 				t.Fatal("LLM-only tool output reached web activity")
 			}
 			if event.Progress == nil {
@@ -67,7 +96,8 @@ func TestWebChatNonStreamingThoughtAndToolErrorKeepAnswerSeparate(t *testing.T) 
 				sawThought = event.Progress.Result == "Non-stream supplied thought"
 			}
 			if event.Progress.Kind == bus.ProgressTool && event.Progress.State == bus.ProgressFailed {
-				sawError = event.Progress.Result == "Public tool failure" && event.Progress.Error == "Public tool failure"
+				sawError = event.Progress.Result == "Public tool failure" &&
+					event.Progress.Error == "Public tool failure"
 			}
 		case <-time.After(3 * time.Second):
 			t.Fatal("web turn did not complete")
@@ -76,11 +106,27 @@ func TestWebChatNonStreamingThoughtAndToolErrorKeepAnswerSeparate(t *testing.T) 
 }
 
 func TestWebChatStreamsThoughtToolActivityAndOneFinal(t *testing.T) {
+	for _, name := range []string{"pico", "dashboard-main"} {
+		t.Run(name, func(t *testing.T) { runWebChatActivityScenario(t, name) })
+	}
+}
+
+func runWebChatActivityScenario(t *testing.T, channelName string) {
 	al, cfg, mb, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 	defer al.Close()
 	defer mb.Close()
 	cfg.Channels.Pico = config.PicoConfig{Enabled: true, Token: "web-activity-token"}
+	if channelName != "pico" {
+		cfg.Channels.Pico.Enabled = false
+		cfg.ChannelList = config.ChannelList{
+			channelName: &config.Channel{
+				Enabled:  true,
+				Type:     "pico",
+				Settings: json.RawMessage(`{"token":"web-activity-token"}`),
+			},
+		}
+	}
 	manager, err := channels.NewManager(cfg, mb, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +136,7 @@ func TestWebChatStreamsThoughtToolActivityAndOneFinal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.StopAll(t.Context())
-	channel, ok := manager.GetChannel("pico")
+	channel, ok := manager.GetChannel(channelName)
 	if !ok {
 		t.Fatal("Pico not registered")
 	}
@@ -103,13 +149,22 @@ func TestWebChatStreamsThoughtToolActivityAndOneFinal(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- al.Run(ctx) }()
 	defer func() { cancel(); <-done }()
-	conn, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/pico/ws?session_id=activity", http.Header{"Authorization": []string{"Bearer web-activity-token"}})
+	conn, response, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"/pico/ws?session_id=activity",
+		http.Header{"Authorization": []string{"Bearer web-activity-token"}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	response.Body.Close()
 	defer conn.Close()
-	if err = conn.WriteJSON(pico.PicoMessage{Type: pico.TypeMessageSend, ID: "web-request-1", Payload: map[string]any{"content": "run tool"}}); err != nil {
+	if err = conn.WriteJSON(
+		pico.PicoMessage{
+			Type:    pico.TypeMessageSend,
+			ID:      "web-request-1",
+			Payload: map[string]any{"content": "run tool"},
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -141,7 +196,10 @@ func TestWebChatStreamsThoughtToolActivityAndOneFinal(t *testing.T) {
 		t.Fatalf("thought=%q", thought)
 	}
 	conn.Close()
-	reconnected, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/pico/ws?session_id=activity", http.Header{"Authorization": []string{"Bearer web-activity-token"}})
+	reconnected, response, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"/pico/ws?session_id=activity",
+		http.Header{"Authorization": []string{"Bearer web-activity-token"}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

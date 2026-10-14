@@ -499,7 +499,6 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	}
 
 	chatID := "pico:" + sessionID
-	c.replay.begin(sessionID, msg.ID)
 	senderID := "pico-user"
 
 	peer := bus.Peer{Kind: "direct", ID: "pico:" + sessionID}
@@ -524,6 +523,10 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	if !c.IsAllowedSender(sender) {
 		return
 	}
+	if msg.ID == "" {
+		msg.ID = uuid.NewString()
+	}
+	c.replay.recordRequest(sessionID, msg.ID)
 
 	c.HandleMessage(c.ctx, peer, msg.ID, senderID, chatID, content, nil, metadata, sender)
 }

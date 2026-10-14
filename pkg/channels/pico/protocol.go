@@ -32,8 +32,10 @@ type PicoMessage struct {
 
 // newMessage creates a PicoMessage with the given type and payload.
 func newMessage(msgType string, payload map[string]any) PicoMessage {
+	id, _ := payload["message_id"].(string)
 	return PicoMessage{
 		Type:      msgType,
+		ID:        id,
 		Timestamp: time.Now().UnixMilli(),
 		Payload:   payload,
 	}

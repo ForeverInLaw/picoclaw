@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 )
@@ -16,8 +17,10 @@ func (c *PicoChannel) BeginStream(ctx context.Context, chatID string) (channels.
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
-	return &picoStreamer{channel: c, chatID: chatID, previewID: uuid.NewString(),
-		deliveryCtx: bus.EnsureDeliveryID(ctx), replyTo: bus.StreamReplyTo(ctx)}, nil
+	return &picoStreamer{
+		channel: c, chatID: chatID, previewID: uuid.NewString(),
+		deliveryCtx: bus.EnsureDeliveryID(ctx), replyTo: bus.StreamReplyTo(ctx),
+	}, nil
 }
 
 type picoStreamer struct {
@@ -74,6 +77,9 @@ func (s *picoStreamer) Cancel(ctx context.Context) {
 	}
 	s.finished = true
 	if s.started {
-		_ = s.channel.broadcastToSession(s.chatID, newMessage(TypeMessageDelete, map[string]any{"message_id": s.previewID, "reply_to_message_id": s.replyTo}))
+		_ = s.channel.broadcastToSession(
+			s.chatID,
+			newMessage(TypeMessageDelete, map[string]any{"message_id": s.previewID, "reply_to_message_id": s.replyTo}),
+		)
 	}
 }

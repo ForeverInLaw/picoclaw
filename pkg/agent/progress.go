@@ -36,10 +36,16 @@ func (al *AgentLoop) webActivityEnabled(ts *turnState) bool {
 			return ok && web.SupportsReasoningProgress()
 		}
 	}
-	return ts.channel == "pico"
+	return al.cfg.IsChannelType(ts.channel, "pico")
 }
 
-func (al *AgentLoop) publishWebReasoning(ctx context.Context, ts *turnState, actionID string, state bus.ProgressState, content string) {
+func (al *AgentLoop) publishWebReasoning(
+	ctx context.Context,
+	ts *turnState,
+	actionID string,
+	state bus.ProgressState,
+	content string,
+) {
 	if content == "" || !al.webActivityEnabled(ts) {
 		return
 	}

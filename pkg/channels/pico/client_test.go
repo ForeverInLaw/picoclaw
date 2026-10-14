@@ -99,6 +99,49 @@ func wsURL(httpURL string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http")
 }
 
+func TestClientReceivesOnlyFinalAnswerFromStreamingServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for _, message := range []PicoMessage{
+			{Type: TypeMessageCreate, Payload: map[string]any{"content": "preview", "final": false}},
+			{Type: TypeMessageCreate, Payload: map[string]any{"content": "private thought", "thought": true}},
+			{Type: TypeMessageCreate, ID: "final-1", Payload: map[string]any{"content": "public answer", "final": true}},
+		} {
+			if err := conn.WriteJSON(message); err != nil {
+				return
+			}
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	channel, err := NewPicoClientChannel(config.PicoClientConfig{URL: wsURL(server.URL), SessionID: "client-final"}, mb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	defer channel.Stop(t.Context())
+	select {
+	case message := <-mb.InboundChan():
+		if message.Content != "public answer" || message.MessageID != "final-1" {
+			t.Fatalf("non-answer reached client agent: %+v", message)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("final not forwarded")
+	}
+}
+
 func TestClientChannel_ConnectAndSend(t *testing.T) {
 	srv := testServer(t, "test-token")
 	defer srv.Close()

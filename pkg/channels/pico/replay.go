@@ -1,8 +1,9 @@
 package pico
 
 import (
-	"github.com/sipeed/picoclaw/pkg/bus"
 	"sync"
+
+	"github.com/sipeed/picoclaw/pkg/bus"
 )
 
 const (
@@ -20,8 +21,12 @@ type picoReplay struct {
 }
 
 type picoSessionReplay struct {
-	requestID string
-	messages  []PicoMessage
+	requests       map[string]uint64
+	requestOrder   []string
+	sequence       uint64
+	activeSequence uint64
+	activeRequest  string
+	messages       []PicoMessage
 }
 
 func (p *picoReplay) session(id string) *picoSessionReplay {
@@ -41,16 +46,28 @@ func (p *picoReplay) session(id string) *picoSessionReplay {
 	return session
 }
 
-func (p *picoReplay) begin(sessionID, requestID string) {
+func (p *picoReplay) recordRequest(sessionID, requestID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	session := p.session(sessionID)
-	session.requestID = requestID
-	session.messages = nil
+	if session.requests == nil {
+		session.requests = make(map[string]uint64)
+	}
+	if _, exists := session.requests[requestID]; exists {
+		return
+	}
+	session.sequence++
+	session.requests[requestID] = session.sequence
+	session.requestOrder = append(session.requestOrder, requestID)
+	if len(session.requestOrder) > maxReplayMessages {
+		delete(session.requests, session.requestOrder[0])
+		session.requestOrder = session.requestOrder[1:]
+	}
 }
 
 func (p *picoReplay) retain(sessionID string, event PicoMessage) {
-	if event.Type != TypeMessageCreate && event.Type != TypeMessageUpdate && event.Type != TypeMessageDelete && event.Type != TypeActivityUpdate {
+	if event.Type != TypeMessageCreate && event.Type != TypeMessageUpdate && event.Type != TypeMessageDelete &&
+		event.Type != TypeActivityUpdate {
 		return
 	}
 	id, _ := event.Payload["message_id"].(string)
@@ -59,11 +76,27 @@ func (p *picoReplay) retain(sessionID string, event PicoMessage) {
 	}
 	session := p.session(sessionID)
 	requestID, _ := event.Payload["reply_to_message_id"].(string)
-	if requestID != "" && session.requestID != "" && requestID != session.requestID {
-		return
+	if requestID != "" {
+		sequence, known := session.requests[requestID]
+		if requestID == session.activeRequest {
+			sequence, known = session.activeSequence, true
+		}
+		if !known && len(session.requests) > 0 {
+			return
+		}
+		if !known {
+			sequence = session.activeSequence + 1
+		}
+		if sequence < session.activeSequence {
+			return
+		}
+		if sequence > session.activeSequence {
+			session.activeSequence, session.activeRequest = sequence, requestID
+			session.messages = nil
+		}
 	}
 	replacedID, _ := event.Payload["replace_message_id"].(string)
-	kept := session.messages[:0]
+	kept := make([]PicoMessage, 0, len(session.messages)+1)
 	for _, previous := range session.messages {
 		previousID, _ := previous.Payload["message_id"].(string)
 		if previousID == replacedID || previousID == id && event.Type == TypeMessageDelete {
@@ -75,7 +108,8 @@ func (p *picoReplay) retain(sessionID string, event PicoMessage) {
 			if previous.Payload["final"] == true && event.Payload["final"] != true {
 				return
 			}
-			if (previous.Payload["state"] == bus.ProgressCompleted || previous.Payload["state"] == bus.ProgressFailed) && event.Payload["state"] == bus.ProgressStarted {
+			if (previous.Payload["state"] == bus.ProgressCompleted || previous.Payload["state"] == bus.ProgressFailed) &&
+				event.Payload["state"] == bus.ProgressStarted {
 				return
 			}
 			previous.Payload = mergePayload(previous.Payload, event.Payload)
@@ -90,8 +124,15 @@ func (p *picoReplay) retain(sessionID string, event PicoMessage) {
 		}
 		kept = append(kept, event)
 	}
-	if len(kept) > maxReplayMessages {
-		kept = kept[len(kept)-maxReplayMessages:]
+	for len(kept) > maxReplayMessages {
+		discard := 0
+		for index, candidate := range kept {
+			if candidate.Payload["final"] != true {
+				discard = index
+				break
+			}
+		}
+		kept = append(kept[:discard], kept[discard+1:]...)
 	}
 	session.messages = kept
 }
