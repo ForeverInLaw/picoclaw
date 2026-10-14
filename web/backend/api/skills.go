@@ -129,8 +129,12 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 	content = normalizeImportedSkillContent(content, skillName)
 
 	workspace := cfg.WorkspacePath()
-	workspaceSkillWriteMu.Lock()
-	defer workspaceSkillWriteMu.Unlock()
+	unlock, err := skills.LockWorkspaceSkills(r.Context(), workspace)
+	if err != nil {
+		http.Error(w, "Cannot access workspace skills.", http.StatusInternalServerError)
+		return
+	}
+	defer unlock()
 	skillDir := filepath.Join(workspace, "skills", skillName)
 	skillFile := filepath.Join(skillDir, "SKILL.md")
 	if _, err := os.Stat(skillDir); err == nil {
@@ -164,13 +168,18 @@ func (h *Handler) handleImportSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
-	workspaceSkillWriteMu.Lock()
-	defer workspaceSkillWriteMu.Unlock()
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	unlock, err := skills.LockWorkspaceSkills(r.Context(), cfg.WorkspacePath())
+	if err != nil {
+		http.Error(w, "Cannot access workspace skills.", http.StatusInternalServerError)
+		return
+	}
+	defer unlock()
 
 	loader := newSkillsLoader(cfg.WorkspacePath())
 	name := r.PathValue("name")

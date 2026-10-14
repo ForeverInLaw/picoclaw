@@ -3,11 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
-	"sync"
 
-	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
@@ -18,7 +15,6 @@ import (
 type InstallSkillTool struct {
 	registryMgr *skills.RegistryManager
 	workspace   string
-	mu          sync.Mutex
 }
 
 // NewInstallSkillTool creates a new InstallSkillTool.
@@ -28,7 +24,6 @@ func NewInstallSkillTool(registryMgr *skills.RegistryManager, workspace string) 
 	return &InstallSkillTool{
 		registryMgr: registryMgr,
 		workspace:   workspace,
-		mu:          sync.Mutex{},
 	}
 }
 
@@ -66,11 +61,6 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 }
 
 func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	// Install lock to prevent concurrent directory operations.
-	// Ideally this should be done at a `slug` level, currently, its at a `workspace` level.
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
 	// Validate slug
 	slug, _ := args["slug"].(string)
 	if err := utils.ValidateSkillIdentifier(slug); err != nil {
@@ -86,75 +76,12 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	version, _ := args["version"].(string)
 	force, _ := args["force"].(bool)
 
-	// Check if already installed.
-	skillsDir := filepath.Join(t.workspace, "skills")
-	targetDir := filepath.Join(skillsDir, slug)
-
-	if !force {
-		if _, err := os.Stat(targetDir); err == nil {
-			return ErrorResult(
-				fmt.Sprintf("skill %q already installed at %s. Use force=true to reinstall.", slug, targetDir),
-			)
-		}
-	} else {
-		// Force: remove existing if present.
-		os.RemoveAll(targetDir)
-	}
-
-	// Resolve which registry to use.
 	registry := t.registryMgr.GetRegistry(registryName)
-	if registry == nil {
-		return ErrorResult(fmt.Sprintf("registry %q not found", registryName))
-	}
-
-	// Ensure skills directory exists.
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", err))
-	}
-
-	// Download and install (handles metadata, version resolution, extraction).
-	result, err := registry.DownloadAndInstall(ctx, slug, version, targetDir)
+	result, err := skills.InstallRegistrySkill(ctx, t.workspace, registry, slug, version, force)
 	if err != nil {
-		// Clean up partial install.
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove partial install",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
 		return ErrorResult(fmt.Sprintf("failed to install %q: %v", slug, err))
 	}
-
-	// Moderation: block malware.
-	if result.IsMalwareBlocked {
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove partial install",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
-		return ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", slug))
-	}
-
-	// Write origin metadata.
-	if err := skills.WriteOriginMetadata(targetDir, registry.Name(), slug, result.Version); err != nil {
-		logger.ErrorCF("tool", "Failed to write origin metadata",
-			map[string]any{
-				"tool":     "install_skill",
-				"error":    err.Error(),
-				"target":   targetDir,
-				"registry": registry.Name(),
-				"slug":     slug,
-				"version":  result.Version,
-			})
-		_ = err
-	}
+	targetDir := filepath.Join(t.workspace, "skills", slug)
 
 	// Build result with moderation warning if suspicious.
 	var output string

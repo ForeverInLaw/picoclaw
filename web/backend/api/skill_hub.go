@@ -2,12 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/skills"
@@ -15,8 +15,6 @@ import (
 )
 
 const maxHubSearchResults = 200
-
-var workspaceSkillWriteMu sync.Mutex
 
 type hubSearchItem struct {
 	skills.SearchResult
@@ -158,66 +156,32 @@ func (h *Handler) handleSkillHubInstall(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Registry is not enabled.", http.StatusBadRequest)
 		return
 	}
-	workspaceSkillWriteMu.Lock()
-	defer workspaceSkillWriteMu.Unlock()
-	if r.Context().Err() != nil {
-		return
-	}
-	root := filepath.Join(cfg.WorkspacePath(), "skills")
-	target := filepath.Join(root, request.Slug)
-	if _, err := os.Lstat(target); err == nil {
-		http.Error(w, "Skill is already installed. Remove it first to install another version.", http.StatusConflict)
-		return
-	} else if !os.IsNotExist(err) {
-		http.Error(w, "Install target is unavailable.", http.StatusInternalServerError)
-		return
-	}
-	if info, err := os.Lstat(root); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		http.Error(w, "Skill directory must not be a symbolic link.", http.StatusForbidden)
-		return
-	}
-	if os.MkdirAll(root, 0o755) != nil {
-		http.Error(w, "Cannot create the skill directory. Check workspace permissions.", http.StatusInternalServerError)
-		return
-	}
-	stage, err := os.MkdirTemp(root, ".hub-install-*")
+	result, err := skills.InstallRegistrySkill(
+		r.Context(),
+		cfg.WorkspacePath(),
+		registry,
+		request.Slug,
+		request.Version,
+		false,
+	)
 	if err != nil {
-		http.Error(w, "Cannot prepare the skill install. Check workspace permissions.", http.StatusInternalServerError)
-		return
-	}
-	defer os.RemoveAll(stage)
-	stagedTarget := filepath.Join(stage, "skills", request.Slug)
-	result, err := registry.DownloadAndInstall(r.Context(), request.Slug, request.Version, stagedTarget)
-	if err != nil {
-		http.Error(
-			w,
-			"Skill download or archive validation failed. Try again or choose another skill.",
-			http.StatusBadGateway,
-		)
-		return
-	}
-	if result.IsMalwareBlocked {
-		http.Error(w, "This skill is flagged as malicious and cannot be installed.", http.StatusForbidden)
-		return
-	}
-	stagedSkills := skills.NewSkillsLoader(stage, "", "").ListSkills()
-	if len(stagedSkills) != 1 {
-		http.Error(w, "Registry archive does not contain a valid SKILL.md.", http.StatusBadGateway)
-		return
-	}
-	if r.Context().Err() != nil {
-		return
-	}
-	if skills.WriteOriginMetadata(stagedTarget, registry.Name(), request.Slug, result.Version) != nil {
-		http.Error(w, "Cannot record skill provenance. Check workspace permissions.", http.StatusInternalServerError)
-		return
-	}
-	if os.Rename(stagedTarget, target) != nil {
-		http.Error(
-			w,
-			"Cannot activate the skill. Check workspace permissions and existing installs.",
-			http.StatusConflict,
-		)
+		if r.Context().Err() != nil {
+			return
+		}
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, skills.ErrSkillAlreadyInstalled), errors.Is(err, skills.ErrSkillActivation):
+			status = http.StatusConflict
+		case errors.Is(err, skills.ErrSkillUnsafeDirectory), errors.Is(err, skills.ErrSkillMalware):
+			status = http.StatusForbidden
+		case errors.Is(err, skills.ErrSkillDownload), errors.Is(err, skills.ErrSkillInvalidArchive):
+			status = http.StatusBadGateway
+		}
+		message := err.Error()
+		if errors.Is(err, skills.ErrSkillAlreadyInstalled) {
+			message = "Skill is already installed. Remove it first to install another version."
+		}
+		http.Error(w, message, status)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
