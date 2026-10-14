@@ -116,7 +116,11 @@ func TestForcedCompactionRetainsCompleteSourceGraphThroughCondensationAndReopen(
 	if len(expanded.Messages) != len(source) {
 		t.Fatalf("bounded retrieval lost or duplicated originals: %d of %d", len(expanded.Messages), len(source))
 	}
-	if err = engine.SyncSources(t.Context(), "agent:main:foreign", []seahorse.Message{{Role: "user", Content: "separate"}}); err != nil {
+	if err = engine.SyncSources(
+		t.Context(),
+		"agent:main:foreign",
+		[]seahorse.Message{{Role: "user", Content: "separate"}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = engine.GetRetrieval().ExpandSources(t.Context(), "agent:main:foreign", ids); err == nil {
