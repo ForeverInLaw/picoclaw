@@ -13,6 +13,7 @@ import (
 type SummaryKind string
 
 const (
+	SummaryKindImported  SummaryKind = "imported"
 	SummaryKindLeaf      SummaryKind = "leaf"
 	SummaryKindCondensed SummaryKind = "condensed"
 )

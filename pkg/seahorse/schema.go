@@ -34,6 +34,8 @@ func runSchema(db *sql.DB) error {
 	}
 
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS context_imports (import_id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL, fingerprint TEXT NOT NULL, plan TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0, UNIQUE(conversation_id,fingerprint))`,
+		`CREATE TABLE IF NOT EXISTS context_checkpoints (conversation_id INTEGER PRIMARY KEY, import_id INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS conversations (
 			conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_key     TEXT NOT NULL UNIQUE,
