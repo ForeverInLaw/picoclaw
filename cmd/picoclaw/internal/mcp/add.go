@@ -94,7 +94,11 @@ func newAddCommand(update bool) *cobra.Command {
 			}
 			server.Command, server.Args, server.URL = expandCommandPath(args[1]), args[2:], ""
 			if localPath := strings.ContainsAny(server.Command, `/\`); localPath {
-				info, statErr := os.Stat(server.Command)
+				commandPath := server.Command
+				if cfg.Isolation.Enabled && !filepath.IsAbs(commandPath) {
+					commandPath = filepath.Join(cfg.WorkspacePath(), commandPath)
+				}
+				info, statErr := os.Stat(commandPath)
 				if statErr != nil || info.IsDir() {
 					return fmt.Errorf("local command does not exist or is not a file")
 				}

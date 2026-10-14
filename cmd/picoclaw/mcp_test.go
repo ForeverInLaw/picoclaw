@@ -35,6 +35,29 @@ func executeMCP(t *testing.T, args ...string) (string, error) {
 	return output.String(), err
 }
 
+func TestMCPCLIValidatesRelativeCommandInIsolationWorkspace(t *testing.T) {
+	cliDir, workspace := t.TempDir(), t.TempDir()
+	t.Chdir(cliDir)
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv(config.EnvConfig, path)
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Isolation.Enabled = true
+	require.NoError(t, config.SaveConfig(path, cfg))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "workspace-server"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(cliDir, "cli-server"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	_, err := executeMCP(t, "add", "workspace", "./workspace-server")
+	require.NoError(t, err, "relative isolated commands run from the workspace")
+	_, err = executeMCP(t, "add", "outside", "./cli-server")
+	require.Error(t, err, "a command present only in the CLI directory cannot run in isolation")
+	cfg, err = config.LoadConfig(path)
+	require.NoError(t, err)
+	cfg.Isolation.Enabled = false
+	require.NoError(t, config.SaveConfig(path, cfg))
+	_, err = executeMCP(t, "add", "ordinary", "./cli-server")
+	require.NoError(t, err, "ordinary processes retain the CLI working directory")
+}
+
 func TestMCPCLIStdioProcess(t *testing.T) {
 	if os.Getenv("CLI_FAKE_STDIO") != "1" {
 		return
