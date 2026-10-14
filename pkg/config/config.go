@@ -335,30 +335,30 @@ type ToolFeedbackConfig struct {
 }
 
 type AgentDefaults struct {
-	ContextManager            string                `json:"context_manager,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
+	ContextManager            string                `json:"context_manager,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
 	ContextManagerConfig      SeahorseContextConfig `json:"context_manager_config,omitempty"`
-	Workspace                 string                `json:"workspace"                       env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool                  `json:"restrict_to_workspace"           env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool                  `json:"allow_read_outside_workspace"    env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string                `json:"provider"                        env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string                `json:"model_name"                      env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
-	Model                     string                `json:"model,omitempty"                 env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
+	Workspace                 string                `json:"workspace"                        env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace       bool                  `json:"restrict_to_workspace"            env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool                  `json:"allow_read_outside_workspace"     env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                  string                `json:"provider"                         env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                 string                `json:"model_name"                       env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
+	Model                     string                `json:"model,omitempty"                  env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
 	ModelFallbacks            []string              `json:"model_fallbacks,omitempty"`
-	ImageModel                string                `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModel                string                `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string              `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int                   `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int                   `json:"context_window,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64              `json:"temperature,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int                   `json:"max_tool_iterations"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                   `json:"summarize_message_threshold"     env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int                   `json:"summarize_token_percent"         env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int                   `json:"max_media_size,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	MaxTokens                 int                   `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow             int                   `json:"context_window,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature               *float64              `json:"temperature,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations         int                   `json:"max_tool_iterations"              env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold int                   `json:"summarize_message_threshold"      env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent     int                   `json:"summarize_token_percent"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize              int                   `json:"max_media_size,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	MemoryIndex               MemoryIndexConfig     `json:"memory_index,omitempty"`
 	Routing                   *RoutingConfig        `json:"routing,omitempty"`
-	SteeringMode              string                `json:"steering_mode,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
-	SubTurn                   SubTurnConfig         `json:"subturn"                                                                                     envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	SteeringMode              string                `json:"steering_mode,omitempty"          env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
+	SubTurn                   SubTurnConfig         `json:"subturn"                                                                                      envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
 	ToolFeedback              ToolFeedbackConfig    `json:"tool_feedback,omitempty"`
-	LogLevel                  string                `json:"log_level,omitempty"             env:"PICOCLAW_LOG_LEVEL"`
+	LogLevel                  string                `json:"log_level,omitempty"              env:"PICOCLAW_LOG_LEVEL"`
 }
 
 type SeahorseContextConfig struct {
@@ -1264,6 +1264,9 @@ func LoadConfig(path string) (*Config, error) {
 	if err := cfg.ValidateModelList(); err != nil {
 		return nil, err
 	}
+	if err := cfg.ValidateContextManagers(); err != nil {
+		return nil, err
+	}
 	if err := cfg.ValidateChannels(); err != nil {
 		return nil, err
 	}
@@ -1679,4 +1682,42 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 	default:
 		return true
 	}
+}
+
+// ValidateContextManagers keeps selection errors visible before any agent
+// storage opens. Zero bounds use the engine defaults; negative values fail.
+func (c *Config) ValidateContextManagers() error {
+	validate := func(path, name string, options SeahorseContextConfig) error {
+		switch strings.TrimSpace(name) {
+		case "", "legacy", "seahorse":
+		default:
+			return fmt.Errorf("%s.context_manager: unknown engine %q (choose legacy or seahorse)", path, name)
+		}
+		for _, bound := range []struct {
+			name  string
+			value int
+		}{{"compact_timeout_seconds", options.CompactTimeoutSeconds}, {"max_compact_iterations", options.MaxCompactIterations}, {"max_completion_attempts", options.MaxCompletionAttempts}, {"max_concurrent_compactions", options.MaxConcurrentCompactions}} {
+			if bound.value < 0 {
+				return fmt.Errorf("%s.context_manager_config.%s: must be nonnegative", path, bound.name)
+			}
+		}
+		return nil
+	}
+	if err := validate(
+		"agents.defaults",
+		c.Agents.Defaults.ContextManager,
+		c.Agents.Defaults.ContextManagerConfig,
+	); err != nil {
+		return err
+	}
+	for i, agent := range c.Agents.List {
+		options := c.Agents.Defaults.ContextManagerConfig
+		if agent.ContextManagerConfig != nil {
+			options = *agent.ContextManagerConfig
+		}
+		if err := validate(fmt.Sprintf("agents.list[%d]", i), agent.ContextManager, options); err != nil {
+			return err
+		}
+	}
+	return nil
 }

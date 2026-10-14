@@ -15,3 +15,9 @@ The start of a new conversation without the previous dialog or its notes being a
 
 **Saved fact**:
 Information intentionally retained beyond a single conversation, distinct from the conversation's messages and temporary notes.
+
+**Active context**:
+The current conversation evidence prepared for the assistant's next answer, including recent messages and summaries of earlier messages.
+
+**Conversation summary**:
+A condensed account of conversation messages whose original evidence remains available for explicit recovery.

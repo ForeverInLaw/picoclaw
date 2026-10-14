@@ -1,0 +1,3 @@
+# Retain canonical transcripts with scoped context compaction
+
+Active context uses a per-agent ContextManager and source-linked Seahorse compaction while canonical conversation transcripts remain in the existing session store. This keeps original evidence and continuity available when selecting legacy context management; replacing session persistence with the summary graph would make engine changes and recovery depend on that graph. Seahorse storage belongs to its agent, and retrieval and publication use the captured conversation generation, so a reset makes earlier source graphs unavailable to automatic context and active retrieval. Archive access, Saved facts and memory indexing keep their existing boundaries.
