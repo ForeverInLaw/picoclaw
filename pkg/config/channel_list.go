@@ -329,8 +329,6 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	} else if c.ChannelList == nil {
 		c.ChannelList = c.EffectiveChannelList()
 	} else {
-		// Populate only default-named adapters. Named instances are constructed
-		// through ChannelConfig and cannot take another instance's credentials.
 		for name, ch := range c.ChannelList {
 			if ch == nil {
 				continue
@@ -339,23 +337,11 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 			if ch.Type == "" {
 				ch.Type = name
 			}
-			if name != ch.Type {
-				continue
-			}
-			if ch.Type == "whatsapp_native" && c.ChannelList["whatsapp"] != nil {
-				continue
-			}
-			flat, err := ch.flatJSON()
-			if err != nil {
-				return err
-			}
-			wrapped, _ := json.Marshal(map[string]json.RawMessage{legacyChannelKey(ch.Type): flat})
-			if err := json.Unmarshal(wrapped, &c.Channels); err != nil {
-				return err
-			}
 		}
 	}
-	c.legacyChannelBaseline = legacyChannelsJSON(c.Channels)
+	if err := c.refreshLegacyChannels(); err != nil {
+		return err
+	}
 	c.Version = CurrentVersion
 	return c.ValidateChannels()
 }
