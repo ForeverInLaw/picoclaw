@@ -37,6 +37,13 @@ func newEditCommand() *cobra.Command {
 			if err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("could not read original configuration")
 			}
+			originalExists := err == nil
+			securityPath := filepath.Join(filepath.Dir(path), config.SecurityConfigFile)
+			security, securityErr := os.ReadFile(securityPath)
+			if securityErr != nil && !os.IsNotExist(securityErr) {
+				return fmt.Errorf("could not read original security settings")
+			}
+			securityExists := securityErr == nil
 			dir, err := os.MkdirTemp("", "picoclaw-mcp-edit-")
 			if err != nil {
 				return fmt.Errorf("could not create secure editor temporary directory")
@@ -62,7 +69,12 @@ func newEditCommand() *cobra.Command {
 			if readErr != nil && !os.IsNotExist(readErr) {
 				return fmt.Errorf("could not recheck original configuration")
 			}
-			if !bytes.Equal(current, original) {
+			currentSecurity, securityErr := os.ReadFile(securityPath)
+			if securityErr != nil && !os.IsNotExist(securityErr) {
+				return fmt.Errorf("could not recheck original security settings")
+			}
+			if !bytes.Equal(current, original) || originalExists != (readErr == nil) ||
+				!bytes.Equal(currentSecurity, security) || securityExists != (securityErr == nil) {
 				return fmt.Errorf("configuration changed while editing; original unchanged")
 			}
 			if err = saveConfig(edited); err != nil {

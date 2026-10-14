@@ -52,7 +52,14 @@ func newListCommand() *cobra.Command {
 						state = fmt.Sprintf("ok (%d tools)", len(tools))
 					}
 				}
-				cmd.Printf("%s\t%s\t%s\t%s\tdeferred=%t\n", name, config.EffectiveMCPTransportType(server), safeTarget(server), state, effectiveDeferred(server, cfg.Tools.MCP.Discovery.Enabled))
+				cmd.Printf(
+					"%s\t%s\t%s\t%s\tdeferred=%t\n",
+					name,
+					config.EffectiveMCPTransportType(server),
+					safeTarget(server),
+					state,
+					effectiveDeferred(server, cfg.Tools.MCP.Discovery.Enabled),
+				)
 			}
 			return nil
 		},
@@ -81,8 +88,21 @@ func newProbeCommand(kind string) *cobra.Command {
 			}
 			redact := serverRedactor(server, cfg.WorkspacePath())
 			if kind == "show" {
-				cmd.Printf("Server: %s\nTransport: %s\nTarget: %s\nEnabled: %t\nDeferred: %t (explicit: %t)\n", name, config.EffectiveMCPTransportType(server), safeTarget(server), server.Enabled, effectiveDeferred(server, cfg.Tools.MCP.Discovery.Enabled), server.Deferred != nil)
-				cmd.Printf("Env file: %s\nEnv keys: %s\nHeader names: %s\n", redact.Replace(server.EnvFile), strings.Join(sortedKeys(server.Env), ", "), strings.Join(sortedKeys(server.Headers), ", "))
+				cmd.Printf(
+					"Server: %s\nTransport: %s\nTarget: %s\nEnabled: %t\nDeferred: %t (explicit: %t)\n",
+					name,
+					config.EffectiveMCPTransportType(server),
+					safeTarget(server),
+					server.Enabled,
+					effectiveDeferred(server, cfg.Tools.MCP.Discovery.Enabled),
+					server.Deferred != nil,
+				)
+				cmd.Printf(
+					"Env file: %s\nEnv keys: %s\nHeader names: %s\n",
+					redact.Replace(server.EnvFile),
+					strings.Join(sortedKeys(server.Env), ", "),
+					strings.Join(sortedKeys(server.Headers), ", "),
+				)
 				if !server.Enabled {
 					return nil
 				}
@@ -95,7 +115,11 @@ func newProbeCommand(kind string) *cobra.Command {
 			if kind == "show" {
 				for _, tool := range tools {
 					schema, _ := json.MarshalIndent(tool.InputSchema, "", "  ")
-					cmd.Print(redact.Replace(fmt.Sprintf("Tool: %s\n%s\nParameters: %s\n", tool.Name, tool.Description, schema)))
+					cmd.Print(
+						redact.Replace(
+							fmt.Sprintf("Tool: %s\n%s\nParameters: %s\n", tool.Name, tool.Description, schema),
+						),
+					)
 				}
 			}
 			return nil
@@ -111,7 +135,9 @@ func newProbeCommand(kind string) *cobra.Command {
 func probe(ctx context.Context, cfg *config.Config, name string, timeout time.Duration) ([]*sdkmcp.Tool, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	manager := picomcp.NewManager(picomcp.ManagerOptions{QuietDiagnostics: true, RequireToolsList: true})
+	manager := picomcp.NewManager(
+		picomcp.ManagerOptions{QuietDiagnostics: true, RequireToolsList: true, HTTPTimeout: timeout},
+	)
 	defer manager.Close()
 	server := cfg.Tools.MCP.Servers[name]
 	server.Enabled = true
@@ -122,7 +148,10 @@ func probe(ctx context.Context, cfg *config.Config, name string, timeout time.Du
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("MCP server %q probe canceled or timed out: %w", name, ctx.Err())
 		}
-		return nil, fmt.Errorf("MCP server %q connection or tools list failed; check endpoint, transport, headers, env_file and isolation settings", name)
+		return nil, fmt.Errorf(
+			"MCP server %q connection or tools list failed; check endpoint, transport, headers, env_file and isolation settings",
+			name,
+		)
 	}
 	connection, ok := manager.GetServer(name)
 	if !ok {
@@ -156,7 +185,7 @@ func safeTarget(server config.MCPServerConfig) string {
 		return "<invalid URL>"
 	}
 	u.User, u.RawQuery, u.Fragment = nil, "", ""
-	return u.String()
+	return serverRedactor(server).Replace(u.String())
 }
 
 func serverRedactor(server config.MCPServerConfig, workspace ...string) *strings.Replacer {

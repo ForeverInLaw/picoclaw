@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -123,6 +124,7 @@ func (c *ServerConnection) stopProcess() {
 type ManagerOptions struct {
 	QuietDiagnostics bool
 	RequireToolsList bool
+	HTTPTimeout      time.Duration
 }
 
 type Manager struct {
@@ -340,9 +342,10 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 		}
 
 		// Add custom headers if provided
-		if len(cfg.Headers) > 0 {
+		if len(cfg.Headers) > 0 || m.options.HTTPTimeout > 0 {
 			// Create a custom HTTP client with header-injecting transport
 			sseTransport.HTTPClient = &http.Client{
+				Timeout: m.options.HTTPTimeout,
 				Transport: &headerTransport{
 					base:    http.DefaultTransport,
 					headers: cfg.Headers,
@@ -369,7 +372,12 @@ func (m *Manager) connectServer(ctx context.Context, name string, cfg config.MCP
 		if envErr != nil {
 			return fmt.Errorf("failed to load declared environment: %w", envErr)
 		}
-		m.log(logger.DebugCF, "mcp", "Loaded declared environment", map[string]any{"server": name, "var_count": len(envMap)})
+		m.log(
+			logger.DebugCF,
+			"mcp",
+			"Loaded declared environment",
+			map[string]any{"server": name, "var_count": len(envMap)},
+		)
 
 		m.mu.RLock()
 		options := m.launch

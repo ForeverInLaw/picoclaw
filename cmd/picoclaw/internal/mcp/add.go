@@ -133,7 +133,9 @@ func newAddCommand(update bool) *cobra.Command {
 		if cfg.Tools.MCP.Servers == nil {
 			cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{}
 		}
-		cfg.Tools.MCP.Enabled = true
+		if (!exists || flags.Changed("enabled")) && server.Enabled {
+			cfg.Tools.MCP.Enabled = true
+		}
 		cfg.Tools.MCP.Servers[name] = server
 		if err = saveConfig(cfg); err != nil {
 			return err
