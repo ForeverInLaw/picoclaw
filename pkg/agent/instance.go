@@ -306,6 +306,9 @@ func NewAgentInstance(
 	if instance.ContextManagerError == nil {
 		instance.ContextManager, instance.ContextManagerError = NewContextManager(instance, name, options)
 	}
+	if manager, ok := instance.ContextManager.(*seahorseContextManager); ok {
+		manager.errorText = func(err error) string { return safeErrorText(cfg, err) }
+	}
 	if ownedContextProvider {
 		if manager, ok := instance.ContextManager.(*seahorseContextManager); ok {
 			manager.retainProvider(instance.ContextProvider)

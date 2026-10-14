@@ -1705,7 +1705,8 @@ func (al *AgentLoop) runAgentLoop(
 	ctx context.Context,
 	agent *AgentInstance,
 	opts processOptions,
-) (string, error) {
+) (response string, err error) {
+	defer func() { err = al.publicError(err) }()
 	captured, resetAt, err := captureConversationAgent(agent, opts.SessionKey)
 	if err != nil {
 		return "", err
@@ -1735,7 +1736,7 @@ func (al *AgentLoop) runAgentLoop(
 			logger.WarnCF(
 				"agent",
 				"Failed to record last channel",
-				map[string]any{"error": recordErr.Error()},
+				map[string]any{"error": al.safeErrorText(recordErr)},
 			)
 		}
 	}
@@ -2401,7 +2402,7 @@ turnLoop:
 			callMessages = prepared
 			protectedStart -= dropped
 			if !fits {
-				err = fmt.Errorf("assembled request exceeds configured context window: estimated %d tokens including output reserve, limit %d; reduce the current input, instructions, tools or output limit", estimateRequestTokens(callMessages, providerToolDefs, outputReserve), ts.agent.ContextWindow)
+				err = &contextBudgetError{estimated: estimateRequestTokens(callMessages, providerToolDefs, outputReserve), limit: ts.agent.ContextWindow}
 				break
 			}
 			if dropped > 0 {
@@ -2476,7 +2477,7 @@ turnLoop:
 					"agent",
 					"Context window error detected, attempting compression",
 					map[string]any{
-						"error": err.Error(),
+						"error": al.safeErrorText(publicProviderError(err)),
 						"retry": retry,
 					},
 				)
@@ -2535,12 +2536,13 @@ turnLoop:
 
 		if err != nil {
 			turnStatus = TurnEndStatusError
+			publicErr := publicProviderError(err)
 			al.emitEvent(
 				EventKindError,
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
 					Stage:   "llm",
-					Message: al.safeErrorText(err),
+					Message: al.safeErrorText(publicErr),
 				},
 			)
 			logger.ErrorCF("agent", "LLM call failed",
@@ -2548,9 +2550,9 @@ turnLoop:
 					"agent_id":  ts.agent.ID,
 					"iteration": iteration,
 					"model":     llmModel,
-					"error":     al.safeErrorText(err),
+					"error":     al.safeErrorText(publicErr),
 				})
-			return turnResult{}, fmt.Errorf("LLM call failed after retries: %w", err)
+			return turnResult{}, publicErr
 		}
 
 		if al.hooks != nil {
@@ -3207,7 +3209,7 @@ turnLoop:
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
 					Stage:   "session_save",
-					Message: err.Error(),
+					Message: al.safeErrorText(err),
 				},
 			)
 			return turnResult{}, err
@@ -3251,7 +3253,7 @@ func (al *AgentLoop) abortTurn(ts *turnState) (turnResult, error) {
 				ts.eventMeta("abortTurn", "turn.error"),
 				ErrorPayload{
 					Stage:   "session_restore",
-					Message: err.Error(),
+					Message: al.safeErrorText(err),
 				},
 			)
 			return turnResult{}, err
@@ -3381,7 +3383,7 @@ func (al *AgentLoop) maybeSummarize(
 			logger.WarnCF(
 				"agent",
 				"Cannot capture conversation for summarization",
-				map[string]any{"error": err.Error()},
+				map[string]any{"error": al.safeErrorText(err)},
 			)
 			return
 		}
@@ -3394,7 +3396,11 @@ func (al *AgentLoop) maybeSummarize(
 		if requestTokens > agent.ContextWindow*agent.SummarizeTokenPercent/100 {
 			assembled, err := manager.Assemble(ctx, s)
 			if err != nil {
-				logger.WarnCF("agent", "Cannot prepare context compaction", map[string]any{"error": err.Error()})
+				logger.WarnCF(
+					"agent",
+					"Cannot prepare context compaction",
+					map[string]any{"error": al.safeErrorText(err)},
+				)
 				return
 			}
 			contributors := max(0, requestTokens-estimateTokens(assembled.History))
