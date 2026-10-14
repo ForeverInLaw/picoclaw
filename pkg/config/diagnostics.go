@@ -342,6 +342,14 @@ func collectUnknownJSONFields(raw any, targetType reflect.Type, path string) []s
 				}
 			}
 			fieldType, exists := fieldMap[key]
+			if !exists {
+				for name, candidate := range fieldMap {
+					if strings.EqualFold(name, key) {
+						fieldType, exists = candidate, true
+						break
+					}
+				}
+			}
 			fieldPath := appendJSONPath(path, key)
 			if !exists {
 				issues = append(issues, fieldPath)

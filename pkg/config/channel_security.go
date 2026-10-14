@@ -254,6 +254,9 @@ func saveExistingSecurityConfig(path string, cfg *Config) error {
 	}
 	sec.ChannelList = map[string]ChannelSecurityEntry{}
 	for name, ch := range cfg.EffectiveChannelList() {
+		if len(ch.Settings) == 0 {
+			continue
+		}
 		var raw map[string]any
 		if decodeErr := json.Unmarshal(ch.Settings, &raw); decodeErr != nil {
 			return decodeErr
