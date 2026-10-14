@@ -137,8 +137,11 @@ func TestStreamingFallbackCancelsFailedPreviewAndStartsFreshStream(t *testing.T)
 
 func TestCompatibilityAnswerStreamsBeforeProviderReturnsAfterTools(t *testing.T) {
 	for _, destination := range []struct{ channel, chatID string }{
-		{"telegram", "42"}, {"telegram", "-42"}, {"telegram", "-42/7"},
-		{"telegram", "inline:guest-answer"}, {"discord", "42"},
+		{"telegram", "42"},
+		{"telegram", "-42"},
+		{"telegram", "-42/7"},
+		{"telegram", "inline:guest-answer"},
+		{"discord", "42"},
 	} {
 		t.Run(destination.channel+"/"+destination.chatID, func(t *testing.T) {
 			al, _, mb, _, cleanup := newTestAgentLoop(t)
@@ -148,7 +151,11 @@ func TestCompatibilityAnswerStreamsBeforeProviderReturnsAfterTools(t *testing.T)
 			p := &answerPreviewProbeProvider{
 				answerScriptProvider: answerScriptProvider{
 					responses: []*providers.LLMResponse{
-						{ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "mock_custom", Arguments: map[string]any{"task": "ping"}}}},
+						{
+							ToolCalls: []providers.ToolCall{
+								{ID: "call-1", Name: "mock_custom", Arguments: map[string]any{"task": "ping"}},
+							},
+						},
 						{Content: "The answer"},
 					},
 					snapshots: [][]string{nil, {"The", "The answer"}},

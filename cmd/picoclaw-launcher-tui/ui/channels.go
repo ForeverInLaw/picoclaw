@@ -159,7 +159,7 @@ func (a *App) showChannelEditForm(configPath, channelName string, existing map[s
 				updated[k] = true
 			} else if val == "false" {
 				updated[k] = false
-			} else if num, err := strconv.Atoi(val); err == nil {
+			} else if num, parseErr := strconv.Atoi(val); parseErr == nil {
 				updated[k] = num
 			} else {
 				updated[k] = val

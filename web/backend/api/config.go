@@ -52,7 +52,7 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var cfg config.Config
-	if err := json.Unmarshal(body, &cfg); err != nil {
+	if err = json.Unmarshal(body, &cfg); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}

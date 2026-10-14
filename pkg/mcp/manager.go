@@ -119,7 +119,6 @@ func (c *ServerConnection) stopProcess() {
 	}
 }
 
-// Manager manages multiple MCP server connections
 // ManagerOptions controls operator probes without changing normal runtime logging.
 type ManagerOptions struct {
 	QuietDiagnostics bool
@@ -127,6 +126,7 @@ type ManagerOptions struct {
 	HTTPTimeout      time.Duration
 }
 
+// Manager manages multiple MCP server connections.
 type Manager struct {
 	options     ManagerOptions
 	servers     map[string]*ServerConnection
