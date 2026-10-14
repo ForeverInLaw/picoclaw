@@ -234,13 +234,15 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 }
 
 type AgentConfig struct {
-	ID        string            `json:"id"`
-	Default   bool              `json:"default,omitempty"`
-	Name      string            `json:"name,omitempty"`
-	Workspace string            `json:"workspace,omitempty"`
-	Model     *AgentModelConfig `json:"model,omitempty"`
-	Skills    []string          `json:"skills,omitempty"`
-	Subagents *SubagentsConfig  `json:"subagents,omitempty"`
+	ContextManager       string                 `json:"context_manager,omitempty"`
+	ContextManagerConfig *SeahorseContextConfig `json:"context_manager_config,omitempty"`
+	ID                   string                 `json:"id"`
+	Default              bool                   `json:"default,omitempty"`
+	Name                 string                 `json:"name,omitempty"`
+	Workspace            string                 `json:"workspace,omitempty"`
+	Model                *AgentModelConfig      `json:"model,omitempty"`
+	Skills               []string               `json:"skills,omitempty"`
+	Subagents            *SubagentsConfig       `json:"subagents,omitempty"`
 }
 
 type SubagentsConfig struct {
@@ -333,28 +335,37 @@ type ToolFeedbackConfig struct {
 }
 
 type AgentDefaults struct {
-	Workspace                 string             `json:"workspace"                       env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
-	RestrictToWorkspace       bool               `json:"restrict_to_workspace"           env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool               `json:"allow_read_outside_workspace"    env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string             `json:"provider"                        env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string             `json:"model_name"                      env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
-	Model                     string             `json:"model,omitempty"                 env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
-	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
-	ImageModel                string             `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int                `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int                `json:"context_window,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64           `json:"temperature,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int                `json:"max_tool_iterations"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeMessageThreshold int                `json:"summarize_message_threshold"     env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
-	SummarizeTokenPercent     int                `json:"summarize_token_percent"         env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int                `json:"max_media_size,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	MemoryIndex               MemoryIndexConfig  `json:"memory_index,omitempty"`
-	Routing                   *RoutingConfig     `json:"routing,omitempty"`
-	SteeringMode              string             `json:"steering_mode,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
-	SubTurn                   SubTurnConfig      `json:"subturn"                                                                                     envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
-	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
-	LogLevel                  string             `json:"log_level,omitempty"             env:"PICOCLAW_LOG_LEVEL"`
+	ContextManager            string                `json:"context_manager,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
+	ContextManagerConfig      SeahorseContextConfig `json:"context_manager_config,omitempty"`
+	Workspace                 string                `json:"workspace"                       env:"PICOCLAW_AGENTS_DEFAULTS_WORKSPACE"`
+	RestrictToWorkspace       bool                  `json:"restrict_to_workspace"           env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool                  `json:"allow_read_outside_workspace"    env:"PICOCLAW_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	Provider                  string                `json:"provider"                        env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
+	ModelName                 string                `json:"model_name"                      env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
+	Model                     string                `json:"model,omitempty"                 env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
+	ModelFallbacks            []string              `json:"model_fallbacks,omitempty"`
+	ImageModel                string                `json:"image_model,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks       []string              `json:"image_model_fallbacks,omitempty"`
+	MaxTokens                 int                   `json:"max_tokens"                      env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow             int                   `json:"context_window,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature               *float64              `json:"temperature,omitempty"           env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations         int                   `json:"max_tool_iterations"             env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	SummarizeMessageThreshold int                   `json:"summarize_message_threshold"     env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
+	SummarizeTokenPercent     int                   `json:"summarize_token_percent"         env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
+	MaxMediaSize              int                   `json:"max_media_size,omitempty"        env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	MemoryIndex               MemoryIndexConfig     `json:"memory_index,omitempty"`
+	Routing                   *RoutingConfig        `json:"routing,omitempty"`
+	SteeringMode              string                `json:"steering_mode,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
+	SubTurn                   SubTurnConfig         `json:"subturn"                                                                                     envPrefix:"PICOCLAW_AGENTS_DEFAULTS_SUBTURN_"`
+	ToolFeedback              ToolFeedbackConfig    `json:"tool_feedback,omitempty"`
+	LogLevel                  string                `json:"log_level,omitempty"             env:"PICOCLAW_LOG_LEVEL"`
+}
+
+type SeahorseContextConfig struct {
+	CompactTimeoutSeconds    int `json:"compact_timeout_seconds,omitempty"`
+	MaxCompactIterations     int `json:"max_compact_iterations,omitempty"`
+	MaxCompletionAttempts    int `json:"max_completion_attempts,omitempty"`
+	MaxConcurrentCompactions int `json:"max_concurrent_compactions,omitempty"`
 }
 
 const (

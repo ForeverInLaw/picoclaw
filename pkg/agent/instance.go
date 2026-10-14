@@ -50,6 +50,9 @@ type AgentInstance struct {
 	ImageCandidates           []providers.FallbackCandidate
 	MemoryIndex               *memoryindex.Index
 	ChatMemory                *chatmemory.Service
+	ContextManager            ContextManager
+	ContextManagerError       error
+	ContextProvider           providers.LLMProvider
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -239,7 +242,7 @@ func NewAgentInstance(
 		}
 	}
 
-	return &AgentInstance{
+	instance := &AgentInstance{
 		ID:                        agentID,
 		Name:                      agentName,
 		Model:                     model,
@@ -268,6 +271,24 @@ func NewAgentInstance(
 		Router:                    router,
 		LightCandidates:           lightCandidates,
 	}
+	name, options := contextManagerSettings(agentCfg, defaults)
+	instance.ContextProvider = provider
+	if name == "seahorse" && model != defaults.GetModelName() {
+		if mc, err := resolvedModelConfig(cfg, model, workspace); err == nil {
+			instance.ContextProvider, _, instance.ContextManagerError = providers.CreateProviderFromConfig(mc)
+		} else {
+			instance.ContextManagerError = err
+		}
+	}
+	if instance.ContextManagerError == nil {
+		instance.ContextManager, instance.ContextManagerError = newContextManager(instance, name, options)
+	}
+	if instance.ContextManager != nil && instance.ContextManager.Name() == "seahorse" {
+		toolsRegistry.Register(&shortContextTool{name: "short_grep"})
+		toolsRegistry.Register(&shortContextTool{name: "short_expand"})
+	}
+	return instance
+
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.
@@ -337,6 +358,16 @@ func mediaTempDirPattern() string {
 
 // Close releases resources held by the agent's session store.
 func (a *AgentInstance) Close() error {
+	if a.ContextManager != nil {
+		if err := a.ContextManager.Close(); err != nil {
+			return err
+		}
+	}
+	if a.ContextProvider != nil && a.ContextProvider != a.Provider {
+		if p, ok := a.ContextProvider.(providers.StatefulProvider); ok {
+			p.Close()
+		}
+	}
 	if a.MemoryIndex != nil {
 		_ = a.MemoryIndex.Close()
 	}

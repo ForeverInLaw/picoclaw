@@ -1559,7 +1559,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			agent.Tools.ToProviderDefsFiltered(newToolAllowlist(opts.AllowedTools)),
 			agent.MaxTokens,
 		)
-		al.maybeSummarize(agent, opts.SessionKey, al.newTurnEventScope(agent.ID, opts.SessionKey), requestTokens)
+		al.maybeSummarize(ctx, agent, opts.SessionKey, al.newTurnEventScope(agent.ID, opts.SessionKey), requestTokens)
 		logger.DebugCF("agent", "Observed message without response",
 			map[string]any{
 				"agent_id":    agent.ID,
@@ -1894,8 +1894,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var summary string
 	var retrievedMemory string
 	if !ts.opts.NoHistory {
-		history = ts.agent.Sessions.GetHistory(ts.sessionKey)
-		summary = ts.agent.Sessions.GetSummary(ts.sessionKey)
+		assembled, err := contextHistory(turnCtx, ts.agent, ts.sessionKey, 0)
+		if err != nil {
+			return turnResult{}, err
+		}
+		history, summary = assembled.History, assembled.Summary
 		if !ts.opts.ConversationContext.Inline {
 			retrievedMemory = lookupRetrievedMemories(
 				ctx,
@@ -1910,7 +1913,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			)
 		}
 	}
-	ts.captureRestorePoint(history, summary)
+	ts.captureRestorePoint(ts.agent.Sessions.GetHistory(ts.sessionKey), ts.agent.Sessions.GetSummary(ts.sessionKey))
 
 	messages := ts.agent.ContextBuilder.BuildMessages(
 		history,
@@ -1936,7 +1939,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		for isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
 			logger.WarnCF("agent", "Proactive compression: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
-			compression, ok := al.forceCompression(ts.agent, ts.sessionKey, 0)
+			compression, ok, err := al.compressContext(turnCtx, ts.agent, ts.sessionKey, 0, messages, toolDefs, ts.agent.MaxTokens)
+			if err != nil {
+				return turnResult{}, err
+			}
 			if !ok || compression.DroppedMessages <= 0 {
 				break
 			}
@@ -1950,8 +1956,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				},
 			)
 			ts.refreshRestorePointFromSession(ts.agent)
-			newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
-			newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
+			assembled, err := contextHistory(turnCtx, ts.agent, ts.sessionKey, 0)
+			if err != nil {
+				return turnResult{}, err
+			}
+			newHistory, newSummary := assembled.History, assembled.Summary
 			messages = ts.agent.ContextBuilder.BuildMessages(
 				newHistory, newSummary, retrievedMemory, ts.userMessage,
 				ts.media, ts.channel, ts.chatID, ts.opts.ChatLabel,
@@ -1969,11 +1978,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			Content: ts.userMessage,
 			Media:   append([]string(nil), ts.media...),
 		}
-		if len(rootMsg.Media) > 0 {
-			ts.agent.Sessions.AddFullMessage(ts.sessionKey, rootMsg)
-		} else {
-			ts.agent.Sessions.AddMessage(ts.sessionKey, rootMsg.Role, rootMsg.Content)
-		}
+		rootMsg.SourceID = ts.opts.ReplyToMessageID
+		ts.agent.Sessions.AddFullMessage(ts.sessionKey, rootMsg)
 		ts.recordPersistedMessage(rootMsg)
 		recordMemoryObservation(
 			ctx,
@@ -2453,7 +2459,11 @@ turnLoop:
 				ts.mu.RLock()
 				protectedMessages := len(ts.persistedMessages)
 				ts.mu.RUnlock()
-				if compression, ok := al.forceCompression(ts.agent, ts.sessionKey, protectedMessages); ok {
+				compression, ok, compressErr := al.compressContext(turnCtx, ts.agent, ts.sessionKey, protectedMessages, messages, providerToolDefs, outputReserve)
+				if compressErr != nil {
+					return turnResult{}, compressErr
+				}
+				if ok {
 					al.emitEvent(
 						EventKindContextCompress,
 						ts.eventMeta("runTurn", "turn.context.compress"),
@@ -2466,8 +2476,11 @@ turnLoop:
 					ts.refreshRestorePointFromSession(ts.agent)
 				}
 
-				newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
-				newSummary := ts.agent.Sessions.GetSummary(ts.sessionKey)
+				assembled, assembleErr := contextHistory(turnCtx, ts.agent, ts.sessionKey, protectedMessages)
+				if assembleErr != nil {
+					return turnResult{}, assembleErr
+				}
+				newHistory, newSummary := assembled.History, assembled.Summary
 				messages = ts.agent.ContextBuilder.BuildMessages(
 					newHistory, newSummary, retrievedMemory, "",
 					nil, ts.channel, ts.chatID, ts.opts.ChatLabel,
@@ -3113,7 +3126,7 @@ turnLoop:
 			ts.agent.Tools.DeliveredInRound(),
 		)
 		if !deliveredSaved {
-			finalMsg := providers.Message{Role: "assistant", Content: finalContent, ContentPhase: finalContentPhase}
+			finalMsg := providers.Message{Role: "assistant", Content: finalContent, ContentPhase: finalContentPhase, ModelName: activeModel}
 			ts.agent.Sessions.AddFullMessage(ts.sessionKey, finalMsg)
 			ts.recordPersistedMessage(finalMsg)
 			recordMemoryObservation(
@@ -3143,10 +3156,16 @@ turnLoop:
 		}
 	}
 
+	if !ts.opts.NoHistory && ts.agent.ContextManager != nil {
+		if err := ts.agent.ContextManager.Ingest(turnCtx, snapshotContext(ts.agent, ts.sessionKey)); err != nil {
+			return turnResult{}, err
+		}
+	}
+
 	if ts.opts.EnableSummary {
 		// The final answer is persisted after the last provider request. Include
 		// it once so the threshold represents the next request's full context.
-		al.maybeSummarize(ts.agent, ts.sessionKey, ts.scope, lastRequestTokens+estimateMessageTokens(providers.Message{
+		al.maybeSummarize(ctx, ts.agent, ts.sessionKey, ts.scope, lastRequestTokens+estimateMessageTokens(providers.Message{
 			Role: "assistant", Content: finalContent,
 		}))
 	}
@@ -3284,6 +3303,7 @@ func publishToolMessage(msgBus *bus.MessageBus, toolCtx context.Context, channel
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
 func (al *AgentLoop) maybeSummarize(
+	ctx context.Context,
 	agent *AgentInstance,
 	sessionKey string,
 	turnScope turnEventScope,
@@ -3305,6 +3325,14 @@ func (al *AgentLoop) maybeSummarize(
 		turnAgent.Sessions = turnStore
 		agent = &turnAgent
 	}
+	if manager, ok := agent.ContextManager.(*seahorseContextManager); ok {
+		s := snapshotContext(agent, sessionKey)
+		if requestTokens > agent.ContextWindow*agent.SummarizeTokenPercent/100 {
+			manager.scheduleCompact(ctx, s, max(1, agent.ContextWindow-(requestTokens-estimateTokens(s.History))-512))
+		}
+		return
+	}
+
 	newHistory := agent.Sessions.GetHistory(sessionKey)
 	threshold := agent.ContextWindow * agent.SummarizeTokenPercent / 100
 
