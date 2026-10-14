@@ -90,3 +90,9 @@ document. Out-of-tree adapters can register their struct prototype with
 `config.RegisterChannelSettings(type, Settings{})` and their factory with
 `channels.RegisterFactory`; their factory receives only its selected instance
 in `cfg.ChannelList` and can call `Channel.Decode` for the typed settings.
+
+Pico allows one enabled instance. The launcher's chat token, media proxy, setup
+and gateway startup use that instance even when its name is not `pico`. Setup
+reuses a disabled default-named instance, or a configured named instance when no
+Pico instance is enabled; it creates `pico` only when none exists. Token changes
+and setup preserve the selected name, other settings and unrelated channels.
