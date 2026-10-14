@@ -2257,7 +2257,7 @@ turnLoop:
 			al.activeRequests.Add(1)
 			defer al.activeRequests.Done()
 
-			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
+			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
 				lastResponseModel = model
 				defer func() {
 					if requestErr != nil {
@@ -2344,6 +2344,25 @@ turnLoop:
 					return response, nil
 				}
 				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
+			}
+			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (*providers.LLMResponse, error) {
+				for retry := 0; ; retry++ {
+					response, err := callProviderOnce(ctx, client, model)
+					delay, capacity := capacityRetryDelay(err, retry)
+					if !capacity {
+						return response, err
+					}
+					if ctx.Err() != nil {
+						return nil, ctx.Err()
+					}
+					// Capacity rejections do not spend the ordinary recovery/fallback budget.
+					modelAttempts--
+					retryAnnounced = true
+					al.reportModelRetry(ctx, ts, retry+1, "capacity_unavailable", err, delay)
+					if err := sleepWithContext(ctx, delay); err != nil {
+						return nil, err
+					}
+				}
 			}
 
 			if len(activeCandidates) > 1 && al.fallback != nil {
