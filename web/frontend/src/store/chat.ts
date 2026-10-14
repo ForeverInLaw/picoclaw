@@ -25,6 +25,15 @@ export interface ChatMessage {
   status?: "streaming" | "final"
   source?: "history"
   error?: string
+  attachments?: ChatAttachment[]
+}
+
+export interface ChatAttachment {
+  ref: string
+  url: string
+  filename: string
+  contentType: string
+  size: number
 }
 
 export type ConnectionState =

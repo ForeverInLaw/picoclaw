@@ -56,6 +56,18 @@
       "completed": "已完成",
       "failed": "失败",
       "arguments": "输入"
+    },
+    "images": {
+      "select": "添加图片",
+      "remove": "移除图片",
+      "send": "发送消息",
+      "drop": "将图片拖到此处",
+      "cancel": "取消上传",
+      "uploading": "正在上传图片…",
+      "canceled": "图片上传已取消。文本和预览已保留。",
+      "disconnected": "发送前聊天已断开。请重新连接后重试。",
+      "limitsUnavailable": "暂时无法获取图片上传限制。连接后请重试。",
+      "uploadFailed": "图片上传失败。请重试。"
     }
   },
   "header": {

@@ -239,6 +239,8 @@ The web console requires a password and protects its API, chat, and media with a
 
 Chat displays separate [thought and tool activity](docs/web-chat-activity.md) blocks, streamed answers, and the latest turn after reconnect.
 
+The composer also supports [pasted, dropped and selected images](docs/web-chat-images.md) with previews, cancellation, and authenticated media access.
+
 ### Agent Mode (One-shot)
 
 ```bash

@@ -56,6 +56,18 @@
       "completed": "Completed",
       "failed": "Failed",
       "arguments": "Inputs"
+    },
+    "images": {
+      "select": "Attach images",
+      "remove": "Remove image",
+      "send": "Send message",
+      "drop": "Drop images here",
+      "cancel": "Cancel upload",
+      "uploading": "Uploading images…",
+      "canceled": "Image upload canceled. Your text and previews are kept.",
+      "disconnected": "Chat disconnected before send. Reconnect and try again.",
+      "limitsUnavailable": "Image upload limits are unavailable. Try again after connecting.",
+      "uploadFailed": "Image upload failed. Try again."
     }
   },
   "header": {
