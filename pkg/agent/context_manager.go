@@ -117,6 +117,7 @@ type seahorseContextManager struct {
 	compactionSlots   chan struct{}
 	conversationSlots [256]chan struct{}
 	background        sync.Map
+	errorText         func(error) string
 }
 type contextOperation struct {
 	key    string
@@ -163,6 +164,12 @@ func NewContextManager(
 		closed:          make(chan struct{}),
 		operations:      map[uint64]contextOperation{},
 		compactionSlots: make(chan struct{}, options.MaxConcurrentCompactions),
+		errorText: func(err error) string {
+			if err == nil {
+				return ""
+			}
+			return publicProviderError(err).Error()
+		},
 	}
 	for i := range m.conversationSlots {
 		m.conversationSlots[i] = make(chan struct{}, 1)
@@ -335,7 +342,7 @@ func (m *seahorseContextManager) complete(
 		requestOptions,
 	)
 	if err != nil {
-		return "", err
+		return "", &publicAgentError{message: m.errorText(publicProviderError(err)), cause: err}
 	}
 	if response == nil {
 		return "", fmt.Errorf("compaction provider returned no response")
@@ -573,7 +580,7 @@ func (m *seahorseContextManager) scheduleCompact(ctx context.Context, s ContextS
 			logger.WarnCF(
 				"agent",
 				"Context compaction failed",
-				map[string]any{"session_key": s.SessionKey, "error": err.Error()},
+				map[string]any{"session_key": s.SessionKey, "error": m.errorText(err)},
 			)
 		}
 	}()
