@@ -2886,6 +2886,19 @@ turnLoop:
 					),
 					ts.opts.Sender,
 				)
+				artifactScope := tools.RequestScope{
+					AgentID: ts.agent.ID, SessionKey: ts.sessionKey,
+					Inline:    ts.opts.ConversationContext.Inline,
+					NoHistory: ts.opts.NoHistory,
+				}
+				if ts.opts.NoHistory {
+					if owner := tools.ToolRequestScope(turnCtx); owner.AgentID != "" && owner.SessionKey != "" && !owner.NoHistory {
+						artifactScope.SessionKey = owner.SessionKey
+						artifactScope.Inline = artifactScope.Inline || owner.Inline
+						artifactScope.NoHistory = false
+					}
+				}
+				toolExecCtx = tools.WithRequestScope(toolExecCtx, artifactScope)
 				toolResult = ts.agent.Tools.ExecuteWithContext(
 					toolExecCtx,
 					toolName,
@@ -2940,7 +2953,7 @@ turnLoop:
 			if progressEnabled && !toolResult.Async {
 				al.publishToolProgress(turnCtx, ts, actionID, toolName, toolArgs, toolResult)
 			}
-			if !progressEnabled && !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
+			if !progressEnabled && !toolResult.Terminal && !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
 				al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 					Channel: ts.channel,
 					ChatID:  ts.chatID,
@@ -3010,6 +3023,12 @@ turnLoop:
 			}
 
 			if toolResult.Terminal && !toolResult.IsError {
+				// Delivered terminal tools remain silent. A public completion notice
+				// (such as failed artifact storage after an external action) becomes
+				// the final response without asking the model to repeat the action.
+				if !toolResult.Silent {
+					finalContent = toolResult.ForUser
+				}
 				remaining := len(normalizedToolCalls) - i - 1
 				if remaining > 0 {
 					logger.InfoCF("agent", "Turn checkpoint: skipping remaining tools after terminal result",

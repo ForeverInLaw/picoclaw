@@ -328,6 +328,9 @@ func spawnSubTurn(
 	// The child has its own timeout for self-protection.
 	childCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	// Carry only the captured artifact authority across the independent child
+	// lifetime. The worker keeps its agent identity and parent's base conversation.
+	childCtx = tools.WithRequestScope(childCtx, tools.ToolRequestScope(ctx))
 
 	childID := al.generateSubTurnID()
 
