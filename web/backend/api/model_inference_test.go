@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,6 +34,52 @@ func modelInferenceDashboard(t *testing.T, models []config.ModelConfig) (http.Ha
 		t.Fatal(err)
 	}
 	return h, w.Result().Cookies()[0], path
+}
+
+func TestModelInferenceCancellationStopsCurrentHTTPCall(t *testing.T) {
+	started, disconnected := make(chan struct{}), make(chan struct{})
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(started)
+		select {
+		case <-r.Context().Done():
+			close(disconnected)
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer endpoint.Close()
+	h, cookie, _ := modelInferenceDashboard(
+		t,
+		[]config.ModelConfig{
+			{ModelName: "selected", Model: "openai/selected", APIBase: endpoint.URL + "/v1", APIKey: "selected-secret"},
+		},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := httptest.NewRequest("POST", "/api/models/0/test", nil).WithContext(ctx)
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { h.ServeHTTP(w, r); close(done) }()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("inference never started")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled action kept running")
+	}
+	if w.Code != 502 || !strings.Contains(w.Body.String(), "canceled") {
+		t.Fatalf("cancel outcome: %d %s", w.Code, w.Body.String())
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not reach configured endpoint")
+	}
 }
 
 func TestModelInferenceReportsSanitizedFailuresWithoutRetry(t *testing.T) {
@@ -126,6 +174,10 @@ func TestSavedMultiKeyAndFileCredentialsUseOnlySelectedRuntimeEntry(t *testing.T
 func TestAuthenticatedSavedModelInferenceUsesSelectedIdentityOnce(t *testing.T) {
 	var calls atomic.Int32
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+			w.Write([]byte(`{"data":[{"id":"wrong-model"},{"id":"selected-model"}]}`))
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("unexpected operation: %s %s", r.Method, r.URL.Path)
 		}
@@ -172,6 +224,12 @@ func TestAuthenticatedSavedModelInferenceUsesSelectedIdentityOnce(t *testing.T) 
 	}
 	if calls.Load() != 0 {
 		t.Fatal("inference happened without an authorized action")
+	}
+	if w := dashboardRequest(h, "GET", "/api/models", "", cookie); w.Code != 200 {
+		t.Fatalf("model status listing: %d %s", w.Code, w.Body.String())
+	}
+	if calls.Load() != 0 {
+		t.Fatal("model availability listing triggered inference")
 	}
 	w := dashboardRequest(h, "POST", "/api/models/1/test", "", cookie)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"success"`) {
@@ -298,5 +356,66 @@ func TestModelInferenceRejectsOverridesBeforeContactingEndpoint(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("invalid minimal-probe config sent %d requests", calls.Load())
+	}
+}
+
+func TestEditedModelNeverBorrowsSecretsAcrossProviderProxyOrSelectedEntry(t *testing.T) {
+	var calls atomic.Int32
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.Write([]byte(`{"data":[{"id":"selected"}]}`))
+			return
+		}
+		calls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer selected-secret" {
+			t.Error("credential reference was sent literally or borrowed")
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer endpoint.Close()
+	h, cookie, _ := modelInferenceDashboard(
+		t,
+		[]config.ModelConfig{
+			{ModelName: "selected", Model: "openai/selected", APIBase: endpoint.URL + "/v1", APIKey: "selected-secret"},
+		},
+	)
+	for _, change := range []map[string]any{
+		{"model": "gemini/selected"}, {"proxy": "http://127.0.0.1:1"}, {"model_name": "stale-selection"}, {"model_index": 7},
+	} {
+		request := map[string]any{
+			"model_index": 0,
+			"model_name":  "selected",
+			"model":       "openai/selected",
+			"api_base":    endpoint.URL + "/v1",
+		}
+		for key, value := range change {
+			request[key] = value
+		}
+		body, _ := json.Marshal(request)
+		w := dashboardRequest(h, "POST", "/api/models/test-inline", string(body), cookie)
+		if w.Code < 400 || w.Code >= 500 {
+			t.Fatalf("incompatible selection accepted: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatal("invalid selection sent inference")
+	}
+	for _, placeholder := range []string{"****", "file://saved.key", "enc://****"} {
+		body, _ := json.Marshal(
+			map[string]any{
+				"model_index": 0,
+				"model_name":  "selected",
+				"model":       "openai/selected",
+				"api_base":    endpoint.URL + "/v1/",
+				"api_key":     placeholder,
+			},
+		)
+		w := dashboardRequest(h, "POST", "/api/models/test-inline", string(body), cookie)
+		if w.Code != 200 {
+			t.Fatalf("same-destination reference: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("compatible actions=%d", calls.Load())
 	}
 }

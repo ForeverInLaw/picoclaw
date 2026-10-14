@@ -2,6 +2,7 @@ import { IconLoader2 } from "@tabler/icons-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import type { ModelTestConfiguration } from "@/api/model-probe"
 import { type ModelInfo, setDefaultModel, updateModel } from "@/api/models"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
 import {
@@ -20,6 +21,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+
+import { ModelProbe } from "./model-probe"
 
 interface EditForm {
   apiKey: string
@@ -89,12 +92,8 @@ export function EditModelSheet({
     (key: keyof EditForm) => (e: React.ChangeEvent<HTMLInputElement>) =>
       setForm((f) => ({ ...f, [key]: e.target.value }))
 
-  const handleSave = async () => {
-    if (!model) return
-    setSaving(true)
-    setError("")
-    try {
-      await updateModel(model.index, {
+  const configuration: ModelTestConfiguration | null = model
+    ? {
         model_name: model.model_name,
         model: model.model,
         api_base: form.apiBase || undefined,
@@ -109,7 +108,16 @@ export function EditModelSheet({
           ? Number(form.requestTimeout)
           : undefined,
         thinking_level: form.thinkingLevel || undefined,
-      })
+        extra_body: model.extra_body,
+      }
+    : null
+
+  const handleSave = async () => {
+    if (!model || !configuration) return
+    setSaving(true)
+    setError("")
+    try {
+      await updateModel(model.index, configuration)
       if (setAsDefault && !model.is_default) {
         await setDefaultModel(model.model_name)
       }
@@ -274,6 +282,16 @@ export function EditModelSheet({
                 />
               </Field>
             </AdvancedSection>
+
+            {configuration && model && (
+              <ModelProbe
+                key={JSON.stringify({
+                  ...configuration,
+                  model_index: model.index,
+                })}
+                configuration={{ ...configuration, model_index: model.index }}
+              />
+            )}
 
             {error && (
               <p className="text-destructive bg-destructive/10 rounded-md px-3 py-2 text-sm">

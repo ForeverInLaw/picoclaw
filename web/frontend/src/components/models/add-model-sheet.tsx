@@ -2,6 +2,7 @@ import { IconLoader2 } from "@tabler/icons-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import type { ModelTestConfiguration } from "@/api/model-probe"
 import { addModel, setDefaultModel } from "@/api/models"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
 import {
@@ -20,6 +21,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+
+import { ModelProbe } from "./model-probe"
 
 interface AddForm {
   modelName: string
@@ -107,31 +110,31 @@ export function AddModelSheet({
       }
     }
 
+  const configuration: ModelTestConfiguration = {
+    model_name: form.modelName.trim(),
+    model: form.model.trim(),
+    api_base: form.apiBase.trim() || undefined,
+    api_key: form.apiKey.trim() || undefined,
+    proxy: form.proxy.trim() || undefined,
+    auth_method: form.authMethod.trim() || undefined,
+    connect_mode: form.connectMode.trim() || undefined,
+    workspace: form.workspace.trim() || undefined,
+    rpm: form.rpm ? Number(form.rpm) : undefined,
+    max_tokens_field: form.maxTokensField.trim() || undefined,
+    request_timeout: form.requestTimeout
+      ? Number(form.requestTimeout)
+      : undefined,
+    thinking_level: form.thinkingLevel.trim() || undefined,
+  }
+
   const handleSave = async () => {
     if (!validate()) return
     setSaving(true)
     setServerError("")
     try {
-      const modelName = form.modelName.trim()
-      const modelId = form.model.trim()
-      await addModel({
-        model_name: modelName,
-        model: modelId,
-        api_base: form.apiBase.trim() || undefined,
-        api_key: form.apiKey.trim() || undefined,
-        proxy: form.proxy.trim() || undefined,
-        auth_method: form.authMethod.trim() || undefined,
-        connect_mode: form.connectMode.trim() || undefined,
-        workspace: form.workspace.trim() || undefined,
-        rpm: form.rpm ? Number(form.rpm) : undefined,
-        max_tokens_field: form.maxTokensField.trim() || undefined,
-        request_timeout: form.requestTimeout
-          ? Number(form.requestTimeout)
-          : undefined,
-        thinking_level: form.thinkingLevel.trim() || undefined,
-      })
+      await addModel(configuration)
       if (setAsDefault) {
-        await setDefaultModel(modelName)
+        await setDefaultModel(configuration.model_name)
       }
       onSaved()
       onClose()
@@ -306,6 +309,11 @@ export function AddModelSheet({
                 />
               </Field>
             </AdvancedSection>
+
+            <ModelProbe
+              key={JSON.stringify(configuration)}
+              configuration={configuration}
+            />
 
             {serverError && (
               <p className="text-destructive bg-destructive/10 rounded-md px-3 py-2 text-sm">

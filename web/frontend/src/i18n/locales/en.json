@@ -233,9 +233,20 @@
     },
     "edit": {
       "title": "Configure {{name}}",
-      "apiKeyHint": "A key is already set. Leave blank to keep it unchanged.",
+      "apiKeyHint": "Leave blank to keep the saved key for the same provider, endpoint and proxy. Enter a new key when changing them.",
       "oauthNote": "This provider uses OAuth — no API key required.",
       "saveError": "Failed to save"
+    },
+    "probe": {
+      "title": "Check this configuration",
+      "description": "Validation checks fields only. Testing sends one short request to this model and may incur provider usage. Changes are not saved.",
+      "validate": "Validate configuration",
+      "test": "Test model (may incur usage)",
+      "validating": "Validating configuration…",
+      "testing": "Waiting for this model to reply…",
+      "valid": "Configuration is valid. No model request was sent.",
+      "success": "Model replied successfully ({{latency}} ms).",
+      "canceled": "Model test canceled."
     }
   },
   "channels": {

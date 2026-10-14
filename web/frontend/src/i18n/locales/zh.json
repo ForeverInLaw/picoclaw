@@ -233,9 +233,20 @@
     },
     "edit": {
       "title": "配置 {{name}}",
-      "apiKeyHint": "已设置 API Key，留空表示不修改。",
+      "apiKeyHint": "留空将保留同一服务商、端点和代理的已保存密钥。更改这些设置时，请输入新密钥。",
       "oauthNote": "该服务商使用 OAuth 认证，无需 API Key。",
       "saveError": "保存失败"
+    },
+    "probe": {
+      "title": "检查当前配置",
+      "description": "验证仅检查配置字段。测试会向当前模型发送一次简短请求，可能产生用量费用。配置修改不会保存。",
+      "validate": "验证配置",
+      "test": "测试模型（可能产生费用）",
+      "validating": "正在验证配置…",
+      "testing": "正在等待当前模型回复…",
+      "valid": "配置有效。未发送模型请求。",
+      "success": "模型已成功回复（{{latency}} 毫秒）。",
+      "canceled": "模型测试已取消。"
     }
   },
   "channels": {
