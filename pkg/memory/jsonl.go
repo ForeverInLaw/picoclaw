@@ -465,6 +465,18 @@ func (s *JSONLStore) ReadContext(key string) ([]providers.Message, string, error
 	lock := s.sessionLock(key)
 	lock.Lock()
 	defer lock.Unlock()
+	// Startup JSON migration logs malformed snapshots and leaves them in place.
+	// A remaining current-generation source must not become an empty import.
+	if _, err := os.Stat(s.jsonlPath(key)); os.IsNotExist(err) {
+		legacy := filepath.Join(s.dir, sanitizeKey(key)+".json")
+		if _, err = os.Stat(legacy); err == nil {
+			return nil, "", fmt.Errorf("memory: canonical legacy session has not migrated: %s", filepath.Base(legacy))
+		} else if !os.IsNotExist(err) {
+			return nil, "", fmt.Errorf("memory: read canonical legacy session: %w", err)
+		}
+	} else if err != nil {
+		return nil, "", fmt.Errorf("memory: read canonical session: %w", err)
+	}
 	meta, err := s.readMeta(key)
 	if err != nil {
 		return nil, "", err

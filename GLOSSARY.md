@@ -20,4 +20,4 @@ Information intentionally retained beyond a single conversation, distinct from t
 The current conversation evidence prepared for the assistant's next answer, including recent messages and summaries of earlier messages.
 
 **Conversation summary**:
-A condensed account of conversation messages whose original evidence remains available for explicit recovery.
+A condensed account of conversation messages. Newly created summaries retain original evidence for explicit recovery; historical imported summaries may lack recoverable source messages.

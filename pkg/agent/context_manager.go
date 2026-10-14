@@ -134,7 +134,10 @@ func NewContextManager(
 	name string,
 	options config.SeahorseContextConfig,
 ) (ContextManager, error) {
-	if name == "" || name == "legacy" {
+	if name == "" {
+		name = "seahorse"
+	}
+	if name == "legacy" {
 		return legacyContextManager{}, nil
 	}
 	if name != "seahorse" {
@@ -465,6 +468,9 @@ func contextManagerSettings(
 			options = *agent.ContextManagerConfig
 		}
 	}
+	if name == "" {
+		name = "seahorse"
+	}
 	return name, options
 }
 
@@ -490,7 +496,7 @@ func contextHistory(ctx context.Context, agent *AgentInstance, key string, prote
 		return ContextAssembly{}, agent.ContextManagerError
 	}
 	if agent.ContextManager == nil {
-		return ContextAssembly{History: append(s.History, tail...), Summary: s.Summary}, nil
+		return ContextAssembly{History: append(s.History, tail...), Summary: s.Summary}, s.ReadError
 	}
 	result, err := agent.ContextManager.Assemble(ctx, s)
 	result.History = append(result.History, tail...)

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -74,7 +76,7 @@ func (v *conversationView) CommitContextIfCurrent(key, expected string, operatio
 
 func (b *JSONLBackend) ReadContext(key string) (CanonicalContext, error) {
 	if reader, ok := b.store.(interface {
-		ReadContext(string) ([]providers.Message, string, error)
+		ReadContext(key string) ([]providers.Message, string, error)
 	}); ok {
 		history, summary, err := reader.ReadContext(key)
 		return CanonicalContext{History: history, Summary: summary}, err
@@ -95,6 +97,17 @@ func (sm *SessionManager) ReadContext(key string) (CanonicalContext, error) {
 			History: append([]providers.Message(nil), stored.Messages...),
 			Summary: stored.Summary,
 		}, nil
+	}
+	if sm.storage != "" {
+		filename := sanitizeFilename(key)
+		if filename == "." || !filepath.IsLocal(filename) {
+			return CanonicalContext{}, os.ErrInvalid
+		}
+		if _, err := os.Stat(filepath.Join(sm.storage, filename+".json")); err == nil {
+			return CanonicalContext{}, fmt.Errorf("canonical JSON session could not be loaded: %s", filename)
+		} else if !os.IsNotExist(err) {
+			return CanonicalContext{}, fmt.Errorf("read canonical JSON session: %w", err)
+		}
 	}
 	return CanonicalContext{History: []providers.Message{}}, nil
 }

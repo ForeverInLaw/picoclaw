@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -74,6 +75,19 @@ func TestSeahorseInterruptedImportReopensWithoutFalseCompletionOrDuplicateSource
 			SourceID:     "original-2",
 			ModelName:    "historical-model",
 			Media:        []string{"media://original"},
+			CreatedAt:    time.Date(2025, 2, 7, 10, 5, 0, 0, time.UTC),
+			ToolCalls: []providers.ToolCall{{
+				ID: "import-tool-call", Type: "function",
+				Function: &providers.FunctionCall{
+					Name: "read_file", Arguments: `{"path":"evidence.txt"}`, ThoughtSignature: "historical-signature",
+				},
+			}},
+		},
+		{
+			Role:       "tool",
+			Content:    "complete original source " + strings.Repeat("tool evidence ", 600),
+			ToolCallID: "import-tool-call",
+			SourceID:   "original-3",
 		},
 	}
 	for _, msg := range original {
@@ -135,11 +149,11 @@ func TestSeahorseInterruptedImportReopensWithoutFalseCompletionOrDuplicateSource
 		t.Fatal(err)
 	}
 	assertExpandedSources(t, provider.expandOutput, original)
-	if err = database.QueryRow("SELECT COUNT(*) FROM messages WHERE content IN ('persisted first source','fail import source')").
+	if err = database.QueryRow("SELECT COUNT(*) FROM messages WHERE content IN ('persisted first source','fail import source') OR content LIKE 'complete original source %'").
 		Scan(&sources); err != nil {
 		t.Fatal(err)
 	}
-	if sources != 2 {
+	if sources != len(original) {
 		t.Fatalf("resumption duplicated sources: %d", sources)
 	}
 }
@@ -292,5 +306,102 @@ func TestSeahorseCanonicalReadFailureDoesNotCompleteMigrationOrCallProvider(t *t
 	}
 	if completed != 0 {
 		t.Fatal("read failure published completion")
+	}
+}
+
+func TestDefaultSeahorseImportsOnlyActiveGenerationAcrossClearAndLegacyReopen(t *testing.T) {
+	al, cfg := newSeahorseScenarioLoop(t, &sourceScenarioProvider{})
+	agent := al.GetRegistry().GetDefaultAgent()
+	key := inlineConversationKey("main", "42")
+	agent.Sessions.AddFullMessage(key, providers.Message{Role: "user", Content: "ARCHIVED_BEFORE_IMPORT"})
+	agent.Sessions.SetSummary(key, "ARCHIVED_SUMMARY_BEFORE_IMPORT")
+	if err := agent.Sessions.Save(key); err != nil {
+		t.Fatal(err)
+	}
+	journal := filepath.Join(agent.Workspace, "sessions", strings.ReplaceAll(key, ":", "_")+".jsonl")
+	original, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset := bus.InboundMessage{
+		Channel: "telegram", ChatID: "42", SenderID: "telegram:42",
+		Sender: bus.SenderInfo{Platform: "telegram", PlatformID: "42", CanonicalID: "telegram:42"},
+		Peer:   bus.Peer{Kind: "direct", ID: "42"}, Content: "/clear_inline",
+	}
+	if response, resetErr := al.processMessage(
+		t.Context(),
+		reset,
+	); resetErr != nil ||
+		!strings.Contains(response, "reset") {
+		t.Fatalf("clear=%q %v", response, resetErr)
+	}
+	al.Close()
+	cfg.Agents.Defaults.ContextManager = "legacy"
+	provider := &sourceScenarioProvider{}
+	al = NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	if len(al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(key)) != 0 {
+		t.Fatal("legacy selection ignored durable clear boundary")
+	}
+	if _, err = al.processMessage(
+		t.Context(),
+		selectedInlineMessage("42", "legacy", "NEW_GENERATION_SOURCE"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	al.Close()
+	cfg.Agents.Defaults.ContextManager = ""
+	provider = &sourceScenarioProvider{}
+	al = NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	if al.GetRegistry().GetDefaultAgent().ContextManager.Name() != "seahorse" {
+		t.Fatal("omitted engine did not select Seahorse")
+	}
+	if _, err = al.processMessage(t.Context(), selectedInlineMessage("42", "default", "continue")); err != nil {
+		t.Fatal(err)
+	}
+	input := conversationInput(provider.lastInput)
+	if !strings.Contains(input, "NEW_GENERATION_SOURCE") || strings.Contains(input, "ARCHIVED_") {
+		t.Fatalf("default import crossed reset boundary: %s", input)
+	}
+	archived, err := os.ReadFile(journal)
+	if err != nil || !bytes.Equal(original, archived) {
+		t.Fatal("active import changed archived canonical journal")
+	}
+	database, err := sql.Open("sqlite", filepath.Join(agent.Workspace, "sessions", "seahorse-main.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var archivedImports int
+	if err = database.QueryRow("SELECT COUNT(*) FROM messages WHERE content LIKE 'ARCHIVED_%'").
+		Scan(&archivedImports); err != nil {
+		t.Fatal(err)
+	}
+	if archivedImports != 0 {
+		t.Fatal("lazy importer scanned archived generation")
+	}
+}
+
+func TestSeahorseUnmigratedMalformedLegacySourceDoesNotBecomeEmptyConversation(t *testing.T) {
+	al, cfg := newSeahorseScenarioLoop(t, &sourceScenarioProvider{})
+	al.Close()
+	key := inlineConversationKey("main", "42")
+	path := filepath.Join(cfg.WorkspacePath(), "sessions", strings.ReplaceAll(key, ":", "_")+".json")
+	corrupt := []byte(`{"messages": broken legacy snapshot`)
+	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider := &sourceScenarioProvider{}
+	al = NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	if _, err := al.processMessage(t.Context(), selectedInlineMessage("42", "malformed", "continue")); err == nil {
+		t.Fatal("unmigrated malformed legacy source became an empty conversation")
+	}
+	if len(provider.lastInput) != 0 {
+		t.Fatal("provider received silently dropped legacy context")
+	}
+	retained, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(retained, corrupt) {
+		t.Fatal("failed migration changed original source")
 	}
 }

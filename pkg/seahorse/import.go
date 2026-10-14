@@ -38,12 +38,12 @@ func (e *Engine) ReconcileCanonical(ctx context.Context, key string, messages []
 				Keys:    make([]string, len(messages)),
 			}
 			for i, msg := range messages {
-				if err := ctx.Err(); err != nil {
-					return err
+				if contextErr := ctx.Err(); contextErr != nil {
+					return contextErr
 				}
-				digest, err := canonicalDigest(msg, key, i)
-				if err != nil {
-					return err
+				digest, digestErr := canonicalDigest(msg, key, i)
+				if digestErr != nil {
+					return digestErr
 				}
 				plan.Digests[i] = digest
 			}
@@ -61,9 +61,12 @@ func (e *Engine) ReconcileCanonical(ctx context.Context, key string, messages []
 			}
 			plan = stored
 			var current bool
-			if err := e.store.db.QueryRowContext(ctx,
+			if err = e.store.db.QueryRowContext(
+				ctx,
 				`SELECT EXISTS(SELECT 1 FROM context_checkpoints cp JOIN context_imports ci USING(import_id) WHERE cp.conversation_id=? AND cp.import_id=? AND ci.completed=1)`,
-				conv.ConversationID, importID).Scan(&current); err != nil {
+				conv.ConversationID,
+				importID,
+			).Scan(&current); err != nil {
 				return err
 			}
 			if current {
@@ -154,14 +157,15 @@ func (s *Store) canonicalPlan(
 		return 0, plan, err
 	} else {
 		// Upgrade sources already persisted by the selectable IVO-103 engine.
-		rows, err := s.db.QueryContext(
+		rows, queryErr := s.db.QueryContext(
 			ctx,
 			"SELECT source_key,message_id FROM source_messages WHERE conversation_id=? ORDER BY message_id",
 			convID,
 		)
-		if err != nil {
-			return 0, plan, err
+		if queryErr != nil {
+			return 0, plan, queryErr
 		}
+		defer rows.Close()
 		type source struct {
 			key string
 			id  int64
@@ -181,9 +185,9 @@ func (s *Store) canonicalPlan(
 		}
 		rows.Close()
 		for i, item := range sources {
-			msg, err := s.GetMessageByID(ctx, item.id)
-			if err != nil {
-				return 0, plan, err
+			msg, messageErr := s.GetMessageByID(ctx, item.id)
+			if messageErr != nil {
+				return 0, plan, messageErr
 			}
 			ordinal := i
 			if strings.HasPrefix(item.key, "canonical:") {
@@ -198,7 +202,7 @@ func (s *Store) canonicalPlan(
 		}
 	}
 	reuseCanonicalKeys(previous, &plan)
-	if err := s.reuseRevisionKeys(ctx, convID, &plan); err != nil {
+	if err = s.reuseRevisionKeys(ctx, convID, &plan); err != nil {
 		return 0, plan, err
 	}
 	for i := range plan.Keys {
@@ -337,7 +341,8 @@ func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, pl
 	}
 	if current != 0 {
 		var encoded string
-		if err = tx.QueryRowContext(ctx, "SELECT plan FROM context_imports WHERE import_id=?", current).Scan(&encoded); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT plan FROM context_imports WHERE import_id=?", current).
+			Scan(&encoded); err != nil {
 			return err
 		}
 		var previous canonicalPlan
@@ -345,7 +350,12 @@ func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, pl
 			return err
 		}
 		if !canonicalExtends(previous, plan) {
-			if _, err = tx.ExecContext(ctx, "UPDATE context_imports SET retained=1 WHERE import_id IN (?,?)", current, importID); err != nil {
+			if _, err = tx.ExecContext(
+				ctx,
+				"UPDATE context_imports SET retained=1 WHERE import_id IN (?,?)",
+				current,
+				importID,
+			); err != nil {
 				return err
 			}
 		}
@@ -364,6 +374,7 @@ func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, pl
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	var removed []int64
 	for rows.Next() {
 		var id int64
@@ -408,8 +419,12 @@ func (s *Store) publishCanonical(ctx context.Context, convID, importID int64, pl
 	); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx,
-		"DELETE FROM context_imports WHERE conversation_id=? AND import_id<>? AND retained=0", convID, importID); err != nil {
+	if _, err = tx.ExecContext(
+		ctx,
+		"DELETE FROM context_imports WHERE conversation_id=? AND import_id<>? AND retained=0",
+		convID,
+		importID,
+	); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -422,18 +437,26 @@ func publishImportedSummary(ctx context.Context, tx *sql.Tx, convID int64, conte
 	if content != "" {
 		id = fmt.Sprintf("sum_%x", sha256.Sum256([]byte(fmt.Sprint(convID)+":"+content)))
 	}
-	if _, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(
+		ctx,
 		`DELETE FROM context_items WHERE conversation_id=? AND summary_id IN (SELECT summary_id FROM summaries WHERE kind='imported' AND summary_id<>?)`,
-		convID, id); err != nil {
+		convID,
+		id,
+	); err != nil {
 		return err
 	}
 	if id == "" {
 		return nil
 	}
 	tokens := EstimateMessageTokens(Message{Content: content})
-	if _, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(
+		ctx,
 		`INSERT OR IGNORE INTO summaries(summary_id,conversation_id,kind,depth,content,token_count,model) VALUES(?,?,'imported',0,?,?,'legacy')`,
-		id, convID, content, tokens); err != nil {
+		id,
+		convID,
+		content,
+		tokens,
+	); err != nil {
 		return err
 	}
 	var represented bool
@@ -442,15 +465,26 @@ func publishImportedSummary(ctx context.Context, tx *sql.Tx, convID int64, conte
 		return err
 	}
 	if !represented {
-		if _, err := tx.ExecContext(ctx,
+		if _, err := tx.ExecContext(
+			ctx,
 			`INSERT INTO context_items(conversation_id,ordinal,item_type,summary_id,token_count) SELECT ?,COALESCE(MIN(ordinal),0)-?,'summary',?,? FROM context_items WHERE conversation_id=?`,
-			convID, OrdinalStep, id, tokens, convID); err != nil {
+			convID,
+			OrdinalStep,
+			id,
+			tokens,
+			convID,
+		); err != nil {
 			return err
 		}
 	}
 	for i, messageID := range removed {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT OR IGNORE INTO summary_messages(summary_id,message_id,ordinal) VALUES(?,?,?)", id, messageID, i); err != nil {
+		if _, err := tx.ExecContext(
+			ctx,
+			"INSERT OR IGNORE INTO summary_messages(summary_id,message_id,ordinal) VALUES(?,?,?)",
+			id,
+			messageID,
+			i,
+		); err != nil {
 			return err
 		}
 	}
@@ -465,10 +499,15 @@ const activeSummaryGraph = `WITH RECURSIVE active_summaries(summary_id) AS (
 // Rebuild only the raw projection in canonical order. Sources already represented
 // by a retained active summary are kept compressed, including condensed DAGs.
 func rebuildCanonicalProjection(ctx context.Context, tx *sql.Tx, convID int64, keys []string) error {
-	rows, err := tx.QueryContext(ctx, activeSummaryGraph+` SELECT DISTINCT message_id FROM summary_messages JOIN active_summaries USING(summary_id)`, convID)
+	rows, err := tx.QueryContext(
+		ctx,
+		activeSummaryGraph+` SELECT DISTINCT message_id FROM summary_messages JOIN active_summaries USING(summary_id)`,
+		convID,
+	)
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	covered := map[int64]bool{}
 	for rows.Next() {
 		var id int64
@@ -483,23 +522,36 @@ func rebuildCanonicalProjection(ctx context.Context, tx *sql.Tx, convID int64, k
 		return err
 	}
 	rows.Close()
-	if _, err = tx.ExecContext(ctx, "DELETE FROM context_items WHERE conversation_id=? AND item_type='message'", convID); err != nil {
+	if _, err = tx.ExecContext(
+		ctx,
+		"DELETE FROM context_items WHERE conversation_id=? AND item_type='message'",
+		convID,
+	); err != nil {
 		return err
 	}
 	for _, key := range keys {
 		var id int64
 		var tokens int
-		if err = tx.QueryRowContext(ctx,
+		if err = tx.QueryRowContext(
+			ctx,
 			`SELECT sm.message_id,m.token_count FROM source_messages sm JOIN messages m ON m.message_id=sm.message_id WHERE sm.conversation_id=? AND sm.source_key=?`,
-			convID, key).Scan(&id, &tokens); err != nil {
+			convID,
+			key,
+		).Scan(&id, &tokens); err != nil {
 			return err
 		}
 		if covered[id] {
 			continue
 		}
-		if _, err = tx.ExecContext(ctx,
+		if _, err = tx.ExecContext(
+			ctx,
 			`INSERT INTO context_items(conversation_id,ordinal,item_type,message_id,token_count) SELECT ?,COALESCE(MAX(ordinal),0)+?,'message',?,? FROM context_items WHERE conversation_id=?`,
-			convID, OrdinalStep, id, tokens, convID); err != nil {
+			convID,
+			OrdinalStep,
+			id,
+			tokens,
+			convID,
+		); err != nil {
 			return err
 		}
 	}

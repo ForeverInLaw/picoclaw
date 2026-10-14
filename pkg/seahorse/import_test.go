@@ -22,7 +22,9 @@ func TestCanonicalImportCheckpointRollsBackPublicationAndResumesAfterReopen(t *t
 		t.Fatal(err)
 	}
 	defer database.Close()
-	if _, err = database.Exec(`CREATE TRIGGER interrupt_checkpoint BEFORE INSERT ON context_checkpoints BEGIN SELECT RAISE(FAIL,'checkpoint interrupted'); END`); err != nil {
+	if _, err = database.Exec(
+		`CREATE TRIGGER interrupt_checkpoint BEFORE INSERT ON context_checkpoints BEGIN SELECT RAISE(FAIL,'checkpoint interrupted'); END`,
+	); err != nil {
 		t.Fatal(err)
 	}
 	sources := []seahorse.Message{{Role: "user", Content: "original evidence", TokenCount: 10}}
@@ -59,7 +61,8 @@ func TestCanonicalImportCheckpointRollsBackPublicationAndResumesAfterReopen(t *t
 	if err = database.QueryRow("SELECT COUNT(*) FROM source_messages").Scan(&persisted); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.QueryRow("SELECT COUNT(*) FROM summaries WHERE kind='imported' AND earliest_at IS NULL AND latest_at IS NULL").Scan(&summaries); err != nil {
+	if err = database.QueryRow("SELECT COUNT(*) FROM summaries WHERE kind='imported' AND earliest_at IS NULL AND latest_at IS NULL").
+		Scan(&summaries); err != nil {
 		t.Fatal(err)
 	}
 	if err = database.QueryRow("SELECT COUNT(*) FROM context_imports WHERE completed=1").Scan(&completed); err != nil {
@@ -77,7 +80,7 @@ func TestCanonicalAppendKeepsBoundedImportPlansAndRetainsLegacyRevisionKeys(t *t
 		t.Fatal(err)
 	}
 	defer engine.Close()
-	var sources []seahorse.Message
+	sources := make([]seahorse.Message, 0, 16)
 	for i := range 16 {
 		sources = append(sources, seahorse.Message{Role: "user", Content: fmt.Sprint("original ", i), TokenCount: 10})
 		if err = engine.ReconcileCanonical(t.Context(), "generation", sources, ""); err != nil {
@@ -153,7 +156,8 @@ func TestCanonicalReconciliationRestoresKnownSourcesInOrderWithoutDuplicatingEvi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(assembled.Messages) != 2 || assembled.Messages[0].Content != sources[0].Content || assembled.Messages[1].Content != sources[1].Content {
+	if len(assembled.Messages) != 2 || assembled.Messages[0].Content != sources[0].Content ||
+		assembled.Messages[1].Content != sources[1].Content {
 		t.Fatalf("canonical restoration lost order or sources: %+v", assembled.Messages)
 	}
 	if strings.Contains(assembled.Summary, "legacy truncation") {

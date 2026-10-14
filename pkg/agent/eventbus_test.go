@@ -356,6 +356,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 				Model:             "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
+				ContextManager:    "legacy",
 			},
 		},
 	}
