@@ -496,7 +496,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			responseCtx := withResponsePublication(ctx)
 			response, err := al.processMessage(responseCtx, msg)
 			if err != nil {
-				response = fmt.Sprintf("Error processing message: %v", err)
+				response = "Error processing message: " + al.safeErrorText(err)
 			}
 			finalResponse := response
 
@@ -1995,6 +1995,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	activeProvider, activeCandidates, activeModel := al.selectCandidates(ts.agent, ts.userMessage, messages)
 	resolveCandidateProvider := candidateProviderResolver(al.cfg, ts.agent.Workspace, activeProvider, activeCandidates)
+	if len(activeCandidates) > 0 {
+		resolvedProvider, err := resolveCandidateProvider(activeCandidates[0])
+		if err != nil {
+			turnStatus = TurnEndStatusError
+			return turnResult{}, err
+		}
+		activeProvider = resolvedProvider
+	}
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
 	var finalContentPhase providers.ContentPhase
@@ -2318,25 +2326,25 @@ turnLoop:
 
 			if len(activeCandidates) > 1 && al.fallback != nil {
 				retryCurrentCandidate := lastCandidateFailure != nil && lastCandidateFailure.IsTransient()
-				runCandidate := func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
+				runCandidate := func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 					if !retryCurrentCandidate && modelAttempts > 0 && modelAttempts < modelMaxAttempts && lastProviderError != nil {
 						retryAnnounced = true
 						al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
 					}
-					client, err := resolveCandidateProvider(provider, model)
+					client, err := resolveCandidateProvider(candidate)
 					if err != nil {
 						return nil, err
 					}
-					response, err := callProvider(ctx, client, model)
-					lastCandidateFailure = providers.ClassifyError(err, provider, model)
+					response, err := callProvider(ctx, client, candidate.Model)
+					lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
 					return response, err
 				}
 				var fbResult *providers.FallbackResult
 				var fbErr error
 				if retryCurrentCandidate {
-					fbResult, fbErr = al.fallback.Retry(providerCtx, lastCandidateFailure, runCandidate)
+					fbResult, fbErr = al.fallback.RetryCandidate(providerCtx, lastCandidateFailure, runCandidate)
 				} else {
-					fbResult, fbErr = al.fallback.Execute(providerCtx, activeCandidates, runCandidate)
+					fbResult, fbErr = al.fallback.ExecuteCandidate(providerCtx, activeCandidates, runCandidate)
 				}
 				if fbErr != nil {
 					return nil, fbErr
@@ -2510,7 +2518,7 @@ turnLoop:
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
 					Stage:   "llm",
-					Message: err.Error(),
+					Message: al.safeErrorText(err),
 				},
 			)
 			logger.ErrorCF("agent", "LLM call failed",
@@ -2518,7 +2526,7 @@ turnLoop:
 					"agent_id":  ts.agent.ID,
 					"iteration": iteration,
 					"model":     llmModel,
-					"error":     err.Error(),
+					"error":     al.safeErrorText(err),
 				})
 			return turnResult{}, fmt.Errorf("LLM call failed after retries: %w", err)
 		}
@@ -3859,7 +3867,13 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 				return "", fmt.Errorf("failed to initialize model %q: %w", value, err)
 			}
 
-			nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent.Fallbacks)
+			nextCandidates := resolveModelCandidates(
+				cfg,
+				cfg.Agents.Defaults.Provider,
+				value,
+				agent.Fallbacks,
+				nextProvider,
+			)
 			if len(nextCandidates) == 0 {
 				return "", fmt.Errorf("model %q did not resolve to any provider candidates", value)
 			}

@@ -9,7 +9,6 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
-	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
@@ -206,7 +205,8 @@ func TestNewAgentInstance_ConfiguresImageProviderFromModelList(t *testing.T) {
 	if len(agent.ImageCandidates) != 1 {
 		t.Fatalf("len(ImageCandidates) = %d, want 1", len(agent.ImageCandidates))
 	}
-	if agent.ImageCandidates[0] != (providers.FallbackCandidate{Provider: "openai", Model: "vision-model", ConfigName: "vision-model"}) {
+	if candidate := agent.ImageCandidates[0]; candidate.Provider != "openai" || candidate.Model != "vision-model" ||
+		candidate.ConfigName != "vision-model" {
 		t.Fatalf("ImageCandidates[0] = %#v, want openai/vision-model", agent.ImageCandidates[0])
 	}
 }
