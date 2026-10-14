@@ -14,7 +14,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "format": "prettier --check .",
-    "check": "prettier --write . && eslint --fix"
+    "check": "prettier --write . && eslint --fix",
+    "test:models": "node --test tests/model-probe.test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

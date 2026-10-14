@@ -48,7 +48,7 @@ func (al *AgentLoop) reportModelRetry(
 			Attempt:    attempt,
 			MaxRetries: modelMaxAttempts - 1,
 			Reason:     reason,
-			Error:      al.safeErrorText(err),
+			Error:      al.safeErrorText(publicProviderError(err)),
 			Backoff:    delay,
 		},
 	)

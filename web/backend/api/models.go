@@ -16,6 +16,9 @@ func (h *Handler) registerModelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/models", h.handleListModels)
 	mux.HandleFunc("POST /api/models", h.handleAddModel)
 	mux.HandleFunc("POST /api/models/default", h.handleSetDefaultModel)
+	mux.HandleFunc("POST /api/models/{index}/test", h.handleTestSavedModel)
+	mux.HandleFunc("POST /api/models/test-inline", h.handleTestInlineModel)
+	mux.HandleFunc("POST /api/models/validate", h.handleValidateModel)
 	mux.HandleFunc("PUT /api/models/{index}", h.handleUpdateModel)
 	mux.HandleFunc("DELETE /api/models/{index}", h.handleDeleteModel)
 }
@@ -139,9 +142,7 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdateModel replaces a model configuration entry at the given index.
-// If the request body omits api_key (or sends an empty string), the existing
-// stored key is preserved so callers can update only api_base / proxy without
-// exposing or clearing the secret.
+// Omitted or masked keys are retained only for the same credential destination.
 //
 //	PUT /api/models/{index}
 func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
@@ -180,10 +181,9 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Preserve the existing API key when the caller omits it (empty string).
-	// This lets the UI update api_base / proxy without clearing the stored secret.
-	if mc.APIKey == "" {
-		mc.APIKey = cfg.ModelList[idx].APIKey
+	if err = retainModelCredential(&mc, cfg.ModelList[idx]); err != nil {
+		modelTestError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if mc.ExtraBody == nil {
 		mc.ExtraBody = cfg.ModelList[idx].ExtraBody
