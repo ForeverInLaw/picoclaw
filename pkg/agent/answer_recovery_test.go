@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -221,6 +222,9 @@ func TestEmptyAnswerRecoveryIsBounded(t *testing.T) {
 	got, err := al.ProcessDirect(context.Background(), "hello", "empty-exhaustion")
 	if got != "" || err == nil || !strings.Contains(err.Error(), "no answer") || p.calls != 2 {
 		t.Fatalf("answer=%q err=%v calls=%d", got, err, p.calls)
+	}
+	if !errors.Is(err, errEmptyAnswer) {
+		t.Fatalf("no-answer failure lost its trusted source: %v", err)
 	}
 }
 

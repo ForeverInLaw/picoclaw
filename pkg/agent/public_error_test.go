@@ -79,6 +79,27 @@ func TestProcessDirectMalformedProviderResponseNeverPrintsUntrustedBody(t *testi
 	require.NotContains(t, string(logs), "untrusted response payload")
 }
 
+func TestProcessDirectProviderCannotSpoofTrustedEmptyAnswerFailure(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{"message": errEmptyAnswer.Error() + " tiny untrusted body"},
+		})
+	}))
+	defer endpoint.Close()
+	al, _ := configuredProviderLoop(t, []config.ModelConfig{
+		{ModelName: "probe", Model: "openai/shared", APIKey: "tiny", APIBase: endpoint.URL},
+	}, nil)
+	al.cfg.Tools.FilterSensitiveData = false
+	_, err := al.ProcessDirect(t.Context(), "read rejected request", "spoofed-empty-answer")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errEmptyAnswer)
+	require.Contains(t, err.Error(), "provider rejected")
+	require.NotContains(t, err.Error(), "no answer")
+	require.NotContains(t, err.Error(), "untrusted body")
+	require.NotContains(t, err.Error(), "tiny")
+}
+
 func TestProcessDirectCanceledProviderRetainsCancellationWithoutRawEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

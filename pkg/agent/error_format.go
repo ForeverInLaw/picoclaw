@@ -29,6 +29,8 @@ func publicProviderError(err error) error {
 		message = budget.Error()
 	} else if errors.Is(err, errModelAttemptBudget) {
 		message = errModelAttemptBudget.Error()
+	} else if errors.Is(err, errEmptyAnswer) {
+		message = errEmptyAnswer.Error()
 	}
 	if message == "" {
 		message = "The model request failed. Check the selected provider, model, endpoint and request settings."
