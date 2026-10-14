@@ -73,7 +73,7 @@ func NewAgentInstance(
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 	imageModel := strings.TrimSpace(defaults.ImageModel)
-	imageFallbacks := append([]string(nil), defaults.ImageModelFallbacks...)
+	imageFallbacks := defaults.ImageModelFallbacks
 
 	restrict := defaults.RestrictToWorkspace
 	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
@@ -172,12 +172,6 @@ func NewAgentInstance(
 		temperature = *defaults.Temperature
 	}
 
-	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
-	}
-	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
-
 	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
 	if summarizeMessageThreshold == 0 {
 		summarizeMessageThreshold = 20
@@ -189,23 +183,28 @@ func NewAgentInstance(
 	}
 
 	// Resolve fallback candidates
-	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
+	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks, provider)
+	var thinkingLevelStr string
+	if len(candidates) > 0 {
+		if mc, err := modelConfigForCandidate(cfg, candidates[0], workspace); err == nil {
+			thinkingLevelStr = mc.ThinkingLevel
+		}
+	}
+	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
 
 	var imageProvider providers.LLMProvider
 	var imageCandidates []providers.FallbackCandidate
 	if imageModel != "" {
-		imageModelCfg := providers.ModelConfig{
-			Primary:   imageModel,
-			Fallbacks: imageFallbacks,
+		if imageModel == model {
+			imageCandidates = resolveModelCandidates(cfg, defaults.Provider, imageModel, imageFallbacks, provider)
+		} else {
+			imageCandidates = resolveModelCandidates(cfg, defaults.Provider, imageModel, imageFallbacks)
 		}
-		imageCandidates = providers.ResolveCandidatesWithLookup(
-			imageModelCfg,
-			defaults.Provider,
-			buildModelListResolver(cfg),
-		)
 		if imageModel == model {
 			imageProvider = provider
-		} else if mc, err := cfg.GetModelConfig(imageModel); err != nil {
+		} else if len(imageCandidates) == 0 {
+			log.Printf("image routing: no candidate for image_model %q for agent %q", imageModel, agentID)
+		} else if mc, err := modelConfigForCandidate(cfg, imageCandidates[0], workspace); err != nil {
 			log.Printf("image routing: image_model %q not found in model_list for agent %q: %v",
 				imageModel, agentID, err)
 		} else {

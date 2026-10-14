@@ -114,6 +114,17 @@ var (
 	}
 )
 
+// ClassifyCandidateError retains configuration identity through recovery.
+func ClassifyCandidateError(err error, candidate FallbackCandidate) *FailoverError {
+	failure := ClassifyError(err, candidate.Provider, candidate.Model)
+	if failure == nil {
+		return nil
+	}
+	clone := *failure
+	clone.Candidate = candidate
+	return &clone
+}
+
 // ClassifyError classifies an error into a FailoverError with reason.
 // Returns nil if the error is not classifiable (unknown errors should not trigger fallback).
 func ClassifyError(err error, provider, model string) *FailoverError {

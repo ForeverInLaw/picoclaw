@@ -10,11 +10,21 @@ import (
 	"context"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers/openai_compat"
 )
 
 type HTTPProvider struct {
-	delegate *openai_compat.Provider
+	delegate  *openai_compat.Provider
+	configKey string
+}
+
+// ModelConfigKey lets agent resolution retain the exact factory selection.
+func (p *HTTPProvider) ModelConfigKey() string { return p.configKey }
+
+func (p *HTTPProvider) withModelConfig(mc *config.ModelConfig) *HTTPProvider {
+	p.configKey = ModelConfigKey(mc)
+	return p
 }
 
 func NewHTTPProvider(apiKey, apiBase, proxy string) *HTTPProvider {

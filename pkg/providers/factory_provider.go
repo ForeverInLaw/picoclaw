@@ -94,7 +94,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.MaxTokensField,
 			cfg.RequestTimeout,
 			cfg.ExtraBody,
-		), modelID, nil
+		).withModelConfig(cfg), modelID, nil
 
 	case "azure", "azure-openai":
 		// Azure OpenAI uses deployment-based URLs, api-key header auth,
@@ -134,7 +134,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.MaxTokensField,
 			cfg.RequestTimeout,
 			cfg.ExtraBody,
-		), modelID, nil
+		).withModelConfig(cfg), modelID, nil
 
 	case "anthropic":
 		if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
@@ -160,7 +160,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.MaxTokensField,
 			cfg.RequestTimeout,
 			cfg.ExtraBody,
-		), modelID, nil
+		).withModelConfig(cfg), modelID, nil
 
 	case "anthropic-messages":
 		// Anthropic Messages API with native format (HTTP-based, no SDK)
