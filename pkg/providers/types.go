@@ -95,6 +95,7 @@ type FailoverError struct {
 	Status     int
 	RetryAfter time.Duration
 	Wrapped    error
+	Candidate  FallbackCandidate
 }
 
 func (e *FailoverError) Error() string {
