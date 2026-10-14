@@ -15,7 +15,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 
 export function LauncherAuthPage({
@@ -26,12 +31,23 @@ export function LauncherAuthPage({
   const { t } = useTranslation()
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
+  const [setupToken, setSetupToken] = useState(() =>
+    mode === "setup"
+      ? (new URLSearchParams(globalThis.location.hash.slice(1)).get(
+          "setup_token",
+        ) ?? "")
+      : "",
+  )
   const settingPassword = mode !== "login"
   const mutation = useMutation({
     mutationFn: async () => {
       if (settingPassword) {
         if (password !== confirm) throw new Error(t("dashboardAuth.mismatch"))
-        await postLauncherDashboardSetup(password, confirm)
+        await postLauncherDashboardSetup(
+          password,
+          confirm,
+          mode === "setup" ? setupToken.trim() : undefined,
+        )
       } else {
         await postLauncherDashboardLogin(password)
       }
@@ -60,6 +76,31 @@ export function LauncherAuthPage({
             }}
           >
             <FieldGroup>
+              {mode === "setup" && (
+                <Field
+                  data-invalid={Boolean(mutation.error)}
+                  data-disabled={mutation.isPending}
+                >
+                  <FieldLabel htmlFor="dashboard-setup-token">
+                    {t("dashboardAuth.setupToken")}
+                  </FieldLabel>
+                  <Input
+                    id="dashboard-setup-token"
+                    name="setupToken"
+                    type="password"
+                    autoComplete="off"
+                    required
+                    value={setupToken}
+                    onChange={(event) => setSetupToken(event.target.value)}
+                    disabled={mutation.isPending}
+                    aria-invalid={Boolean(mutation.error)}
+                    aria-describedby="dashboard-setup-token-description"
+                  />
+                  <FieldDescription id="dashboard-setup-token-description">
+                    {t("dashboardAuth.setupTokenDescription")}
+                  </FieldDescription>
+                </Field>
+              )}
               <Field data-invalid={Boolean(mutation.error)}>
                 <FieldLabel htmlFor="dashboard-password">
                   {t("dashboardAuth.password")}

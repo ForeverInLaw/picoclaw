@@ -537,6 +537,8 @@
   "dashboardAuth": {
     "loginTitle": "登录 PicoClaw",
     "setupTitle": "设置仪表盘密码",
+    "setupToken": "设置代码",
+    "setupTokenDescription": "在服务器上读取 launcher-auth.db 旁的 launcher-setup-token。此代码仅用于首次设置密码。",
     "changeTitle": "更改仪表盘密码",
     "loginDescription": "输入仪表盘密码以继续。",
     "setupDescription": "至少使用 8 个字符。此密码保护仪表盘设置、聊天和文件。",

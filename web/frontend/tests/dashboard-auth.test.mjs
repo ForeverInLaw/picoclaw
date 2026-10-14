@@ -24,12 +24,17 @@ test("dashboard setup and login use the cookie API without exposing or trimming 
     }
     if (request.url === "/api/auth/setup") {
       assert.equal(request.headers["content-type"], "application/json")
+      assert.equal(
+        request.headers["x-picoclaw-setup-token"],
+        "owner-setup-code",
+      )
       assert.deepEqual(JSON.parse(body), {
         password: " password ",
         confirm: " password ",
       })
       initialized = true
     } else if (request.url === "/api/auth/login") {
+      assert.equal(request.headers["x-picoclaw-setup-token"], undefined)
       assert.deepEqual(JSON.parse(body), { password: " password " })
       authenticated = true
     } else if (request.url === "/api/auth/logout") {
@@ -51,7 +56,11 @@ test("dashboard setup and login use the cookie API without exposing or trimming 
       initialized: false,
       authenticated: false,
     })
-    await postLauncherDashboardSetup(" password ", " password ")
+    await postLauncherDashboardSetup(
+      " password ",
+      " password ",
+      "owner-setup-code",
+    )
     await postLauncherDashboardLogin(" password ")
     assert.deepEqual(await getLauncherAuthStatus(), {
       initialized: true,

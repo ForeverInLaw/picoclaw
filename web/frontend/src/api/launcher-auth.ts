@@ -3,10 +3,18 @@ export type LauncherAuthStatus = {
   initialized: boolean
 }
 
-async function authRequest(path: string, body?: object): Promise<Response> {
+async function authRequest(
+  path: string,
+  body?: object,
+  setupToken?: string,
+): Promise<Response> {
+  const headers = body
+    ? new Headers({ "Content-Type": "application/json" })
+    : undefined
+  if (setupToken) headers?.set("X-Picoclaw-Setup-Token", setupToken)
   const response = await fetch(`/api/auth/${path}`, {
     method: body ? "POST" : "GET",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers,
     credentials: "same-origin",
     body: body ? JSON.stringify(body) : undefined,
   })
@@ -58,8 +66,9 @@ export async function postLauncherDashboardLogin(
 export async function postLauncherDashboardSetup(
   password: string,
   confirm: string,
+  setupToken?: string,
 ): Promise<void> {
-  await authRequest("setup", { password, confirm })
+  await authRequest("setup", { password, confirm }, setupToken)
 }
 
 export async function postLauncherDashboardLogout(): Promise<void> {

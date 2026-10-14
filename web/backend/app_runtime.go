@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
@@ -66,6 +67,9 @@ func openBrowser() error {
 	if localAutoLogin != nil {
 		browserURL += localAutoLogin.URLPath()
 		localAutoLogin = nil
+	} else if dashboardSetupToken != "" {
+		browserURL += "/launcher-setup#setup_token=" + url.QueryEscape(dashboardSetupToken)
+		dashboardSetupToken = ""
 	}
 	browserBootstrapMu.Unlock()
 	return utils.OpenBrowser(browserURL)

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +27,9 @@ type LauncherAuthRouteOpts struct {
 	SecureCookie func(*http.Request) bool
 	// PasswordStore enables password login. It must be non-nil for auth to work.
 	PasswordStore PasswordStore
+	// SetupToken proves ownership before the first password is set. It is
+	// delivered through a private local file, never the public status endpoint.
+	SetupToken string
 	// StoreError holds the error returned when opening the password store. When
 	// non-nil and PasswordStore is nil, auth endpoints fail closed with a
 	// recovery message.
@@ -56,6 +60,7 @@ func RegisterLauncherAuthRoutes(mux *http.ServeMux, opts LauncherAuthRouteOpts) 
 		sessions:     opts.Sessions,
 		secureCookie: secure,
 		store:        opts.PasswordStore,
+		setupToken:   opts.SetupToken,
 		storeErr:     opts.StoreError,
 		loginLimit:   newLoginRateLimiter(),
 	}
@@ -70,6 +75,7 @@ type launcherAuthHandlers struct {
 	passwordMu   sync.Mutex
 	secureCookie func(*http.Request) bool
 	store        PasswordStore
+	setupToken   string
 	storeErr     error // set when the store failed to open; drives recovery messages
 	loginLimit   *loginRateLimiter
 }
@@ -187,8 +193,7 @@ func (h *launcherAuthHandlers) handleStatus(w http.ResponseWriter, r *http.Reque
 // handleSetup sets or changes the dashboard password.
 //
 // Rules:
-//   - If the store has no password yet, anyone who can reach the setup endpoint
-//     may initialize the password.
+//   - Initial setup requires the owner-only startup token.
 //   - If a password is already set, the caller must hold a valid session cookie.
 func (h *launcherAuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 	h.passwordMu.Lock()
@@ -208,6 +213,17 @@ func (h *launcherAuthHandlers) handleSetup(w http.ResponseWriter, r *http.Reques
 		if !authed {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"must be authenticated to change password"}`))
+			return
+		}
+	} else if h.setupToken == "" {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeErrorf(w, "initial setup code unavailable; restart the launcher and check its storage")
+		return
+	} else {
+		token := r.Header.Get("X-Picoclaw-Setup-Token")
+		if len(token) != len(h.setupToken) || subtle.ConstantTimeCompare([]byte(token), []byte(h.setupToken)) != 1 {
+			w.WriteHeader(http.StatusForbidden)
+			writeErrorf(w, "initial password setup requires the owner's setup code")
 			return
 		}
 	}
@@ -247,6 +263,7 @@ func (h *launcherAuthHandlers) handleSetup(w http.ResponseWriter, r *http.Reques
 		writeErrorf(w, "failed to save password: %v", err)
 		return
 	}
+	h.setupToken = ""
 	h.sessions.RevokeAll()
 	middleware.ClearLauncherDashboardSessionCookie(w, r, h.secureCookie)
 

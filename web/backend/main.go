@@ -16,6 +16,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,8 +45,9 @@ var (
 	serverAddr string
 	apiHandler *api.Handler
 
-	noBrowser      *bool
-	localAutoLogin *middleware.LauncherDashboardLocalAutoLogin
+	noBrowser           *bool
+	localAutoLogin      *middleware.LauncherDashboardLocalAutoLogin
+	dashboardSetupToken string
 )
 
 func main() {
@@ -156,6 +158,11 @@ func main() {
 	} else {
 		addr = "127.0.0.1:" + effectivePort
 	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		logger.Fatalf("Server failed to start: %v", err)
+	}
+	defer listener.Close()
 
 	// Initialize Server components
 	mux := http.NewServeMux()
@@ -176,7 +183,16 @@ func main() {
 		initialized, authQueryErr := authStore.IsInitialized(context.Background())
 		if authQueryErr != nil {
 			logger.ErrorC("web", fmt.Sprintf("Dashboard password storage unreadable: %v", authQueryErr))
-		} else if initialized && !*noBrowser {
+		} else if !initialized {
+			token, tokenPath, tokenErr := createDashboardSetupToken(authStore.DBPath())
+			if tokenErr != nil {
+				logger.ErrorC("web", fmt.Sprintf("Dashboard setup unavailable: %v", tokenErr))
+			} else {
+				authOpts.SetupToken = token
+				dashboardSetupToken = token
+				logger.InfoC("web", fmt.Sprintf("Dashboard setup code: read %s on this machine", tokenPath))
+			}
+		} else if !*noBrowser {
 			localAutoLogin, err = middleware.NewLauncherDashboardLocalAutoLogin(5 * time.Minute)
 			if err != nil {
 				logger.ErrorC("web", fmt.Sprintf("Dashboard bootstrap unavailable: %v", err))
@@ -242,7 +258,7 @@ func main() {
 	server = &http.Server{Addr: addr, Handler: handler}
 	go func() {
 		logger.InfoC("web", fmt.Sprintf("Server listening on %s", addr))
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("Server failed to start: %v", err)
 		}
 	}()

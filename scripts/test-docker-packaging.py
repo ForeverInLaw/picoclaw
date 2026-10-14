@@ -25,8 +25,8 @@ def command(*args, timeout=120, check=True):
     return result
 
 
-def request(url, method="GET", data=None, cookie=None):
-    headers = {"Content-Type": "application/json"}
+def request(url, method="GET", data=None, cookie=None, extra_headers=None):
+    headers = {"Content-Type": "application/json", **(extra_headers or {})}
     if cookie:
         headers["Cookie"] = cookie
     req = urllib.request.Request(
@@ -189,7 +189,18 @@ def main():
             asset = re.search(r'src="(/assets/[^\"]+\.js)"', html).group(1)
             assert request(url + asset)[0] == 200
             password = "container-test-password"
-            assert request(url + "/api/auth/setup", "POST", {"password": password, "confirm": password})[0] == 200
+            setup_body = {"password": password, "confirm": password}
+            assert request(url + "/api/auth/setup", "POST", setup_body)[0] == 403
+            setup_token = command("docker", "exec", name, "cat", "/data/launcher-setup-token").stdout.strip()
+            duplicate = command(
+                "docker", "exec", name, "picoclaw-launcher", "-console", "-no-browser",
+                "-port", "18800", "-public", "/data/config.json", check=False,
+            )
+            assert duplicate.returncode != 0 and "address already in use" in duplicate.stdout + duplicate.stderr
+            assert command("docker", "exec", name, "cat", "/data/launcher-setup-token").stdout.strip() == setup_token
+            setup_headers = {"X-Picoclaw-Setup-Token": setup_token}
+            assert request(url + "/api/auth/setup", "POST", setup_body, extra_headers=setup_headers)[0] == 200
+            assert request(url + "/api/auth/setup", "POST", setup_body, extra_headers=setup_headers)[0] == 401
             status, _, headers = request(url + "/api/auth/login", "POST", {"password": password})
             assert status == 200
             cookie = headers["Set-Cookie"].split(";", 1)[0]

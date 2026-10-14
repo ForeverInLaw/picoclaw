@@ -537,6 +537,8 @@
   "dashboardAuth": {
     "loginTitle": "Sign in to PicoClaw",
     "setupTitle": "Set your dashboard password",
+    "setupToken": "Setup code",
+    "setupTokenDescription": "Read launcher-setup-token beside launcher-auth.db on the server. This code is required only for the first password.",
     "changeTitle": "Change dashboard password",
     "loginDescription": "Enter your dashboard password to continue.",
     "setupDescription": "Use at least 8 characters. This password protects dashboard settings, chat, and files.",

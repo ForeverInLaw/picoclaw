@@ -1,9 +1,22 @@
 # Dashboard access
 
-The web launcher requires a dashboard password. On first visit, set a password
+The web launcher requires a dashboard password. On first visit, enter the owner's
+setup code and set a password
 of at least 8 characters (at most 72 UTF-8 bytes), then sign in. Passwords are
 used exactly as entered, including spaces. The dashboard access menu in the
 header provides **Change dashboard password** and **Sign out**.
+
+On uninitialized startup the launcher writes a random setup code to
+`launcher-setup-token`, beside `launcher-auth.db`, readable only by the launcher
+owner (`0600` on Unix; a protected owner-only DACL on Windows). Read it on
+the server; it is never returned by the public status API or printed in logs.
+The automatically opened browser receives it in a URL fragment. For a remote
+browser or `-no-browser`, enter it manually. API clients send it in
+`X-Picoclaw-Setup-Token` when setting the first password. Missing or incorrect
+codes return 403; failure to publish a code disables initial setup with 503.
+The code rotates on uninitialized restart and cannot change an existing
+password: that requires an authenticated session. Validation failures leave
+the code usable for a corrected request.
 
 The launcher stores only a bcrypt hash in `launcher-auth.db`, alongside the
 selected application config file. Keep that directory on persistent storage

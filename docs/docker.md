@@ -55,7 +55,13 @@ console and manage their owned gateway process automatically.
 docker compose -f docker/docker-compose.yml --profile launcher up -d
 ```
 
-Open http://localhost:18800 and create the dashboard password. The Compose
+Read the owner's setup code from the running container:
+
+```bash
+docker compose -f docker/docker-compose.yml --profile launcher exec picoclaw-launcher cat /data/launcher-setup-token
+```
+
+Open http://localhost:18800, enter that code and create the dashboard password. The Compose
 ports bind to host loopback. Authentication setup persists in
 `docker/data/launcher-auth.db`; browser sessions expire on restart and require
 login again. Keep the whole state directory writable and persistent. See

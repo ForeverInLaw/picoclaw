@@ -26,7 +26,10 @@ func dashboardTestHandler(t *testing.T, dbPath string) (http.Handler, func()) {
 	}
 	sessions := middleware.NewLauncherDashboardSessions()
 	mux := http.NewServeMux()
-	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{PasswordStore: store, Sessions: sessions})
+	RegisterLauncherAuthRoutes(
+		mux,
+		LauncherAuthRouteOpts{PasswordStore: store, Sessions: sessions, SetupToken: dashboardTestSetupToken},
+	)
 	mux.HandleFunc("GET /api/private", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("private")) })
 	return middleware.LauncherDashboardAuth(
 		middleware.LauncherDashboardAuthConfig{Sessions: sessions},
@@ -79,7 +82,10 @@ func TestDashboardRevokesUpgradedWebSockets(t *testing.T) {
 			sessions := middleware.NewLauncherDashboardSessions()
 			mux := http.NewServeMux()
 			NewHandler(configPath).RegisterRoutes(mux)
-			RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{Sessions: sessions, PasswordStore: store})
+			RegisterLauncherAuthRoutes(
+				mux,
+				LauncherAuthRouteOpts{Sessions: sessions, PasswordStore: store, SetupToken: dashboardTestSetupToken},
+			)
 			h := middleware.LauncherDashboardAuth(middleware.LauncherDashboardAuthConfig{Sessions: sessions}, mux)
 			launcher := httptest.NewServer(h)
 			defer launcher.Close()
@@ -153,7 +159,10 @@ func TestDashboardPasswordChangeRevokesPendingBootstrap(t *testing.T) {
 	defer store.Close()
 	sessions := middleware.NewLauncherDashboardSessions()
 	mux := http.NewServeMux()
-	RegisterLauncherAuthRoutes(mux, LauncherAuthRouteOpts{Sessions: sessions, PasswordStore: store})
+	RegisterLauncherAuthRoutes(
+		mux,
+		LauncherAuthRouteOpts{Sessions: sessions, PasswordStore: store, SetupToken: dashboardTestSetupToken},
+	)
 	requireDashboardStatus(
 		t,
 		dashboardRequest(
@@ -250,6 +259,7 @@ func TestDashboardFailsClosedWhenPasswordStoreUnavailable(t *testing.T) {
 func dashboardRequest(h http.Handler, method, path, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Picoclaw-Setup-Token", dashboardTestSetupToken)
 	if cookie != nil {
 		r.AddCookie(cookie)
 	}
