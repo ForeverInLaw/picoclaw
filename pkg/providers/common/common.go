@@ -10,17 +10,12 @@ package common
 import (
 	"bufio"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"mime"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -82,10 +77,6 @@ type openaiMessage struct {
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
-const maxInlineFileBytes = 20 * 1024 * 1024
-
-var filePathTagPattern = regexp.MustCompile(`\[file:([^\]]+)\]`)
-
 // SerializeMessages converts internal Message structs to the OpenAI wire format.
 //   - Strips SystemParts (unknown to third-party endpoints)
 //   - Converts messages with Media to multipart content format (text + image_url parts)
@@ -93,11 +84,10 @@ var filePathTagPattern = regexp.MustCompile(`\[file:([^\]]+)\]`)
 func SerializeMessages(messages []Message) []any {
 	out := make([]any, 0, len(messages))
 	for _, m := range messages {
-		sanitizedContent, fileParts := buildFilePartsFromContent(m.Content)
-		if len(m.Media) == 0 && len(fileParts) == 0 {
+		if len(m.Media) == 0 {
 			out = append(out, openaiMessage{
 				Role:             m.Role,
-				Content:          sanitizedContent,
+				Content:          m.Content,
 				ReasoningContent: m.ReasoningContent,
 				ToolCalls:        m.ToolCalls,
 				ToolCallID:       m.ToolCallID,
@@ -107,10 +97,10 @@ func SerializeMessages(messages []Message) []any {
 
 		// Multipart content format for messages with media
 		parts := make([]map[string]any, 0, 1+len(m.Media))
-		if sanitizedContent != "" {
+		if m.Content != "" {
 			parts = append(parts, map[string]any{
 				"type": "text",
-				"text": sanitizedContent,
+				"text": m.Content,
 			})
 		}
 		for _, mediaURL := range m.Media {
@@ -134,7 +124,6 @@ func SerializeMessages(messages []Message) []any {
 				})
 			}
 		}
-		parts = append(parts, fileParts...)
 
 		msg := map[string]any{
 			"role":    m.Role,
@@ -152,60 +141,6 @@ func SerializeMessages(messages []Message) []any {
 		out = append(out, msg)
 	}
 	return out
-}
-
-func buildFilePartsFromContent(content string) (string, []map[string]any) {
-	if content == "" {
-		return "", nil
-	}
-
-	matches := filePathTagPattern.FindAllStringSubmatch(content, -1)
-	if len(matches) == 0 {
-		return content, nil
-	}
-
-	sanitized := filePathTagPattern.ReplaceAllString(content, "[file]")
-	parts := make([]map[string]any, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		if filePart := buildInlineFilePart(strings.TrimSpace(match[1])); filePart != nil {
-			parts = append(parts, filePart)
-		}
-	}
-
-	return sanitized, parts
-}
-
-func buildInlineFilePart(path string) map[string]any {
-	if path == "" {
-		return nil
-	}
-
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() || info.Size() <= 0 || info.Size() > maxInlineFileBytes {
-		return nil
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-
-	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-
-	fileData := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
-	return map[string]any{
-		"type": "file",
-		"file": map[string]any{
-			"filename":  filepath.Base(path),
-			"file_data": fileData,
-		},
-	}
 }
 
 func parseDataAudioURL(mediaURL string) (format, data string, ok bool) {

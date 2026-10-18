@@ -64,19 +64,23 @@ func validArtifactScope(scope RequestScope) bool {
 }
 
 func (s *ArtifactStore) root(create bool) (*os.Root, error) {
+	return openPrivateRoot(s.directory, create)
+}
+
+func openPrivateRoot(directory string, create bool) (*os.Root, error) {
 	if create {
-		if err := os.MkdirAll(s.directory, 0o700); err != nil {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, err
 		}
 	}
-	info, err := os.Lstat(s.directory)
+	info, err := os.Lstat(directory)
 	if err != nil {
 		return nil, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return nil, fmt.Errorf("artifact directory must be a real directory")
+		return nil, fmt.Errorf("retained file directory must be a real directory")
 	}
-	return os.OpenRoot(s.directory)
+	return os.OpenRoot(directory)
 }
 
 func (s *ArtifactStore) persist(scope RequestScope, text string) (string, error) {
@@ -219,11 +223,15 @@ func (s *ArtifactStore) ProtectPath(path string) bool {
 	if s == nil {
 		return false
 	}
+	return protectStoredPath(path, s.directory)
+}
+
+func protectStoredPath(path, directory string) bool {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return true
 	}
-	root := s.directory
+	root := directory
 	if isWithinWorkspace(path, root) {
 		return true
 	}

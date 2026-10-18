@@ -90,7 +90,7 @@ func TestModelInferenceReportsSanitizedFailuresWithoutRetry(t *testing.T) {
 	}{
 		{"auth", 401, `{"error":{"message":"invalid selected-secret at https://private.example"}}`, "Authentication failed"},
 		{"endpoint", 404, `{"error":{"message":"private selected-secret endpoint"}}`, "not found"},
-		{"image", 400, `{"error":{"message":"unsupported image selected-secret"}}`, "does not support these image"},
+		{"image", 400, `{"error":{"message":"unsupported image selected-secret"}}`, "provider rejected the attachment"},
 		{"empty", 200, `{"choices":[{"message":{"content":"","reasoning_content":"thought only"}}]}`, "no answer"},
 		{"timeout", 200, "", "timed out"},
 	} {

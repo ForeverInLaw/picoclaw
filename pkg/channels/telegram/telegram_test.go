@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,35 @@ import (
 )
 
 const testToken = "1234567890:aaaabbbbaaaabbbbaaaabbbbaaaabbbbccc"
+
+func TestIncomingDocumentPreservesFilenameAndMIME(t *testing.T) {
+	download := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "package main\n")
+	}))
+	defer download.Close()
+	caller := &stubCaller{callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+		file, err := json.Marshal(telego.File{FileID: "source", FilePath: "documents/download.bin"})
+		return &ta.Response{Ok: true, Result: file}, err
+	}}
+	ch := newTestChannel(t, caller)
+	bot, err := telego.NewBot(testToken, telego.WithAPIServer(download.URL), telego.WithAPICaller(caller))
+	require.NoError(t, err)
+	ch.bot = bot
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+	defer store.ReleaseAll(channels.BuildMediaScope("telegram", "42", "1"))
+	candidate, err := ch.buildInboundCandidate(t.Context(), &telego.Message{
+		MessageID: 1, Chat: telego.Chat{ID: 42, Type: "private"}, From: &telego.User{ID: 42},
+		Document: &telego.Document{FileID: "source", FileName: "nec-reconnect.go", MimeType: "text/x-go"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, candidate)
+	require.Len(t, candidate.media, 1)
+	_, meta, err := store.ResolveWithMeta(candidate.media[0])
+	require.NoError(t, err)
+	require.Equal(t, "nec-reconnect.go", meta.Filename)
+	require.Equal(t, "text/x-go", meta.ContentType)
+}
 
 // stubCaller implements ta.Caller for testing.
 type stubCaller struct {

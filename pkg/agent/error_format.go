@@ -66,9 +66,12 @@ func safeErrorText(cfg *config.Config, err error) string {
 	if err == nil {
 		return ""
 	}
-	text := providers.ErrorGuidance(err)
-	if text == "" {
-		text = err.Error()
+	text := err.Error()
+	var public *publicAgentError
+	if !errors.As(err, &public) {
+		if guidance := providers.ErrorGuidance(err); guidance != "" {
+			text = guidance
+		}
 	}
 	for _, mc := range cfg.ModelList {
 		for _, key := range append([]string{mc.APIKey}, mc.APIKeys...) {

@@ -1549,6 +1549,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			observedMessages,
 			al.mediaStore,
 			al.GetConfig().Agents.Defaults.GetMaxMediaSize(),
+			nil,
 		)
 		requestTokens := estimateRequestTokens(
 			observedMessages,
@@ -1890,6 +1891,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var history []providers.Message
 	var summary string
 	var retrievedMemory string
+	maxMediaSize := al.GetConfig().Agents.Defaults.GetMaxMediaSize()
+	var attachmentErr error
+	ts.media, attachmentErr = al.retainAttachments(ts, ts.media, maxMediaSize)
+	if attachmentErr != nil {
+		turnStatus = TurnEndStatusError
+		return turnResult{}, attachmentErr
+	}
 	if !ts.opts.NoHistory {
 		assembled, err := contextHistory(turnCtx, ts.agent, ts.sessionKey, 0)
 		if err != nil {
@@ -1927,8 +1935,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	)
 
 	cfg := al.GetConfig()
-	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
-	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
+	messages = al.resolveTurnMedia(turnCtx, ts, messages, maxMediaSize)
 	allowedTools := newToolAllowlist(ts.opts.AllowedTools)
 
 	if !ts.opts.NoHistory {
@@ -1972,7 +1979,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.opts.SenderID, ts.opts.SenderDisplayName,
 				ts.opts.ConversationContext,
 			)
-			messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
+			messages = al.resolveTurnMedia(turnCtx, ts, messages, maxMediaSize)
 		}
 	}
 
@@ -2085,7 +2092,16 @@ turnLoop:
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(pendingMessages, al.mediaStore, maxMediaSize)
+			for i := range pendingMessages {
+				retained, retainErr := al.retainAttachments(ts, pendingMessages[i].Media, maxMediaSize)
+				if retainErr != nil {
+					return turnResult{}, retainErr
+				}
+				pendingMessages[i].Media = retained
+			}
+			// Include existing context when deciding whether steering attachments fit.
+			combined := append(append([]providers.Message(nil), messages...), pendingMessages...)
+			resolvedPending := al.resolveTurnMedia(turnCtx, ts, combined, maxMediaSize)[len(messages):]
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				messages = append(messages, resolvedPending[i])
@@ -2534,7 +2550,7 @@ turnLoop:
 					ts.opts.SenderID, ts.opts.SenderDisplayName,
 					ts.opts.ConversationContext,
 				)
-				messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
+				messages = al.resolveTurnMedia(turnCtx, ts, messages, maxMediaSize)
 				ts.mu.RLock()
 				protectedStart = max(1, len(messages)-len(ts.persistedMessages))
 				ts.mu.RUnlock()
@@ -2907,19 +2923,7 @@ turnLoop:
 					),
 					ts.opts.Sender,
 				)
-				artifactScope := tools.RequestScope{
-					AgentID: ts.agent.ID, SessionKey: ts.sessionKey,
-					Inline:    ts.opts.ConversationContext.Inline,
-					NoHistory: ts.opts.NoHistory,
-				}
-				if ts.opts.NoHistory {
-					if owner := tools.ToolRequestScope(turnCtx); owner.AgentID != "" && owner.SessionKey != "" && !owner.NoHistory {
-						artifactScope.SessionKey = owner.SessionKey
-						artifactScope.Inline = artifactScope.Inline || owner.Inline
-						artifactScope.NoHistory = false
-					}
-				}
-				toolExecCtx = tools.WithRequestScope(toolExecCtx, artifactScope)
+				toolExecCtx = tools.WithRequestScope(toolExecCtx, ts.fileScope(turnCtx))
 				toolResult = ts.agent.Tools.ExecuteWithContext(
 					toolExecCtx,
 					toolName,
@@ -3362,9 +3366,6 @@ func messageHasRichMediaInput(messages []providers.Message) bool {
 			if strings.HasPrefix(mediaRef, "data:image/") {
 				return true
 			}
-		}
-		if strings.Contains(msg.Content, "[file:") {
-			return true
 		}
 		return false
 	}

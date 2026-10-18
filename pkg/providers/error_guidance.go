@@ -19,9 +19,10 @@ func ErrorGuidance(err error) string {
 	status, _, _ := errorHTTPMetadata(err)
 	text := strings.ToLower(err.Error())
 	if (status == 400 || status == 422) &&
-		(strings.Contains(text, "image") || strings.Contains(text, "vision")) &&
+		(strings.Contains(text, "image") || strings.Contains(text, "vision") ||
+			strings.Contains(text, "file") || strings.Contains(text, "document") || strings.Contains(text, "attachment")) &&
 		(strings.Contains(text, "not support") || strings.Contains(text, "unsupported") || strings.Contains(text, "not allowed")) {
-		return "The selected model does not support these image inputs. Select a vision-capable model or remove the images and send text."
+		return "The provider rejected the attachment or image input. Check the file format and the selected endpoint's supported input types."
 	}
 	failure := ClassifyError(err, "", "")
 	if failure != nil {

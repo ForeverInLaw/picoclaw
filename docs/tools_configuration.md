@@ -493,3 +493,8 @@ For example:
 
 Note: Nested map-style config (for example `tools.mcp.servers.<name>.*`) is configured in `config.json` rather than
 environment variables.
+
+## Incoming attachments
+
+See [incoming file attachments](attachments.md) for text preparation, retained
+originals, paginated reads, supported encodings and storage requirements.

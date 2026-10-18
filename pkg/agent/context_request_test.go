@@ -72,9 +72,12 @@ func TestContextRetryPreservesResolvedCurrentAttachments(t *testing.T) {
 	current := p.lastMessages[len(p.lastMessages)-1]
 	require.Equal(t, "user", current.Role)
 	require.Equal(t, []string{"data:image/png;base64,aW1hZ2U="}, current.Media)
-	require.Contains(t, current.Content, "[file:"+documentPath+"]")
+	require.Contains(t, current.Content, "<attachment_content>\ndocument\n</attachment_content>")
 	history := agent.Sessions.GetHistory(msg.SessionKey)
-	require.Equal(t, msg.Media, history[len(history)-2].Media, "stored attachments must keep reusable media references")
+	storedMedia := history[len(history)-2].Media
+	require.Len(t, storedMedia, 2)
+	require.Equal(t, imageRef, storedMedia[0])
+	require.True(t, strings.HasPrefix(storedMedia[1], tools.AttachmentPrefix), "documents must keep durable references")
 }
 
 func TestProactiveRebuildRetainsMediaWithoutAccompanyingText(t *testing.T) {
