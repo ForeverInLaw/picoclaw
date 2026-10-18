@@ -104,7 +104,7 @@ func SerializeMessages(messages []Message) []any {
 			})
 		}
 		for _, mediaURL := range m.Media {
-			if strings.HasPrefix(mediaURL, "data:image/") {
+			if isImageURL(mediaURL) {
 				parts = append(parts, map[string]any{
 					"type": "image_url",
 					"image_url": map[string]any{
@@ -141,6 +141,14 @@ func SerializeMessages(messages []Message) []any {
 		out = append(out, msg)
 	}
 	return out
+}
+
+func isImageURL(value string) bool {
+	if strings.HasPrefix(value, "data:image/") {
+		return true
+	}
+	parsed, err := url.Parse(value)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != ""
 }
 
 func parseDataAudioURL(mediaURL string) (format, data string, ok bool) {

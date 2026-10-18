@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -48,6 +49,98 @@ func TestImageDocumentWithGenericMIMERetainsVisionInput(t *testing.T) {
 	require.Len(t, current.Media, 1)
 	require.True(t, strings.HasPrefix(current.Media[0], "data:image/png;base64,"))
 	require.NotContains(t, current.Content, "extractor")
+}
+
+func TestUnavailableAttachmentsPreserveTextAndValidFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name, failure string
+		steering      bool
+	}{
+		{"missing-reference", "missing-reference", false},
+		{"missing-source", "missing-source", false},
+		{"oversized", "oversized", false},
+		{"steering", "missing-reference", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			al, cfg, mb, _, cleanup := newTestAgentLoop(t)
+			defer cleanup()
+			defer mb.Close()
+			defer al.Close()
+			p := &recordingProvider{}
+			a := al.GetRegistry().GetDefaultAgent()
+			a.Provider = p
+			cfg.Agents.Defaults.MaxMediaSize = 32
+			store := media.NewFileMediaStore()
+			al.SetMediaStore(store)
+			goodPath := filepath.Join(t.TempDir(), "good.go")
+			require.NoError(t, os.WriteFile(goodPath, []byte("package main\n"), 0o600))
+			good, err := store.Store(goodPath, media.MediaMeta{Filename: "good.go"}, "good")
+			require.NoError(t, err)
+			bad := "media://missing-fixture"
+			if tc.failure != "missing-reference" {
+				path := filepath.Join(t.TempDir(), "bad.go")
+				require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("x", 64)), 0o600))
+				bad, err = store.Store(path, media.MediaMeta{Filename: "bad.go"}, "bad")
+				require.NoError(t, err)
+				if tc.failure == "missing-source" {
+					require.NoError(t, os.Remove(path))
+				}
+			}
+			msg := directIngressMessage("What is 2+2? [file]")
+			msg.SessionKey = "agent:main:partial-attachments"
+			msg.Media = []string{bad, good}
+			if tc.steering {
+				require.NoError(t, al.Steer(providers.Message{Role: "user", Content: msg.Content, Media: msg.Media}))
+				msg.Content, msg.Media = "Initial question", nil
+			}
+			_, err = al.processMessage(t.Context(), msg)
+			require.NoError(t, err)
+			current := p.lastMessages[len(p.lastMessages)-1]
+			require.Contains(t, current.Content, "What is 2+2?")
+			require.Contains(t, current.Content, "Attachment unavailable")
+			require.Contains(t, current.Content, "package main")
+			require.NotContains(t, current.Content, bad)
+			history := a.Sessions.GetHistory(msg.SessionKey)
+			user := history[len(history)-2]
+			require.Len(t, user.Media, 1)
+			require.True(t, strings.HasPrefix(user.Media[0], tools.AttachmentPrefix))
+			require.Contains(t, user.Content, "Attachment unavailable")
+		})
+	}
+}
+
+func TestAttachmentStorageFailureStillStopsTheTurn(t *testing.T) {
+	for _, failure := range []string{"not-a-directory", "writable-directory"} {
+		t.Run(failure, func(t *testing.T) {
+			if failure == "writable-directory" && runtime.GOOS == "windows" {
+				t.Skip("Unix permission bits do not describe Windows ACLs")
+			}
+			al, cfg, mb, _, cleanup := newTestAgentLoop(t)
+			defer cleanup()
+			defer mb.Close()
+			defer al.Close()
+			p := &recordingProvider{}
+			al.GetRegistry().GetDefaultAgent().Provider = p
+			directory := filepath.Join(cfg.Agents.Defaults.Workspace, ".attachments")
+			if failure == "writable-directory" {
+				require.NoError(t, os.Mkdir(directory, 0o700))
+				require.NoError(t, os.Chmod(directory, 0o777))
+			} else {
+				require.NoError(t, os.WriteFile(directory, []byte("not a directory"), 0o600))
+			}
+			path := filepath.Join(t.TempDir(), "source.go")
+			require.NoError(t, os.WriteFile(path, []byte("package main\n"), 0o600))
+			store := media.NewFileMediaStore()
+			al.SetMediaStore(store)
+			ref, err := store.Store(path, media.MediaMeta{Filename: "source.go"}, "upload")
+			require.NoError(t, err)
+			msg := directIngressMessage("Analyze [file]")
+			msg.Media = []string{ref}
+			_, err = al.processMessage(t.Context(), msg)
+			require.Error(t, err)
+			require.Empty(t, p.lastMessages)
+		})
+	}
 }
 
 func TestTextAttachmentReachesTextModelAndSurvivesFollowUp(t *testing.T) {

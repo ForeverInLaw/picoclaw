@@ -28,6 +28,15 @@ documents, archives and unsupported encodings produce an explicit extraction
 notice; PDF/Office conversion and OCR are not implemented by this text-input
 path. Files are never executed during preparation.
 
+A missing temporary reference/source or an oversized file is omitted with an
+explicit notice to the model; the message text and other valid attachments are
+still processed. Storage and security errors stop the request instead.
+
+On Unix, `.attachments/` must be owned by the bot's user or root and must not be
+group/world-writable. Unsafe directories are rejected, including reads after
+restart; correct ownership and set mode 0700 before retrying. Windows storage
+relies on the deployment's ACL policy.
+
 The provider serializer performs no filesystem reads and never interprets
 `[file:...]` text as an instruction to attach local bytes. Unsupported input
 responses describe a rejected attachment/input format without claiming that

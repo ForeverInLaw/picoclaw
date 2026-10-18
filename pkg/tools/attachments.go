@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -22,6 +23,11 @@ import (
 )
 
 const AttachmentPrefix = "attachment://"
+
+var (
+	ErrAttachmentUnavailable = errors.New("attachment source no longer available")
+	ErrAttachmentTooLarge    = errors.New("attachment exceeds the configured media size limit")
+)
 
 // AttachmentStore retains originals and text views independently of the channel's
 // temporary media cache. References are owned by the receiving conversation.
@@ -54,6 +60,9 @@ func (s *AttachmentStore) Import(scope RequestScope, path string, meta media.Med
 	}
 	file, err := os.Open(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: %w", ErrAttachmentUnavailable, err)
+		}
 		return "", err
 	}
 	defer file.Close()
@@ -61,15 +70,18 @@ func (s *AttachmentStore) Import(scope RequestScope, path string, meta media.Med
 	if err != nil {
 		return "", err
 	}
-	if !info.Mode().IsRegular() || maxBytes <= 0 || info.Size() > int64(maxBytes) {
-		return "", fmt.Errorf("attachment is not a regular file or exceeds the configured media size limit")
+	if !info.Mode().IsRegular() || maxBytes <= 0 {
+		return "", fmt.Errorf("attachment is not a regular file or has an invalid media size limit")
+	}
+	if info.Size() > int64(maxBytes) {
+		return "", ErrAttachmentTooLarge
 	}
 	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
 	if err != nil {
 		return "", err
 	}
 	if len(data) > maxBytes {
-		return "", fmt.Errorf("attachment exceeds the configured media size limit")
+		return "", ErrAttachmentTooLarge
 	}
 	name := filepath.Base(strings.ReplaceAll(meta.Filename, "\\", "/"))
 	if name == "." || name == "/" || name == "" {

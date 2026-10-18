@@ -55,6 +55,34 @@ func TestNewHTTPClient_InvalidProxy(t *testing.T) {
 
 // --- SerializeMessages tests ---
 
+func TestSerializeMessages_PreservesRemoteImageURLs(t *testing.T) {
+	for _, imageURL := range []string{
+		"https://example.invalid/image.png?signature=a%2Fb&expires=42",
+		"http://example.invalid/image",
+	} {
+		serialized, err := json.Marshal(
+			SerializeMessages([]Message{{Role: "user", Content: "describe", Media: []string{imageURL}}}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var messages []struct {
+			Content []struct {
+				Type     string `json:"type"`
+				ImageURL struct {
+					URL string `json:"url"`
+				} `json:"image_url"`
+			} `json:"content"`
+		}
+		if err = json.Unmarshal(serialized, &messages); err != nil {
+			t.Fatal(err)
+		}
+		if len(messages) != 1 || len(messages[0].Content) != 2 || messages[0].Content[1].ImageURL.URL != imageURL {
+			t.Fatalf("linked image lost: %s", serialized)
+		}
+	}
+}
+
 func TestSerializeMessages_PlainText(t *testing.T) {
 	messages := []Message{
 		{Role: "user", Content: "hello"},

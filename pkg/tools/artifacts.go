@@ -80,7 +80,20 @@ func openPrivateRoot(directory string, create bool) (*os.Root, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, fmt.Errorf("retained file directory must be a real directory")
 	}
-	return os.OpenRoot(directory)
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return nil, err
+	}
+	openedInfo, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, openedInfo) {
+		root.Close()
+		return nil, fmt.Errorf("retained file directory changed while opening")
+	}
+	if err := validatePrivateRoot(openedInfo); err != nil {
+		root.Close()
+		return nil, err
+	}
+	return root, nil
 }
 
 func (s *ArtifactStore) persist(scope RequestScope, text string) (string, error) {

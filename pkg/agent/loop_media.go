@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -47,31 +48,59 @@ func (ts *turnState) fileScope(ctx context.Context) tools.RequestScope {
 	return scope
 }
 
-func (al *AgentLoop) retainAttachments(ts *turnState, refs []string, maxSize int) ([]string, error) {
-	retained := append([]string(nil), refs...)
+func (al *AgentLoop) retainAttachments(
+	ts *turnState,
+	message providers.Message,
+	maxSize int,
+) (providers.Message, error) {
 	if al.mediaStore == nil || ts.agent.Attachments == nil || ts.opts.ConversationContext.Inline || ts.opts.NoHistory {
-		return retained, nil
+		return message, nil
 	}
+	refs := message.Media
+	message.Media = make([]string, 0, len(refs))
 	scope := tools.RequestScope{AgentID: ts.agent.ID, SessionKey: ts.sessionKey}
 	for i, ref := range refs {
 		if !strings.HasPrefix(ref, "media://") {
+			message.Media = append(message.Media, ref)
 			continue
 		}
 		path, meta, err := al.mediaStore.ResolveWithMeta(ref)
 		if err != nil {
-			return nil, fmt.Errorf("attachment unavailable: %w", err)
+			message.Content += attachmentUnavailableNote(
+				fmt.Sprintf("attachment %d", i+1),
+				"the temporary media reference is no longer available",
+			)
+			continue
 		}
 		mime := detectMIME(path, meta)
 		if strings.HasPrefix(mime, "image/") || utils.IsAudioFile(meta.Filename, mime) ||
 			strings.HasPrefix(mime, "video/") {
+			message.Media = append(message.Media, ref)
 			continue
 		}
-		retained[i], err = ts.agent.Attachments.Import(scope, path, meta, maxSize)
+		retained, err := ts.agent.Attachments.Import(scope, path, meta, maxSize)
 		if err != nil {
-			return nil, fmt.Errorf("could not preserve attachment %q: %w", meta.Filename, err)
+			if errors.Is(err, tools.ErrAttachmentUnavailable) || errors.Is(err, tools.ErrAttachmentTooLarge) {
+				reason := "the source file is no longer available"
+				if errors.Is(err, tools.ErrAttachmentTooLarge) {
+					reason = "the file exceeds the configured media size limit"
+				}
+				message.Content += attachmentUnavailableNote(meta.Filename, reason)
+				continue
+			}
+			return providers.Message{}, fmt.Errorf("could not preserve attachment %q: %w", meta.Filename, err)
 		}
+		message.Media = append(message.Media, retained)
 	}
-	return retained, nil
+	return message, nil
+}
+
+func attachmentUnavailableNote(name, reason string) string {
+	return fmt.Sprintf(
+		"\n\n[Attachment unavailable: %q; %s. Its contents are not included. Do not infer them; request a new upload if the answer requires this file.]",
+		name,
+		reason,
+	)
 }
 
 func (al *AgentLoop) resolveTurnMedia(

@@ -1892,12 +1892,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var summary string
 	var retrievedMemory string
 	maxMediaSize := al.GetConfig().Agents.Defaults.GetMaxMediaSize()
-	var attachmentErr error
-	ts.media, attachmentErr = al.retainAttachments(ts, ts.media, maxMediaSize)
+	input, attachmentErr := al.retainAttachments(
+		ts,
+		providers.Message{Content: ts.userMessage, Media: ts.media},
+		maxMediaSize,
+	)
 	if attachmentErr != nil {
 		turnStatus = TurnEndStatusError
 		return turnResult{}, attachmentErr
 	}
+	ts.userMessage, ts.media = input.Content, input.Media
 	if !ts.opts.NoHistory {
 		assembled, err := contextHistory(turnCtx, ts.agent, ts.sessionKey, 0)
 		if err != nil {
@@ -2093,11 +2097,11 @@ turnLoop:
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
 			for i := range pendingMessages {
-				retained, retainErr := al.retainAttachments(ts, pendingMessages[i].Media, maxMediaSize)
+				retained, retainErr := al.retainAttachments(ts, pendingMessages[i], maxMediaSize)
 				if retainErr != nil {
 					return turnResult{}, retainErr
 				}
-				pendingMessages[i].Media = retained
+				pendingMessages[i] = retained
 			}
 			// Include existing context when deciding whether steering attachments fit.
 			combined := append(append([]providers.Message(nil), messages...), pendingMessages...)
