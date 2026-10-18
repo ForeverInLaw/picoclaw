@@ -54,6 +54,7 @@ type AgentInstance struct {
 	ContextManagerError       error
 	ContextProvider           providers.LLMProvider
 	Artifacts                 *tools.ArtifactStore
+	Attachments               *tools.AttachmentStore
 
 	// Router is non-nil when model routing is configured and the light model
 	// was successfully resolved. It scores each incoming message and decides
@@ -88,6 +89,7 @@ func NewAgentInstance(
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 
 	toolsRegistry := tools.NewToolRegistry()
+	attachments := tools.NewAttachmentStore(workspace)
 	var artifacts *tools.ArtifactStore
 	if len(artifactStores) > 0 {
 		artifacts = artifactStores[0]
@@ -98,7 +100,8 @@ func NewAgentInstance(
 	if cfg.Tools.IsToolEnabled("read_file") {
 		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
 		toolsRegistry.Register(
-			tools.NewReadFileTool(workspace, readRestrict, maxReadFileSize, allowReadPaths).WithArtifacts(artifacts),
+			tools.NewReadFileTool(workspace, readRestrict, maxReadFileSize, allowReadPaths).
+				WithArtifacts(artifacts).WithAttachments(attachments),
 		)
 	}
 	if cfg.Tools.IsToolEnabled("write_file") {
@@ -270,6 +273,7 @@ func NewAgentInstance(
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,
 		Artifacts:                 artifacts,
+		Attachments:               attachments,
 		Tools:                     toolsRegistry,
 		Subagents:                 subagents,
 		SkillsFilter:              skillsFilter,

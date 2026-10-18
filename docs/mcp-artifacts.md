@@ -34,6 +34,10 @@ Docker images the default is `/data/artifacts/mcp`; persist the writable `/data`
 state volume. New directories use mode 0700 and atomic records use 0600.
 Records contain versioned agent/conversation ownership and full raw text.
 The existing durable atomic writer anchors its operations through `os.Root`.
+On Unix, directories must be owned by the bot's user or root and must not allow
+group/world writes. Unsafe directories are rejected on reads and writes; correct
+ownership and set mode 0700 before retrying. Private read-only directories remain
+readable. On Windows, protect storage through host ACLs.
 
 Read details through the existing enabled `read_file` tool:
 

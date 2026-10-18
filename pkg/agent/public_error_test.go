@@ -143,7 +143,7 @@ func TestSeahorseBackgroundCompactionFailureLogsSafeProviderGuidance(t *testing.
 		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"answer"}}]}`))
 	}))
-	defer endpoint.Close()
+	t.Cleanup(endpoint.Close)
 	base, cfg, mb, _, cleanup := newTestAgentLoop(t)
 	base.Close()
 	mb.Close()
@@ -170,13 +170,14 @@ func TestSeahorseBackgroundCompactionFailureLogsSafeProviderGuidance(t *testing.
 		_, turnErr := al.ProcessDirect(t.Context(), strings.Repeat("context evidence ", 80), "background-warning")
 		require.NoError(t, turnErr)
 	}
-	require.Eventually(t, func() bool {
-		logs, readErr := os.ReadFile(logPath)
-		return readErr == nil && strings.Contains(string(logs), "Context compaction failed")
-	}, 2*time.Second, 10*time.Millisecond, "expected a background compaction failure warning")
+	// Join all compactions before inspecting logs or closing the HTTP fixture.
+	manager, ok := al.GetRegistry().GetDefaultAgent().ContextManager.(*seahorseContextManager)
+	require.True(t, ok)
+	manager.workers.Wait()
 	require.Positive(t, compactions.Load())
 	logs, err := os.ReadFile(logPath)
 	require.NoError(t, err)
+	require.Contains(t, string(logs), "Context compaction failed")
 	require.Contains(t, string(logs), "Authentication failed")
 	for _, secret := range []string{"tiny", "xy", "untrusted compact body"} {
 		require.NotContains(t, string(logs), secret)

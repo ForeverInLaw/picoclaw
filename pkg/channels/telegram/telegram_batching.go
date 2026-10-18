@@ -89,11 +89,12 @@ func (c *TelegramChannel) buildInboundCandidate(
 	messageIDStr := fmt.Sprintf("%d", message.MessageID)
 	scope := channels.BuildMediaScope(c.Name(), chatIDStr, messageIDStr)
 
-	storeMedia := func(localPath, filename string) string {
+	storeMedia := func(localPath, filename, contentType string) string {
 		if store := c.GetMediaStore(); store != nil {
 			ref, err := store.Store(localPath, media.MediaMeta{
-				Filename: filename,
-				Source:   "telegram",
+				Filename:    filename,
+				ContentType: contentType,
+				Source:      "telegram",
 			}, scope)
 			if err == nil {
 				return ref
@@ -231,7 +232,7 @@ func (c *TelegramChannel) buildInboundCandidate(
 func (c *TelegramChannel) buildTelegramMessagePayload(
 	ctx context.Context,
 	message *telego.Message,
-	storeMedia func(localPath, filename string) string,
+	storeMedia func(localPath, filename, contentType string) string,
 ) (string, []string) {
 	if message == nil {
 		return "", nil
@@ -264,7 +265,7 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 		photo := message.Photo[len(message.Photo)-1]
 		photoPath := c.downloadPhoto(ctx, photo.FileID)
 		if photoPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(photoPath, "photo.jpg"))
+			mediaPaths = append(mediaPaths, storeMedia(photoPath, "photo.jpg", "image/jpeg"))
 			if content != "" {
 				content += "\n"
 			}
@@ -274,7 +275,7 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 	if message.Voice != nil {
 		voicePath := c.downloadFile(ctx, message.Voice.FileID, ".ogg")
 		if voicePath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(voicePath, "voice.ogg"))
+			mediaPaths = append(mediaPaths, storeMedia(voicePath, "voice.ogg", message.Voice.MimeType))
 			if content != "" {
 				content += "\n"
 			}
@@ -284,7 +285,7 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 	if message.Audio != nil {
 		audioPath := c.downloadFile(ctx, message.Audio.FileID, ".mp3")
 		if audioPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(audioPath, "audio.mp3"))
+			mediaPaths = append(mediaPaths, storeMedia(audioPath, message.Audio.FileName, message.Audio.MimeType))
 			if content != "" {
 				content += "\n"
 			}
@@ -294,7 +295,7 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 	if message.Document != nil {
 		docPath := c.downloadFile(ctx, message.Document.FileID, "")
 		if docPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(docPath, "document"))
+			mediaPaths = append(mediaPaths, storeMedia(docPath, message.Document.FileName, message.Document.MimeType))
 			if content != "" {
 				content += "\n"
 			}
@@ -308,7 +309,7 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 func (c *TelegramChannel) buildQuotedReplyPayload(
 	ctx context.Context,
 	message *telego.Message,
-	storeMedia func(localPath, filename string) string,
+	storeMedia func(localPath, filename, contentType string) string,
 ) (string, []string) {
 	if message == nil || message.ReplyToMessage == nil {
 		return "", nil

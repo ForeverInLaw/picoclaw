@@ -178,7 +178,7 @@ func runWebImageScenario(t *testing.T, rejectVision bool, channelName string) {
 		if frame.Payload["final"] == true {
 			content, _ := frame.Payload["content"].(string)
 			if rejectVision {
-				if !strings.Contains(strings.ToLower(content), "vision") ||
+				if !strings.Contains(strings.ToLower(content), "provider rejected") ||
 					!strings.Contains(strings.ToLower(content), "image") {
 					t.Fatalf("unsupported vision guidance=%q", content)
 				}

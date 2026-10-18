@@ -1,7 +1,6 @@
 package common
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -55,6 +54,34 @@ func TestNewHTTPClient_InvalidProxy(t *testing.T) {
 }
 
 // --- SerializeMessages tests ---
+
+func TestSerializeMessages_PreservesRemoteImageURLs(t *testing.T) {
+	for _, imageURL := range []string{
+		"https://example.invalid/image.png?signature=a%2Fb&expires=42",
+		"http://example.invalid/image",
+	} {
+		serialized, err := json.Marshal(
+			SerializeMessages([]Message{{Role: "user", Content: "describe", Media: []string{imageURL}}}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var messages []struct {
+			Content []struct {
+				Type     string `json:"type"`
+				ImageURL struct {
+					URL string `json:"url"`
+				} `json:"image_url"`
+			} `json:"content"`
+		}
+		if err = json.Unmarshal(serialized, &messages); err != nil {
+			t.Fatal(err)
+		}
+		if len(messages) != 1 || len(messages[0].Content) != 2 || messages[0].Content[1].ImageURL.URL != imageURL {
+			t.Fatalf("linked image lost: %s", serialized)
+		}
+	}
+}
 
 func TestSerializeMessages_PlainText(t *testing.T) {
 	messages := []Message{
@@ -132,47 +159,31 @@ func TestSerializeMessages_WithAudioMedia(t *testing.T) {
 	}
 }
 
-func TestSerializeMessages_WithInlineFileTag(t *testing.T) {
-	dir := t.TempDir()
-	pdfPath := filepath.Join(dir, "report.pdf")
-	pdfBytes := []byte("%PDF-1.4 test content")
-	if err := os.WriteFile(pdfPath, pdfBytes, 0o644); err != nil {
+func TestSerializeMessages_FilePathTagsRemainLiteralText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private.txt")
+	const secret = "local file contents must not be read by the serializer"
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	messages := []Message{
-		{Role: "user", Content: "please read this [file:" + pdfPath + "]"},
-	}
-	result := SerializeMessages(messages)
-
-	data, _ := json.Marshal(result)
-	var msgs []map[string]any
-	json.Unmarshal(data, &msgs)
-
-	content, ok := msgs[0]["content"].([]any)
-	if !ok {
-		t.Fatalf("expected array content for file message, got %T", msgs[0]["content"])
-	}
-	if len(content) != 2 {
-		t.Fatalf("expected 2 content parts, got %d", len(content))
-	}
-
-	textPart := content[0].(map[string]any)
-	if textPart["type"] != "text" || textPart["text"] != "please read this [file]" {
-		t.Fatalf("text part mismatch: %v", textPart)
-	}
-
-	filePart := content[1].(map[string]any)
-	if filePart["type"] != "file" {
-		t.Fatalf("expected file part, got %v", filePart["type"])
-	}
-	filePayload := filePart["file"].(map[string]any)
-	if filePayload["filename"] != "report.pdf" {
-		t.Fatalf("filename mismatch: %v", filePayload["filename"])
-	}
-	wantData := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(pdfBytes)
-	if filePayload["file_data"] != wantData {
-		t.Fatalf("file_data mismatch: got %v want %v", filePayload["file_data"], wantData)
+	for _, role := range []string{"user", "tool"} {
+		content := "please read [file:" + path + "]"
+		result := SerializeMessages([]Message{{Role: role, Content: content}})
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var messages []struct {
+			Content string `json:"content"`
+		}
+		if err = json.Unmarshal(data, &messages); err != nil {
+			t.Fatal(err)
+		}
+		if len(messages) != 1 || messages[0].Content != content {
+			t.Fatalf("file path was interpreted: %s", data)
+		}
+		if strings.Contains(string(data), secret) {
+			t.Fatal("serializer opened a local file")
+		}
 	}
 }
 

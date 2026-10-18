@@ -249,10 +249,16 @@ func isWithinWorkspace(candidate, workspace string) bool {
 }
 
 type ReadFileTool struct {
-	fs        fileSystem
-	maxSize   int64
-	workspace string
-	artifacts *ArtifactStore
+	fs          fileSystem
+	maxSize     int64
+	workspace   string
+	artifacts   *ArtifactStore
+	attachments *AttachmentStore
+}
+
+func (t *ReadFileTool) WithAttachments(store *AttachmentStore) *ReadFileTool {
+	t.attachments = store
+	return t
 }
 
 func (t *ReadFileTool) WithArtifacts(store *ArtifactStore) *ReadFileTool {
@@ -288,7 +294,7 @@ func (t *ReadFileTool) Name() string {
 }
 
 func (t *ReadFileTool) Description() string {
-	return "Read a file or an authorized artifact://mcp/ reference. Supports pagination via `offset` and `length`."
+	return "Read a file, an authorized attachment:// reference, or an artifact://mcp/ reference. Supports pagination via `offset` and `length`."
 }
 
 func (t *ReadFileTool) Parameters() map[string]any {
@@ -297,7 +303,7 @@ func (t *ReadFileTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"path": map[string]any{
 				"type":        "string",
-				"description": "File path or artifact://mcp/ reference to read.",
+				"description": "File path, attachment:// reference, or artifact://mcp/ reference to read.",
 			},
 			"offset": map[string]any{
 				"type":        "integer",
@@ -342,12 +348,15 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	var file fs.File
-	if strings.HasPrefix(path, artifactPrefix) {
+	if strings.HasPrefix(path, AttachmentPrefix) {
+		file, err = t.attachments.Open(ToolRequestScope(ctx), path)
+	} else if strings.HasPrefix(path, artifactPrefix) {
 		if t.artifacts == nil {
 			return ErrorResult("artifact access unavailable")
 		}
 		file, err = t.artifacts.Open(ToolRequestScope(ctx), path)
-	} else if t.artifacts.ProtectPath(path) || t.artifacts.ProtectPath(filepath.Join(t.workspace, path)) {
+	} else if t.artifacts.ProtectPath(path) || t.artifacts.ProtectPath(filepath.Join(t.workspace, path)) ||
+		t.attachments.ProtectPath(path) || t.attachments.ProtectPath(filepath.Join(t.workspace, path)) {
 		return ErrorResult("artifact access denied: use an authorized artifact reference")
 	} else {
 		file, err = t.fs.Open(path)
