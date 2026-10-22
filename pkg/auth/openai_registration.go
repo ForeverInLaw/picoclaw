@@ -100,7 +100,7 @@ func registeredTokenAccount(ctx context.Context, cfg OAuthProviderConfig, token 
 		account.ID = previous.ID
 		account.Label = previous.Label
 		account.Enabled = previous.Enabled
-		if scopes == "" {
+		if scopes == "" && nonce == "" {
 			account.Scopes = previous.Scopes
 		}
 	}

@@ -172,7 +172,19 @@
       "disabled": "Disabled",
       "models": "Models",
       "connection": "Codex account",
-      "select": "Select an account"
+      "select": "Select an account",
+      "plan_permission_required": "ChatGPT plan permission required"
+    },
+    "manual": {
+      "continueWithChatGPT": "Continue with ChatGPT",
+      "resume": "Resume sign-in",
+      "title": "Connect a ChatGPT account",
+      "instructions": "Complete sign-in in OpenAI, copy the complete final address from the browser, and paste it below.",
+      "loopbackError": "The final address starts with http://127.0.0.1:1455/auth/callback. Your browser may show a connection error. Copy the address anyway; Picoclaw completes sign-in on the server. Keep this sign-in pending until you paste the address or it expires.",
+      "openBrowser": "Open OpenAI sign-in",
+      "callbackLabel": "Complete callback URL",
+      "complete": "Connect account",
+      "success": "Account connected. Choose it in Models to use it."
     }
   },
   "models": {

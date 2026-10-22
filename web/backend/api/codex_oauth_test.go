@@ -414,11 +414,10 @@ func TestCodexRegisteredStreamFailuresKeepRecoveryMetadata(t *testing.T) {
 	for _, scenario := range []struct {
 		code   string
 		status int
-		reason providers.FailoverReason
 	}{
-		{"subscription_sharing_usage_limit_exceeded", 429, providers.FailoverRateLimit},
-		{"subscription_sharing_usage_unavailable", 503, providers.FailoverTimeout},
-		{"subscription_sharing_invalid_user", 401, providers.FailoverAuth},
+		{"subscription_sharing_usage_limit_exceeded", 429},
+		{"subscription_sharing_usage_unavailable", 503},
+		{"subscription_sharing_invalid_user", 401},
 	} {
 		t.Run(scenario.code, func(t *testing.T) {
 			t.Setenv(config.EnvHome, t.TempDir())

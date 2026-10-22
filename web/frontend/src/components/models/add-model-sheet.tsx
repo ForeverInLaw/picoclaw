@@ -1,7 +1,9 @@
 import { IconLoader2 } from "@tabler/icons-react"
-import { useEffect, useState } from "react"
+import { useMutation, useQuery } from "@tanstack/react-query"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import { getCodexAccounts } from "@/api/codex-accounts"
 import type { ModelTestConfiguration } from "@/api/model-probe"
 import { addModel, setDefaultModel } from "@/api/models"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
@@ -13,6 +15,14 @@ import {
 } from "@/components/shared-form"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Sheet,
   SheetContent,
@@ -31,6 +41,7 @@ interface AddForm {
   apiKey: string
   proxy: string
   authMethod: string
+  accountID: string
   connectMode: string
   workspace: string
   rpm: string
@@ -46,6 +57,7 @@ const EMPTY_ADD_FORM: AddForm = {
   apiKey: "",
   proxy: "",
   authMethod: "",
+  accountID: "",
   connectMode: "",
   workspace: "",
   rpm: "",
@@ -61,7 +73,11 @@ interface AddModelSheetProps {
   existingModelNames: string[]
 }
 
-export function AddModelSheet({
+export function AddModelSheet(props: AddModelSheetProps) {
+  return <AddModelForm key={props.open ? "open" : "closed"} {...props} />
+}
+
+function AddModelForm({
   open,
   onClose,
   onSaved,
@@ -69,7 +85,22 @@ export function AddModelSheet({
 }: AddModelSheetProps) {
   const { t } = useTranslation()
   const [form, setForm] = useState<AddForm>(EMPTY_ADD_FORM)
-  const [saving, setSaving] = useState(false)
+  const accounts = useQuery({
+    queryKey: ["codex-accounts"],
+    queryFn: getCodexAccounts,
+    enabled: open,
+  })
+  const save = useMutation({
+    mutationFn: async () => {
+      await addModel(configuration)
+      if (setAsDefault) await setDefaultModel(configuration.model_name)
+    },
+    onSuccess: () => {
+      onSaved()
+      onClose()
+    },
+  })
+  const saving = save.isPending
   const [setAsDefault, setSetAsDefault] = useState(false)
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof AddForm, string>>
@@ -79,15 +110,6 @@ export function AddModelSheet({
     form.apiKey,
     t("models.field.apiKeyPlaceholder"),
   )
-
-  useEffect(() => {
-    if (open) {
-      setForm(EMPTY_ADD_FORM)
-      setSetAsDefault(false)
-      setFieldErrors({})
-      setServerError("")
-    }
-  }, [open])
 
   const validate = (): boolean => {
     const errors: Partial<Record<keyof AddForm, string>> = {}
@@ -117,6 +139,7 @@ export function AddModelSheet({
     api_key: form.apiKey.trim() || undefined,
     proxy: form.proxy.trim() || undefined,
     auth_method: form.authMethod.trim() || undefined,
+    account_id: form.accountID || undefined,
     connect_mode: form.connectMode.trim() || undefined,
     workspace: form.workspace.trim() || undefined,
     rpm: form.rpm ? Number(form.rpm) : undefined,
@@ -127,22 +150,12 @@ export function AddModelSheet({
     thinking_level: form.thinkingLevel.trim() || undefined,
   }
 
-  const handleSave = async () => {
+  const handleSave = () => {
     if (!validate()) return
-    setSaving(true)
     setServerError("")
-    try {
-      await addModel(configuration)
-      if (setAsDefault) {
-        await setDefaultModel(configuration.model_name)
-      }
-      onSaved()
-      onClose()
-    } catch (e) {
-      setServerError(e instanceof Error ? e.message : t("models.add.saveError"))
-    } finally {
-      setSaving(false)
-    }
+    save.mutate(undefined, {
+      onError: (error) => setServerError(error.message),
+    })
   }
 
   return (
@@ -193,6 +206,42 @@ export function AddModelSheet({
               )}
             </Field>
 
+            {(!form.model.includes("/") ||
+              form.model.startsWith("openai/")) && (
+              <Field label={t("credentials.accounts.connection")}>
+                <Select
+                  value={form.accountID || "api-key"}
+                  onValueChange={(id) =>
+                    setForm((current) => ({
+                      ...current,
+                      accountID: id === "api-key" ? "" : id,
+                      authMethod: id === "api-key" ? "" : "oauth",
+                      apiKey: "",
+                      apiBase: "",
+                    }))
+                  }
+                >
+                  <SelectTrigger
+                    aria-label={t("credentials.accounts.connection")}
+                    className="w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="api-key">
+                        {t("models.field.apiKey")}
+                      </SelectItem>
+                      {accounts.data?.accounts.map((account) => (
+                        <SelectItem key={account.id} value={account.id}>
+                          {account.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
             <Field label={t("models.field.apiKey")}>
               <KeyInput
                 value={form.apiKey}

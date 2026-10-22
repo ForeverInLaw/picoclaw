@@ -5,7 +5,11 @@ export interface CodexAccount {
   enabled: boolean
   account_id?: string
   email?: string
-  status: "authenticated" | "reauthorization_required" | "disabled"
+  status:
+    | "authenticated"
+    | "reauthorization_required"
+    | "disabled"
+    | "plan_permission_required"
   expires_at?: string
   models: string[]
 }

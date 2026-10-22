@@ -7,7 +7,7 @@ import { ProviderStatusLine } from "./provider-status-line"
 interface CredentialCardProps {
   title: ReactNode
   description: string
-  status: OAuthProviderStatus["status"]
+  status?: OAuthProviderStatus["status"]
   authMethod?: string
   details?: ReactNode
   actions: ReactNode
@@ -30,7 +30,7 @@ export function CredentialCard({
         <p className="text-muted-foreground mt-1 text-xs">{description}</p>
       </div>
 
-      <ProviderStatusLine status={status} authMethod={authMethod} />
+      {status && <ProviderStatusLine status={status} authMethod={authMethod} />}
       <div className="text-muted-foreground mt-3 min-h-11 text-xs leading-5">
         {details}
       </div>

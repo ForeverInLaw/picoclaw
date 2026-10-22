@@ -49,3 +49,10 @@ Authenticated endpoints:
 Deterministic checks use temporary configuration stores and fake compatible HTTP
 endpoints. Run `go test -tags stdjson ./web/backend/api -run '(Test.*Model.*Inference|TestEditedModel)'`
 and `pnpm --dir web/frontend test:models`; neither requires paid credentials.
+
+Registered ChatGPT connections use the public Responses endpoint and preserve
+exact model slugs. Missing plan permission blocks inference even when identity
+sign-in succeeded. Structured stream failures preserve sanitized quota,
+authorization and temporary-server error codes for recovery; failed partial
+answers never count as a successful test. See [Codex account connections](codex-accounts.md)
+for remote callback instructions and the pending live acceptance checklist.

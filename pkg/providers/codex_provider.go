@@ -243,6 +243,7 @@ func (p *CodexProvider) chat(
 				evtRespCopy := evtResp
 				resp = &evtRespCopy
 			}
+			break // A terminal event completes this model operation even if the transport stays open.
 		}
 	}
 	if terminalError != nil {
