@@ -20,6 +20,8 @@ type FallbackCandidate struct {
 	// ConfigName retains the configured alias and its endpoint/credential selection.
 	ConfigName string
 	ConfigKey  string
+	ConfigID   string
+	AccountID  string
 }
 
 // StableKey keeps same-model configurations separate in caches and cooldowns.
@@ -185,6 +187,13 @@ func (fc *FallbackChain) execute(
 			return nil, ctx.Err()
 		}
 
+		availability := fc.cooldown.AccountAvailability(candidate.AccountID)
+		if !availability.Available {
+			unavailable := &CandidateUnavailableError{Reason: availability.Reason, RetryAt: availability.NextEligibleAt, Message: "account connection is unavailable"}
+			result.Attempts = append(result.Attempts, FallbackAttempt{Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model, Skipped: true, Reason: unavailable.Reason, Error: unavailable})
+			continue
+		}
+
 		// Each selected endpoint and credential has its own health state.
 		cooldownKey := candidate.StableKey()
 		if !retryOwnFailure && !fc.cooldown.IsAvailable(cooldownKey) {
@@ -279,7 +288,9 @@ func (fc *FallbackChain) execute(
 		}
 
 		// Retriable error: mark failure and continue to next candidate.
-		fc.cooldown.RecordFailure(cooldownKey, failErr)
+		if !fc.cooldown.recordAccountFailure(candidate, availability.SessionVersion, failErr) {
+			fc.cooldown.RecordFailure(cooldownKey, failErr)
+		}
 		result.Attempts = append(result.Attempts, FallbackAttempt{
 			Candidate: candidate,
 			Provider:  candidate.Provider,

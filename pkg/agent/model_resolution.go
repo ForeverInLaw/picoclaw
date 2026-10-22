@@ -36,7 +36,7 @@ func resolveModelCandidates(
 		var candidate providers.FallbackCandidate
 		if mc != nil {
 			candidate = candidateFromConfig(mc)
-		} else if ref := providers.ParseModelRef(raw, defaultProvider); ref != nil {
+		} else if ref := providers.ParseModelRef(raw, defaultProvider); ref != nil && !strings.HasPrefix(raw, config.ModelIDPrefix) {
 			candidate = providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model}
 		}
 		if candidate.Model != "" && !seen[candidate.StableKey()] {
@@ -71,6 +71,8 @@ func candidateFromConfig(mc *config.ModelConfig) providers.FallbackCandidate {
 		Model:      ref.Model,
 		ConfigName: mc.ModelName,
 		ConfigKey:  providers.ModelConfigKey(mc),
+		ConfigID:   mc.ID,
+		AccountID:  mc.AccountID,
 	}
 }
 

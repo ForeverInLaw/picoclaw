@@ -41,17 +41,21 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 	}
 	account, err := auth.GetAccount(accountID)
 	if err != nil {
-		return nil, fmt.Errorf("loading Codex account connection: %w", err)
+		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is unavailable"}
 	}
 	if account.Credential == nil {
-		return nil, fmt.Errorf("Codex account connection requires authorization")
+		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection requires authorization"}
 	}
 	if !account.Enabled {
-		return nil, fmt.Errorf("Codex account connection is disabled")
+		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is disabled"}
 	}
 	cred := account.Credential
 	provider := NewCodexProvider(cred.AccessToken, cred.AccountID)
 	provider.contextTokenSource = func(ctx context.Context) (string, string, error) {
+		state, err := auth.AccountState(accountID)
+		if err != nil || !state.Enabled || state.RequiresReauthorization {
+			return "", "", &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is unavailable"}
+		}
 		current, err := auth.AccountCredentialContext(ctx, accountID)
 		if err != nil {
 			var tokenError *auth.TokenRequestError

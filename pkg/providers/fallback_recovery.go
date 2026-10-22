@@ -79,6 +79,12 @@ func (fc *FallbackChain) ExecuteRecoveryCandidate(
 		}
 		for _, attempt := range exhausted.Attempts {
 			state := states[attempt.Candidate.StableKey()]
+			var unavailable *CandidateUnavailableError
+			if errors.As(attempt.Error, &unavailable) {
+				state.unavail = unavailable
+				state.excluded = unavailable.RetryAt.IsZero()
+				state.next = unavailable.RetryAt
+			}
 			if state.unavail != nil {
 				continue
 			}

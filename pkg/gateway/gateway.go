@@ -104,6 +104,7 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 
 	msgBus := bus.NewMessageBus()
 	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
+	agentLoop.SetRoutingConfigSource(func() (*config.Config, error) { return config.LoadConfig(configPath) })
 
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()

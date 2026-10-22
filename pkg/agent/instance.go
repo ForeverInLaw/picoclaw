@@ -25,6 +25,7 @@ import (
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
+	requestRouting            *requestRouting
 	ID                        string
 	Name                      string
 	Model                     string
