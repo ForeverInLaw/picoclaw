@@ -45,6 +45,9 @@ func (h *Handler) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 				item.ExpiresAt = cred.ExpiresAt.Format(time.RFC3339)
 			}
 		}
+		if !account.CanUsePlan() {
+			item.Status = "plan_permission_required"
+		}
 		if !account.Enabled {
 			item.Status = "disabled"
 		}

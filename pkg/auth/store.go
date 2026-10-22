@@ -25,6 +25,7 @@ type AuthCredential struct {
 var storeMu sync.Mutex
 
 type AuthStore struct {
+	HostID      string                        `json:"host_id,omitempty"`
 	Accounts    map[string]*AccountConnection `json:"accounts,omitempty"`
 	Credentials map[string]*AuthCredential    `json:"credentials"`
 }

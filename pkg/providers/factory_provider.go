@@ -6,6 +6,7 @@
 package providers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -47,8 +48,16 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 		return nil, fmt.Errorf("Codex account connection is disabled")
 	}
 	cred := account.Credential
-	provider := NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexAccountTokenSource(accountID))
+	provider := NewCodexProvider(cred.AccessToken, cred.AccountID)
+	provider.contextTokenSource = func(ctx context.Context) (string, string, error) {
+		current, err := auth.AccountCredentialContext(ctx, accountID)
+		if err != nil {
+			return "", "", err
+		}
+		return current.AccessToken, current.AccountID, nil
+	}
 	if account.Resource != "" {
+		provider.registered = true
 		// Registered ChatGPT accounts use the issued API resource; legacy CLI sessions retain their endpoint.
 		client := openai.NewClient(option.WithBaseURL(account.Resource), option.WithAPIKey(cred.AccessToken), option.WithMaxRetries(0))
 		provider.client = &client

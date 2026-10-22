@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -121,19 +122,40 @@ var accountRefreshLocks sync.Map
 // the latest record before writing, preserving concurrent metadata/other accounts.
 // A deleted, disabled or reconnected session cannot be resurrected by a late refresh.
 func AccountCredential(id string) (*AuthCredential, error) {
+	return AccountCredentialContext(context.Background(), id)
+}
+
+func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, error) {
 	key := authFilePath() + "\x00" + id
 	value, _ := accountRefreshLocks.LoadOrStore(key, &sync.Mutex{})
 	mu := value.(*sync.Mutex)
-	mu.Lock()
+	if err := acquireAuthMutex(ctx, mu); err != nil {
+		return nil, err
+	}
 	defer mu.Unlock()
-	refreshFile, err := lockAuthFile(fmt.Sprintf("%s.refresh-%x.lock", authFilePath(), sha256.Sum256([]byte(id))))
+	refreshFile, err := lockAuthFileContext(ctx, fmt.Sprintf("%s.refresh-%x.lock", authFilePath(), sha256.Sum256([]byte(id))))
 	if err != nil {
 		return nil, err
 	}
 	defer refreshFile.Close()
-	account, err := GetAccount(id)
+	unlockRead, err := lockStoreContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	loaded, err := loadStore()
+	unlockRead()
+	if err != nil {
+		return nil, err
+	}
+	account := loaded.Accounts[id]
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !account.CanUsePlan() {
+		return nil, errors.New("ChatGPT plan permission is not enabled for this account")
 	}
 	if !account.Enabled {
 		return nil, fmt.Errorf("account connection %q is disabled", id)
@@ -145,11 +167,20 @@ func AccountCredential(id string) (*AuthCredential, error) {
 	if cred.AuthMethod != "oauth" || !cred.NeedsRefresh() || cred.RefreshToken == "" {
 		return cred, nil
 	}
-	refreshed, err := RefreshAccessToken(cred, account.OAuth)
+	var refreshed *AuthCredential
+	var registered *AccountConnection
+	if account.Resource != "" {
+		registered, err = refreshRegisteredAccount(ctx, account)
+		if err == nil {
+			refreshed = registered.Credential
+		}
+	} else {
+		refreshed, err = RefreshAccessTokenContext(ctx, cred, account.OAuth)
+	}
 	if err != nil {
 		return nil, err
 	}
-	unlock, err := lockStore()
+	unlock, err := lockStoreContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -171,11 +202,18 @@ func AccountCredential(id string) (*AuthCredential, error) {
 		return nil, errors.New("account authorization changed during refresh")
 	}
 	current.Credential = refreshed
+	if registered != nil {
+		current.IDToken = registered.IDToken
+		current.Scopes = registered.Scopes
+	}
 	if id == config.LegacyOpenAIAccountID {
 		store.Credentials["openai"] = refreshed
 	}
 	if err := saveStore(store); err != nil {
 		return nil, err
+	}
+	if !current.CanUsePlan() {
+		return nil, errors.New("ChatGPT plan permission is not enabled for this account")
 	}
 	return refreshed, nil
 }

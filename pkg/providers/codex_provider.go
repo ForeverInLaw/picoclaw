@@ -24,10 +24,12 @@ const (
 )
 
 type CodexProvider struct {
-	client          *openai.Client
-	accountID       string
-	tokenSource     func() (string, string, error)
-	enableWebSearch bool
+	registered         bool
+	contextTokenSource func(context.Context) (string, string, error)
+	client             *openai.Client
+	accountID          string
+	tokenSource        func() (string, string, error)
+	enableWebSearch    bool
 }
 
 const defaultCodexInstructions = "You are Codex, a coding assistant."
@@ -101,7 +103,10 @@ func (p *CodexProvider) chat(
 ) (*LLMResponse, error) {
 	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	accountID := p.accountID
-	resolvedModel, fallbackReason := resolveCodexModel(model)
+	resolvedModel, fallbackReason := model, ""
+	if !p.registered {
+		resolvedModel, fallbackReason = resolveCodexModel(model)
+	}
 	if fallbackReason != "" {
 		logger.WarnCF(
 			"provider.codex",
@@ -113,8 +118,14 @@ func (p *CodexProvider) chat(
 			},
 		)
 	}
-	if p.tokenSource != nil {
-		tok, accID, err := p.tokenSource()
+	if p.contextTokenSource != nil || p.tokenSource != nil {
+		var tok, accID string
+		var err error
+		if p.contextTokenSource != nil {
+			tok, accID, err = p.contextTokenSource(ctx)
+		} else {
+			tok, accID, err = p.tokenSource()
+		}
 		if err != nil {
 			return nil, fmt.Errorf("refreshing token: %w", err)
 		}
@@ -123,9 +134,9 @@ func (p *CodexProvider) chat(
 			accountID = accID
 		}
 	}
-	if accountID != "" {
+	if accountID != "" && !p.registered {
 		opts = append(opts, option.WithHeader("Chatgpt-Account-Id", accountID))
-	} else {
+	} else if !p.registered {
 		logger.WarnCF(
 			"provider.codex",
 			"No account id found for Codex request; backend may reject with 400",
@@ -140,6 +151,30 @@ func (p *CodexProvider) chat(
 	// loop requested it (options["native_search"]), so prefer_native: false
 	useNativeSearch := p.enableWebSearch && (options["native_search"] == true)
 	params := buildCodexParams(messages, tools, resolvedModel, options, useNativeSearch)
+	if p.registered {
+		// The public ChatGPT-plan route accepts local functions inside a namespace.
+		// Reuse existing history translation and streaming response parsing.
+		var functions []responses.FunctionToolParam
+		var namespaced []any
+		for _, tool := range params.Tools {
+			if tool.OfFunction != nil {
+				functions = append(functions, *tool.OfFunction)
+			} else {
+				namespaced = append(namespaced, tool)
+			}
+		}
+		if len(functions) > 0 {
+			namespaced = append(namespaced, map[string]any{"type": "namespace", "name": "picoclaw", "description": "Picoclaw local tools", "tools": functions})
+		}
+		if len(namespaced) > 0 {
+			opts = append(opts, option.WithJSONSet("tools", namespaced))
+		}
+		for i := range params.Input.OfInputItemList {
+			if call := params.Input.OfInputItemList[i].OfFunctionCall; call != nil {
+				call.SetExtraFields(map[string]any{"namespace": "picoclaw"})
+			}
+		}
+	}
 
 	stream := p.client.Responses.NewStreaming(ctx, params, opts...)
 	defer stream.Close()
@@ -202,7 +237,7 @@ func (p *CodexProvider) chat(
 			"messages_count":     len(messages),
 			"tools_count":        len(tools),
 			"account_id_present": accountID != "",
-			"error":              err.Error(),
+			"error":              "provider request failed",
 		}
 		var apiErr *openai.Error
 		if errors.As(err, &apiErr) {
@@ -210,7 +245,7 @@ func (p *CodexProvider) chat(
 			fields["api_type"] = apiErr.Type
 			fields["api_code"] = apiErr.Code
 			fields["api_param"] = apiErr.Param
-			fields["api_message"] = apiErr.Message
+			fields["api_message"] = "provider request failed"
 			if apiErr.StatusCode == 400 {
 				fields["hint"] = "verify account id header and model compatibility for codex backend"
 			}

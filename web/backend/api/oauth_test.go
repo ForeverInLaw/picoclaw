@@ -59,7 +59,7 @@ func TestOAuthBrowserFlowCreatedAndQueried(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/oauth/login",
-		strings.NewReader(`{"provider":"openai","method":"browser"}`),
+		strings.NewReader(`{"provider":"google-antigravity","method":"browser"}`),
 	)
 	req.Host = "localhost:18800"
 	req.Header.Set("Content-Type", "application/json")
