@@ -29,10 +29,13 @@ export function useChatModels({ isConnected }: UseChatModelsOptions) {
       (model) =>
         model.configured &&
         model.auth_method !== "oauth" &&
+        model.auth_method !== "token" &&
         !isLocalModel(model),
     ),
     oauthModels: models.filter(
-      (model) => model.configured && model.auth_method === "oauth",
+      (model) =>
+        model.configured &&
+        (model.auth_method === "oauth" || model.auth_method === "token"),
     ),
     localModels: models.filter(
       (model) => model.configured && isLocalModel(model),

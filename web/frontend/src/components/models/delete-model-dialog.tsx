@@ -20,7 +20,11 @@ interface DeleteModelDialogProps {
   onDeleted: () => void
 }
 
-export function DeleteModelDialog({
+export function DeleteModelDialog(props: DeleteModelDialogProps) {
+  return <DeleteModelForm key={props.model?.id ?? "closed"} {...props} />
+}
+
+function DeleteModelForm({
   model,
   onClose,
   onDeleted,

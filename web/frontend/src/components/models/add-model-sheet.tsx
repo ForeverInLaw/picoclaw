@@ -129,7 +129,20 @@ function AddModelForm({
 
   const setField =
     (key: keyof AddForm) => (e: React.ChangeEvent<HTMLInputElement>) => {
-      setForm((f) => ({ ...f, [key]: e.target.value }))
+      const value = e.target.value
+      setForm((f) => {
+        const next = { ...f, [key]: value }
+        if (
+          key === "model" &&
+          f.accountID &&
+          value.trim().includes("/") &&
+          !value.trim().startsWith("openai/")
+        ) {
+          next.accountID = ""
+          if (f.authMethod === "oauth") next.authMethod = ""
+        }
+        return next
+      })
       if (fieldErrors[key]) {
         setFieldErrors((prev) => ({ ...prev, [key]: undefined }))
       }
