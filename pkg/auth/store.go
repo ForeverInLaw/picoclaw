@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"sync"
@@ -91,6 +94,12 @@ func loadStore() (*AuthStore, error) {
 			return nil, err
 		}
 	}
+	for _, account := range store.Accounts {
+		if account.SessionVersion == "" {
+			// Legacy records need a stable revision before their first mutation/refresh.
+			account.SessionVersion = fmt.Sprintf("legacy-%x", sha256.Sum256([]byte(account.ID+"\x00"+account.Issuer+"\x00"+account.Subject+"\x00"+account.OAuth.ClientID)))
+		}
+	}
 	return &store, nil
 }
 
@@ -143,6 +152,7 @@ func SetCredential(provider string, cred *AuthCredential) error {
 			account = &AccountConnection{ID: config.LegacyOpenAIAccountID, Label: "Existing Codex account", Provider: "openai", Enabled: true, OAuth: OpenAIOAuthConfig()}
 			store.Accounts[account.ID] = account
 		}
+		account.SessionVersion = uuid.NewString()
 		account.Credential = cred
 		if cred.Email != "" && account.Label == "Existing Codex account" {
 			account.Label = cred.Email
