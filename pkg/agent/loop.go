@@ -1860,7 +1860,7 @@ func (al *AgentLoop) handleReasoning(
 	}
 }
 
-func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, error) {
+func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (result turnResult, turnErr error) {
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	defer turnCancel()
 	ts.setTurnCancel(turnCancel)
@@ -1875,6 +1875,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {
+		if turnErr != nil && turnStatus == TurnEndStatusCompleted {
+			turnStatus = TurnEndStatusError
+		}
 		if ts.runtimeTrace != nil {
 			state := "completed"
 			if turnStatus == TurnEndStatusError {
@@ -2381,7 +2384,7 @@ turnLoop:
 			candidates := ts.agent.requestRouting.prefer(activeCandidates)
 			if len(candidates) == 0 {
 				candidates = []providers.FallbackCandidate{{Model: llmModel}}
-			} else if len(candidates) == 1 {
+			} else if llmModel != activeModel {
 				candidates = append([]providers.FallbackCandidate(nil), candidates...)
 				candidates[0].Model = llmModel
 			}

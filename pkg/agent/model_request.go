@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -78,7 +79,9 @@ func checkCandidateContext(
 	images := false
 	for _, message := range messages {
 		for _, media := range message.Media {
-			images = images || strings.HasPrefix(media, "data:image/")
+			parsed, err := url.Parse(media)
+			images = images || strings.HasPrefix(media, "data:image/") ||
+				err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != ""
 		}
 	}
 	if capable, ok := client.(providers.ImageInputCapable); images && ok && !capable.SupportsImageInput() {
