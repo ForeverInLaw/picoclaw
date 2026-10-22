@@ -50,17 +50,12 @@ func authLoginOpenAI(useDeviceCode bool) error {
 		return fmt.Errorf("login failed: %w", err)
 	}
 
-	if err = auth.SetCredential("openai", cred); err != nil {
-		return fmt.Errorf("failed to save credentials: %w", err)
-	}
-
-	appCfg, err := internal.LoadConfig()
-	if err == nil {
-		appCfg.BindLegacyCodexAccount("oauth")
-
-		if err = config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
-			return fmt.Errorf("could not update config: %w", err)
-		}
+	if _, err = saveLoginConfiguration(
+		"openai",
+		cred,
+		func(appCfg *config.Config) { appCfg.BindLegacyCodexAccount("oauth") },
+	); err != nil {
+		return err
 	}
 
 	fmt.Println("Login successful!")
@@ -101,12 +96,7 @@ func authLoginGoogleAntigravity() error {
 		fmt.Printf("Project: %s\n", projectID)
 	}
 
-	if err = auth.SetCredential("google-antigravity", cred); err != nil {
-		return fmt.Errorf("failed to save credentials: %w", err)
-	}
-
-	appCfg, err := internal.LoadConfig()
-	if err == nil {
+	if _, err = saveLoginConfiguration("google-antigravity", cred, func(appCfg *config.Config) {
 		// Update Providers (legacy format, for backward compatibility)
 		appCfg.Providers.Antigravity.AuthMethod = "oauth"
 
@@ -131,10 +121,8 @@ func authLoginGoogleAntigravity() error {
 
 		// Update default model
 		appCfg.Agents.Defaults.ModelName = "gemini-flash"
-
-		if err := config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
-			fmt.Printf("Warning: could not update config: %v\n", err)
-		}
+	}); err != nil {
+		return err
 	}
 
 	fmt.Println("\n✓ Google Antigravity login successful!")
@@ -181,12 +169,7 @@ func authLoginAnthropicSetupToken() error {
 		return fmt.Errorf("login failed: %w", err)
 	}
 
-	if err = auth.SetCredential("anthropic", cred); err != nil {
-		return fmt.Errorf("failed to save credentials: %w", err)
-	}
-
-	appCfg, err := internal.LoadConfig()
-	if err == nil {
+	if _, err = saveLoginConfiguration("anthropic", cred, func(appCfg *config.Config) {
 		appCfg.Providers.Anthropic.AuthMethod = "oauth"
 
 		found := false
@@ -208,10 +191,8 @@ func authLoginAnthropicSetupToken() error {
 				appCfg.Agents.Defaults.ModelName = defaultAnthropicModel
 			}
 		}
-
-		if err := config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
-			return fmt.Errorf("could not update config: %w", err)
-		}
+	}); err != nil {
+		return err
 	}
 
 	fmt.Println("Setup token saved for Anthropic!")
@@ -256,12 +237,7 @@ func authLoginPasteToken(provider string) error {
 		return fmt.Errorf("login failed: %w", err)
 	}
 
-	if err = auth.SetCredential(provider, cred); err != nil {
-		return fmt.Errorf("failed to save credentials: %w", err)
-	}
-
-	appCfg, err := internal.LoadConfig()
-	if err == nil {
+	appCfg, err := saveLoginConfiguration(provider, cred, func(appCfg *config.Config) {
 		switch provider {
 		case "anthropic":
 			appCfg.Providers.Anthropic.AuthMethod = "token"
@@ -285,9 +261,9 @@ func authLoginPasteToken(provider string) error {
 		case "openai":
 			appCfg.BindLegacyCodexAccount("token")
 		}
-		if err := config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
-			return fmt.Errorf("could not update config: %w", err)
-		}
+	})
+	if err != nil {
+		return err
 	}
 
 	fmt.Printf("Token saved for %s!\n", provider)
@@ -300,6 +276,10 @@ func authLoginPasteToken(provider string) error {
 }
 
 func authLogoutCmd(provider string) error {
+	return config.WithConfigMutation(internal.GetConfigPath(), func() error { return authLogoutGuarded(provider) })
+}
+
+func authLogoutGuarded(provider string) error {
 	if provider != "" {
 		if err := auth.DeleteCredential(provider); err != nil {
 			return fmt.Errorf("failed to remove credentials: %w", err)
@@ -307,6 +287,7 @@ func authLogoutCmd(provider string) error {
 
 		appCfg, err := internal.LoadConfig()
 		if err == nil {
+			appCfg.ModelList = appCfg.ConfiguredModels()
 			// Clear AuthMethod in ModelList
 			for i := range appCfg.ModelList {
 				switch provider {
@@ -345,6 +326,7 @@ func authLogoutCmd(provider string) error {
 
 	appCfg, err := internal.LoadConfig()
 	if err == nil {
+		appCfg.ModelList = appCfg.ConfiguredModels()
 		// Clear all AuthMethods in ModelList
 		for i := range appCfg.ModelList {
 			if appCfg.ModelList[i].AccountID == "" {
@@ -484,4 +466,31 @@ func isOpenAIModel(model string) bool {
 func isAnthropicModel(model string) bool {
 	return model == "anthropic" ||
 		strings.HasPrefix(model, "anthropic/")
+}
+
+// saveLoginConfiguration runs after interactive/network login has completed.
+// Writers acquire config before auth storage, matching dashboard account deletion.
+func saveLoginConfiguration(
+	provider string,
+	cred *auth.AuthCredential,
+	update func(*config.Config),
+) (*config.Config, error) {
+	var appCfg *config.Config
+	err := config.WithConfigMutation(internal.GetConfigPath(), func() error {
+		if err := auth.SetCredential(provider, cred); err != nil {
+			return fmt.Errorf("failed to save credentials: %w", err)
+		}
+		loaded, err := internal.LoadConfig()
+		if err != nil {
+			return fmt.Errorf("could not load config: %w", err)
+		}
+		loaded.ModelList = loaded.ConfiguredModels()
+		update(loaded)
+		if err = config.SaveConfig(internal.GetConfigPath(), loaded); err != nil {
+			return fmt.Errorf("could not update config: %w", err)
+		}
+		appCfg = loaded
+		return nil
+	})
+	return appCfg, err
 }
