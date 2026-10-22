@@ -15,7 +15,13 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
-export function CodexSignIn({ accountID }: { accountID?: string }) {
+export function CodexSignIn({
+  accountID,
+  label,
+}: {
+  accountID?: string
+  label?: string
+}) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [flowID, setFlowID] = useState("")
@@ -83,11 +89,9 @@ export function CodexSignIn({ accountID }: { accountID?: string }) {
   return (
     <>
       <Button onClick={begin} disabled={start.isPending} variant="outline">
-        {t(
-          pending
-            ? "credentials.manual.resume"
-            : "credentials.manual.continueWithChatGPT",
-        )}
+        {pending
+          ? t("credentials.manual.resume")
+          : label || t("credentials.manual.continueWithChatGPT")}
       </Button>
       {start.error && <p role="alert">{start.error.message}</p>}
       <Sheet open={open} onOpenChange={changeOpen}>

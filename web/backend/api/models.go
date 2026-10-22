@@ -19,6 +19,7 @@ func (h *Handler) registerModelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/models", h.withConfigMutation(h.handleAddModel))
 	mux.HandleFunc("POST /api/models/default", h.withConfigMutation(h.handleSetDefaultModel))
 	mux.HandleFunc("POST /api/models/{index}/test", h.handleTestSavedModel)
+	mux.HandleFunc("POST /api/models/by-id/{id}/test", h.handleTestSavedModelByID)
 	mux.HandleFunc("POST /api/models/test-inline", h.handleTestInlineModel)
 	mux.HandleFunc("POST /api/models/validate", h.handleValidateModel)
 	mux.HandleFunc("PUT /api/models/by-id/{id}", h.withConfigMutation(h.modelByID(h.handleUpdateModel)))

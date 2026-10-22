@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -60,12 +61,17 @@ func (h *Handler) readInlineModelTest(w http.ResponseWriter, r *http.Request) (c
 			modelTestError(w, http.StatusInternalServerError, "Could not load the selected model configuration.")
 			return mc, false
 		}
+		models := cfg.ConfiguredModels()
 		index := *request.ModelIndex
-		if index < 0 || index >= len(cfg.ModelList) {
+		if index < 0 || index >= len(models) {
 			modelTestError(w, http.StatusNotFound, "The selected model no longer exists. Refresh the model list.")
 			return mc, false
 		}
-		saved := cfg.ModelList[index]
+		saved := exactProbeModel(cfg, models[index])
+		if mc.ID != "" && saved.ID != mc.ID {
+			modelTestError(w, http.StatusConflict, "The selected model moved. Refresh the model list before testing.")
+			return mc, false
+		}
 		if err := retainModelCredential(&mc, saved); err != nil {
 			modelTestError(w, http.StatusBadRequest, err.Error())
 			return mc, false
@@ -99,11 +105,38 @@ func (h *Handler) handleTestSavedModel(w http.ResponseWriter, r *http.Request) {
 		modelTestError(w, http.StatusInternalServerError, "Could not load the selected model configuration.")
 		return
 	}
-	if index < 0 || index >= len(cfg.ModelList) {
+	models := cfg.ConfiguredModels()
+	if index < 0 || index >= len(models) {
 		modelTestError(w, http.StatusNotFound, "The selected model no longer exists. Refresh the model list.")
 		return
 	}
-	h.runModelInference(w, r, cfg.ModelList[index])
+	h.runModelInference(w, r, exactProbeModel(cfg, models[index]))
+}
+
+func (h *Handler) handleTestSavedModelByID(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.LoadConfig(h.configPath)
+	if err != nil {
+		modelTestError(w, 500, "Could not load the selected model configuration.")
+		return
+	}
+	for _, model := range cfg.ConfiguredModels() {
+		if model.ID == r.PathValue("id") {
+			h.runModelInference(w, r, exactProbeModel(cfg, model))
+			return
+		}
+	}
+	modelTestError(w, 404, "The selected model no longer exists. Refresh the model list.")
+}
+
+// The dashboard selects a configured entry; use its first resolved runtime key
+// directly, without alias lookup, key rotation or borrowing a neighboring entry.
+func exactProbeModel(cfg *config.Config, selected config.ModelConfig) config.ModelConfig {
+	for _, model := range cfg.ModelList {
+		if model.ID == selected.ID {
+			return model
+		}
+	}
+	return selected
 }
 
 func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc config.ModelConfig) {
@@ -132,21 +165,66 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		)
 		return
 	}
+	// Capture the session revision so a late result cannot update a replacement.
+	accountID, sessionVersion := "", ""
+	if protocol == "openai" && (mc.AuthMethod == "oauth" || mc.AuthMethod == "token") {
+		accountID = mc.AccountID
+		if accountID == "" {
+			accountID = config.LegacyOpenAIAccountID
+		}
+		account, err := auth.GetAccount(accountID)
+		if err != nil || !account.Enabled {
+			modelTestError(w, 400, "The selected account is unavailable or disabled.")
+			return
+		}
+		sessionVersion = account.SessionVersion
+	}
 	provider, modelID, err := providers.CreateProviderFromConfig(&mc)
 	if err != nil {
 		modelTestError(w, http.StatusBadRequest, "Check the selected provider, model identifier, API base and API key.")
 		return
 	}
+	if codex, ok := provider.(*providers.CodexProvider); ok {
+		codex.SetExactModel(true)
+	}
 	if _, ok := provider.(*providers.HTTPProvider); !ok && protocol != "openai" {
 		modelTestError(w, http.StatusBadRequest, "This test requires an OpenAI-compatible HTTP provider.")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	timeout := 15 * time.Second
+	if mc.RequestTimeout > 0 && mc.RequestTimeout < 15 {
+		timeout = time.Duration(mc.RequestTimeout) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	started := time.Now()
 	response, err := provider.Chat(ctx, []providers.Message{{Role: "user", Content: "Reply with OK."}}, nil, modelID,
 		map[string]any{"max_tokens": 32})
+	probe := auth.AccountProbe{
+		At:        time.Now().UTC(),
+		Model:     modelID,
+		LatencyMS: time.Since(started).Milliseconds(),
+		Status:    "success",
+	}
 	if err != nil {
+		probe.Status = "failed"
+		if failure := providers.ClassifyError(err, "openai", modelID); failure != nil {
+			switch failure.Reason {
+			case providers.FailoverAuth:
+				if failure.Status == http.StatusUnauthorized {
+					probe.Status = "reauthorization_required"
+				}
+			case providers.FailoverRateLimit,
+				providers.FailoverBilling,
+				providers.FailoverOverloaded,
+				providers.FailoverTimeout,
+				providers.FailoverNetwork:
+				probe.Status = "temporarily_unavailable"
+			}
+		}
+		if accountID != "" {
+			_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
+		}
 		message := providers.ErrorGuidance(err)
 		var networkError net.Error
 		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
@@ -159,12 +237,19 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		return
 	}
 	if response == nil || strings.TrimSpace(response.Content) == "" {
+		probe.Status = "failed"
+		if accountID != "" {
+			_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
+		}
 		modelTestError(
 			w,
 			http.StatusBadGateway,
 			"The selected model returned no answer. Check its model identifier and request settings.",
 		)
 		return
+	}
+	if accountID != "" {
+		_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

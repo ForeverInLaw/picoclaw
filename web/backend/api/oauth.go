@@ -129,6 +129,9 @@ type oauthFlowResponse struct {
 // registerOAuthRoutes binds OAuth login/logout endpoints to the ServeMux.
 func (h *Handler) registerOAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/oauth/accounts", h.handleListAccounts)
+	mux.HandleFunc("PATCH /api/oauth/accounts/{id}", h.handlePatchAccount)
+	mux.HandleFunc("DELETE /api/oauth/accounts/{id}", h.handleDeleteAccount)
+	mux.HandleFunc("POST /api/oauth/accounts/{id}/test", h.handleTestAccount)
 	mux.HandleFunc("POST /api/oauth/flows/{id}/complete", h.handleCompleteCodexAccount)
 	mux.HandleFunc("GET /api/oauth/providers", h.handleListOAuthProviders)
 	mux.HandleFunc("POST /api/oauth/login", h.handleOAuthLogin)
@@ -426,7 +429,13 @@ func (h *Handler) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if flow.Manual {
-		renderOAuthCallbackPage(w, "", oauthFlowError, "Complete this sign-in in the dashboard", "manual_callback_required")
+		renderOAuthCallbackPage(
+			w,
+			"",
+			oauthFlowError,
+			"Complete this sign-in in the dashboard",
+			"manual_callback_required",
+		)
 		return
 	}
 	if flow.Status != oauthFlowPending {
@@ -771,46 +780,51 @@ func (h *Handler) persistCredentialAndConfig(provider, authMethod string, cred *
 }
 
 func (h *Handler) syncProviderAuthMethod(provider, authMethod string) error {
-	cfg, err := oauthLoadConfig(h.configPath)
-	if err != nil {
-		return err
-	}
+	return config.WithConfigMutation(h.configPath, func() error {
+		cfg, err := oauthLoadConfig(h.configPath)
+		if err != nil {
+			return err
+		}
 
-	if provider == oauthProviderOpenAI {
-		if authMethod == "" {
-			cfg.Providers.OpenAI.AuthMethod = ""
+		if provider == oauthProviderOpenAI {
+			if authMethod == "" {
+				cfg.Providers.OpenAI.AuthMethod = ""
+			}
+			// OAuth authorizes its saved connection, never every OpenAI API-key model.
+			// Keep disconnected model references so reauthorization restores their identity.
+			if authMethod != "" {
+				if _, err := auth.GetAccount(config.LegacyOpenAIAccountID); err != nil {
+					return err
+				}
+				cfg.BindLegacyCodexAccount(authMethod)
+			}
+			return oauthSaveConfig(h.configPath, cfg)
 		}
-		// OAuth authorizes its saved connection, never every OpenAI API-key model.
-		// Keep disconnected model references so reauthorization restores their identity.
-		if authMethod != "" {
-			cfg.BindLegacyCodexAccount(authMethod)
+		switch provider {
+		case oauthProviderOpenAI:
+			cfg.Providers.OpenAI.AuthMethod = authMethod
+		case oauthProviderAnthropic:
+			cfg.Providers.Anthropic.AuthMethod = authMethod
+		case oauthProviderGoogleAntigravity:
+			cfg.Providers.Antigravity.AuthMethod = authMethod
+		default:
+			return fmt.Errorf("unsupported provider %q", provider)
 		}
+
+		found := false
+		for i := range cfg.ModelList {
+			if modelBelongsToProvider(provider, cfg.ModelList[i].Model) {
+				cfg.ModelList[i].AuthMethod = authMethod
+				found = true
+			}
+		}
+
+		if !found && authMethod != "" {
+			cfg.ModelList = append(cfg.ModelList, defaultModelConfigForProvider(provider, authMethod))
+		}
+
 		return oauthSaveConfig(h.configPath, cfg)
-	}
-	switch provider {
-	case oauthProviderOpenAI:
-		cfg.Providers.OpenAI.AuthMethod = authMethod
-	case oauthProviderAnthropic:
-		cfg.Providers.Anthropic.AuthMethod = authMethod
-	case oauthProviderGoogleAntigravity:
-		cfg.Providers.Antigravity.AuthMethod = authMethod
-	default:
-		return fmt.Errorf("unsupported provider %q", provider)
-	}
-
-	found := false
-	for i := range cfg.ModelList {
-		if modelBelongsToProvider(provider, cfg.ModelList[i].Model) {
-			cfg.ModelList[i].AuthMethod = authMethod
-			found = true
-		}
-	}
-
-	if !found && authMethod != "" {
-		cfg.ModelList = append(cfg.ModelList, defaultModelConfigForProvider(provider, authMethod))
-	}
-
-	return oauthSaveConfig(h.configPath, cfg)
+	})
 }
 
 func modelBelongsToProvider(provider, model string) bool {
