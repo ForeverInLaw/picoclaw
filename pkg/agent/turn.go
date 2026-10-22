@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/modelruntime"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -46,7 +47,8 @@ type turnResult struct {
 }
 
 type turnState struct {
-	mu sync.RWMutex
+	runtimeTrace *modelruntime.Trace
+	mu           sync.RWMutex
 
 	agent *AgentInstance
 	opts  processOptions

@@ -110,6 +110,12 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 		func() (*config.Config, error) { return config.LoadConfig(configPath) },
 	)
 
+	runtimeStatus, statusErr := agentLoop.EnableRuntimeStatus(configPath)
+	if statusErr != nil {
+		logger.WarnC("gateway", "Model runtime diagnostics could not be initialized")
+	} else {
+		defer runtimeStatus.Close()
+	}
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()
 	toolsInfo := startupInfo["tools"].(map[string]any)
