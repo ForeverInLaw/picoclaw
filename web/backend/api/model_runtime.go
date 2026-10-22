@@ -18,7 +18,7 @@ func (h *Handler) handleModelRuntime(w http.ResponseWriter, r *http.Request) {
 		cfg, configErr := config.LoadConfig(h.configPath)
 		if configErr == nil {
 			health, status, healthErr := h.getGatewayHealth(cfg, time.Second)
-			if healthErr != nil || status != http.StatusOK {
+			if !snapshot.StoppedAt.IsZero() || healthErr != nil || status != http.StatusOK {
 				state = "offline"
 			} else if health.Pid == snapshot.PID && snapshot.StoppedAt.IsZero() && time.Since(snapshot.UpdatedAt) < modelruntime.StaleAfter {
 				state = "running"
@@ -47,12 +47,22 @@ func (h *Handler) handleModelRuntime(w http.ResponseWriter, r *http.Request) {
 		if loadErr == nil && !account.Enabled {
 			item.Authorization = "disabled"
 		}
+		if item.Reason == "auth" && item.Authorization == "authorized" {
+			item.Authorization = "reauthorization_required"
+		}
+		if item.Authorization == "authorized" && state == "running" && !item.NextEligibleAt.IsZero() &&
+			!time.Now().Before(item.NextEligibleAt) {
+			item.Available = true
+			item.Reason = ""
+			item.NextEligibleAt = time.Time{}
+		}
 		if item.Authorization != "authorized" {
 			item.Available = false
 			item.Reason = item.Authorization
 			item.NextEligibleAt = time.Time{}
 		}
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		State   string                `json:"state"`

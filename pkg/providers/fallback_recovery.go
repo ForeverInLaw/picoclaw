@@ -123,7 +123,12 @@ func (fc *FallbackChain) ExecuteRecoveryCandidate(
 		delay := max(time.Duration(0), next.Sub(now))
 		reportRouting(
 			ctx,
-			RoutingEvent{Phase: "waiting", Reason: "service_unavailable", NextEligibleAt: time.Now().UTC().Add(delay)},
+			RoutingEvent{
+				Phase:          "waiting",
+				HTTPStatus:     503,
+				Reason:         "service_unavailable",
+				NextEligibleAt: time.Now().UTC().Add(delay),
+			},
 		)
 		if onWait != nil {
 			onWait(delay, outstanding503)

@@ -269,6 +269,13 @@ func Read(configPath string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	defer file.Close()
+	info, statErr := file.Stat()
+	if statErr != nil {
+		return Snapshot{}, statErr
+	}
+	if info.Size() > maxSnapshotBytes {
+		return Snapshot{}, errors.New("runtime snapshot exceeds size limit")
+	}
 	var snapshot Snapshot
 	decoder := json.NewDecoder(io.LimitReader(file, maxSnapshotBytes+1))
 	if err := decoder.Decode(&snapshot); err != nil {
@@ -283,4 +290,27 @@ func Read(configPath string) (Snapshot, error) {
 		}
 	}
 	return snapshot, nil
+}
+
+// CaptureChain binds the first actual operation's priority before reserves are preferred.
+func (t *Trace) CaptureChain(chain []providers.RoutingIdentity) {
+	if t == nil {
+		return
+	}
+	c := t.collector
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.snapshot.Records {
+		record := &c.snapshot.Records[i]
+		if record.ID != t.ID || record.TotalAttempts > 0 || !record.FinishedAt.IsZero() {
+			continue
+		}
+		record.Chain = []providers.RoutingIdentity{}
+		for _, candidate := range chain[:min(len(chain), MaxCandidates)] {
+			record.Chain = append(record.Chain, identity(candidate))
+		}
+		record.Truncated = record.Truncated || len(chain) > MaxCandidates
+		c.changed()
+		return
+	}
 }

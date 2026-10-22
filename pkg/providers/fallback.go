@@ -253,7 +253,7 @@ func (fc *FallbackChain) execute(
 		reportRouting(ctx, RoutingEvent{Phase: "attempt", Candidate: candidate.RoutingIdentity()})
 		resp, err := run(ctx, candidate)
 		elapsed := time.Since(start)
-		routingOutcome(ctx, candidate, start, err)
+		routingOutcome(ctx, candidate, start, resp, err)
 
 		if err == nil {
 			// Success.
@@ -386,7 +386,7 @@ func (fc *FallbackChain) ExecuteImageCandidate(
 		reportRouting(ctx, RoutingEvent{Phase: "attempt", Candidate: candidate.RoutingIdentity()})
 		resp, err := run(ctx, candidate)
 		elapsed := time.Since(start)
-		routingOutcome(ctx, candidate, start, err)
+		routingOutcome(ctx, candidate, start, resp, err)
 
 		if err == nil {
 			result.Response = resp

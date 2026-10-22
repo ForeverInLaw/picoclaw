@@ -31,6 +31,9 @@ func (al *AgentLoop) runtimeAvailability() []providers.RoutingAvailability {
 		}
 		cfg = loaded
 	}
+	if cfg == nil {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	result := []providers.RoutingAvailability{}

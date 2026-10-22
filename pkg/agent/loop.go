@@ -2375,6 +2375,7 @@ turnLoop:
 			callProvider := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 				return callProviderOnce(ctx, client, candidate)
 			}
+			ts.runtimeTrace.CaptureChain(routingIdentities(activeCandidates))
 			candidates := ts.agent.requestRouting.prefer(activeCandidates)
 			if len(candidates) == 0 {
 				candidates = []providers.FallbackCandidate{{Model: llmModel}}

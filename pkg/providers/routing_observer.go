@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -27,6 +28,7 @@ func (c FallbackCandidate) RoutingIdentity() RoutingIdentity {
 
 // RoutingEvent deliberately carries no raw error, response or request data.
 type RoutingEvent struct {
+	HTTPStatus          int             `json:"http_status,omitempty"`
 	At                  time.Time       `json:"at"`
 	Phase               string          `json:"phase"`
 	Candidate           RoutingIdentity `json:"candidate"`
@@ -49,11 +51,21 @@ func reportRouting(ctx context.Context, event RoutingEvent) {
 	}
 }
 
-func routingOutcome(ctx context.Context, candidate FallbackCandidate, started time.Time, err error) {
+func routingOutcome(
+	ctx context.Context,
+	candidate FallbackCandidate,
+	started time.Time,
+	response *LLMResponse,
+	err error,
+) {
 	event := RoutingEvent{
 		Phase:      "success",
 		Candidate:  candidate.RoutingIdentity(),
 		DurationMS: time.Since(started).Milliseconds(),
+	}
+	if err == nil && (response == nil || (strings.TrimSpace(response.Content) == "" && len(response.ToolCalls) == 0)) {
+		event.Phase = "failed"
+		event.Reason = "empty_answer"
 	}
 	if err != nil {
 		event.Phase = "failed"
@@ -77,7 +89,11 @@ func routingOutcome(ctx context.Context, candidate FallbackCandidate, started ti
 			event.Reason = string(FailoverIncompatible)
 		default:
 			if failure := ClassifyCandidateError(err, candidate); failure != nil {
+				event.HTTPStatus = failure.Status
 				event.Reason = string(failure.Reason)
+				if failure.Status == 503 {
+					event.Reason = "service_unavailable"
+				}
 			}
 		}
 	}
@@ -86,6 +102,7 @@ func routingOutcome(ctx context.Context, candidate FallbackCandidate, started ti
 
 // RoutingAvailability uses the same health state as the executor.
 type RoutingAvailability struct {
+	HTTPStatus     int             `json:"http_status,omitempty"`
 	Authorization  string          `json:"authorization,omitempty"`
 	Candidate      RoutingIdentity `json:"candidate"`
 	Available      bool            `json:"available"`
@@ -109,7 +126,11 @@ func (fc *FallbackChain) Availability(ctx context.Context, candidate FallbackCan
 		result.Available = false
 		result.Reason = "cooldown"
 		if failure := fc.cooldown.Failure(candidate.StableKey()); failure != nil {
+			result.HTTPStatus = failure.Status
 			result.Reason = string(failure.Reason)
+			if failure.Status == 503 {
+				result.Reason = "service_unavailable"
+			}
 		}
 		if remaining := fc.cooldown.CooldownRemaining(candidate.StableKey()); remaining > 0 {
 			result.NextEligibleAt = time.Now().UTC().Add(remaining)
