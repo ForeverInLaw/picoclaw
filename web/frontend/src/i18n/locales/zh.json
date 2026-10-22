@@ -251,7 +251,9 @@
       "thinkingLevel": "思考级别",
       "thinkingLevelHint": "扩展思考预算：off、low、medium、high、xhigh、adaptive。",
       "maxTokensField": "Max Tokens 字段名",
-      "maxTokensFieldHint": "覆盖请求中 max_tokens 的字段名，例如 max_completion_tokens。"
+      "maxTokensFieldHint": "覆盖请求中 max_tokens 的字段名，例如 max_completion_tokens。",
+      "inactivityTimeout": "模型无进展等待上限（秒）",
+      "inactivityTimeoutHint": "默认 60 秒。文本、推理和工具调用生成会重新计时，执行本地工具不计入等待时间。留空或 0 使用默认值；修改对下一次请求生效。"
     },
     "edit": {
       "title": "配置 {{name}}",

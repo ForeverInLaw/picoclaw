@@ -2248,6 +2248,7 @@ turnLoop:
 
 			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (reply *providers.LLMResponse, requestErr error) {
 				model := candidate.Model
+				attemptLimit := candidateInactivityTimeout(cfg, candidate, ts.agent.Workspace)
 				candidateDefs, candidateOpts := prepareCandidateRequest(cfg, client, candidate, toolDefsForCall, llmOpts, ts.agent.ThinkingLevel)
 				if err := checkCandidateContext(cfg, candidate, client, messagesForCall, candidateDefs, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
 					al.emitEvent(EventKindLLMRetry, ts.eventMeta("runTurn", "turn.llm.candidate_skipped"), LLMRetryPayload{Reason: "incompatible", Error: err.Error()})
@@ -2313,11 +2314,11 @@ turnLoop:
 						}
 					}
 					if providerCanStreamPhases {
-						response, err = providers.RunModelAttempt(ctx, 0, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+						response, err = providers.RunModelAttempt(ctx, attemptLimit, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
 							return phasedProvider.ChatStreamContent(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, onUpdate)
 						})
 					} else {
-						response, err = providers.RunModelAttempt(ctx, 0, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+						response, err = providers.RunModelAttempt(ctx, attemptLimit, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
 							return streamProvider.ChatStream(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
 						})
 					}
@@ -2344,7 +2345,7 @@ turnLoop:
 					}
 					return response, nil
 				}
-				return providers.RunModelAttempt(ctx, 0, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+				return providers.RunModelAttempt(ctx, attemptLimit, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
 					return client.Chat(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts)
 				})
 			}

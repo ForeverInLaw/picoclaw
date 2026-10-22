@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -228,4 +229,13 @@ func ConfiguredDefaultModels(cfg *config.Config) []config.ModelConfig {
 		}
 	}
 	return models
+}
+
+// candidateInactivityTimeout reads only the request's captured model settings.
+func candidateInactivityTimeout(cfg *config.Config, candidate providers.FallbackCandidate, workspace string) time.Duration {
+	mc, err := modelConfigForCandidate(cfg, candidate, workspace)
+	if err != nil {
+		return config.DefaultModelInactivityTimeout
+	}
+	return mc.InactivityTimeout()
 }

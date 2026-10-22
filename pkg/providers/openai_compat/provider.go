@@ -249,7 +249,7 @@ func (p *Provider) ChatStream(
 		return common.ReadAndParseResponse(resp, p.apiBase)
 	}
 
-	return parseStreamingResponse(resp.Body, onChunk)
+	return parseStreamingResponse(ctx, resp.Body, onChunk)
 }
 
 type streamedToolCall struct {
@@ -260,7 +260,7 @@ type streamedToolCall struct {
 	ThoughtSignature string
 }
 
-func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLMResponse, error) {
+func parseStreamingResponse(ctx context.Context, body io.Reader, onUpdate func(content string)) (*LLMResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -320,6 +320,16 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 		}
 
 		for _, choice := range chunk.Choices {
+			progress := choice.Delta.Content != "" || choice.Delta.ReasoningContent != "" || choice.Delta.Reasoning != ""
+			for _, detail := range choice.Delta.ReasoningDetails {
+				progress = progress || detail.Text != ""
+			}
+			for _, call := range choice.Delta.ToolCalls {
+				progress = progress || call.ID != "" || (call.Function != nil && (call.Function.Name != "" || call.Function.Arguments != ""))
+			}
+			if progress {
+				protocoltypes.ReportModelProgress(ctx)
+			}
 			if choice.Delta.Content != "" {
 				content.WriteString(choice.Delta.Content)
 				if onUpdate != nil {

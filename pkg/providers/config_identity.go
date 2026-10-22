@@ -15,7 +15,8 @@ func ModelConfigKey(mc *config.ModelConfig) string {
 		return ""
 	}
 	clone := *mc
-	clone.Fallbacks = nil // Routing policy does not change this provider client.
+	clone.Fallbacks = nil              // Routing policy does not change this provider client.
+	clone.InactivityTimeoutSeconds = 0 // Wait policy preserves provider/account health.
 	protocol, _ := ExtractProtocol(clone.Model)
 	switch protocol {
 	case "claude-cli", "claudecli", "codex-cli", "codexcli":

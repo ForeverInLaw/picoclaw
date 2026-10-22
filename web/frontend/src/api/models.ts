@@ -19,6 +19,7 @@ export interface ModelInfo {
   rpm?: number
   max_tokens_field?: string
   request_timeout?: number
+  inactivity_timeout_seconds?: number
   thinking_level?: string
   extra_body?: Record<string, unknown>
   // Meta

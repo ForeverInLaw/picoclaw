@@ -50,6 +50,7 @@ interface EditForm {
   rpm: string
   maxTokensField: string
   requestTimeout: string
+  inactivityTimeout: string
   thinkingLevel: string
 }
 
@@ -77,6 +78,7 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
     rpm: model?.rpm ? String(model.rpm) : "",
     maxTokensField: model?.max_tokens_field ?? "",
     requestTimeout: model?.request_timeout ? String(model.request_timeout) : "",
+    inactivityTimeout: model?.inactivity_timeout_seconds ? String(model.inactivity_timeout_seconds) : "",
     thinkingLevel: model?.thinking_level ?? "",
   }))
   const accounts = useQuery({
@@ -119,6 +121,7 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
         rpm: form.rpm ? Number(form.rpm) : 0,
         max_tokens_field: form.maxTokensField,
         request_timeout: form.requestTimeout ? Number(form.requestTimeout) : 0,
+        inactivity_timeout_seconds: form.inactivityTimeout ? Number(form.inactivityTimeout) : 0,
         thinking_level: form.thinkingLevel,
         extra_body: model.extra_body,
         capabilities: model.capabilities,
@@ -263,6 +266,20 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
                   value={form.workspace}
                   onChange={setField("workspace")}
                   placeholder="/path/to/workspace"
+                />
+              </Field>
+
+              <Field
+                label={t("models.field.inactivityTimeout")}
+                hint={t("models.field.inactivityTimeoutHint")}
+              >
+                <Input
+                  value={form.inactivityTimeout}
+                  onChange={setField("inactivityTimeout")}
+                  placeholder="60"
+                  type="number"
+                  min={0}
+                  step={1}
                 />
               </Field>
 

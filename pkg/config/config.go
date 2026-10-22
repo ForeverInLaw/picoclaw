@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 
@@ -945,19 +946,33 @@ type ModelConfig struct {
 	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
 
 	// Optional model limits and optimizations
-	Capabilities   *ModelCapabilities `json:"capabilities,omitempty"`
-	RPM            int                `json:"rpm,omitempty"`              // Requests per minute limit
-	MaxTokensField string             `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
-	RequestTimeout int                `json:"request_timeout,omitempty"`
-	ThinkingLevel  string             `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
-	ExtraBody      map[string]any     `json:"extra_body,omitempty"`     // Additional fields to inject into request body
+	Capabilities             *ModelCapabilities `json:"capabilities,omitempty"`
+	RPM                      int                `json:"rpm,omitempty"`              // Requests per minute limit
+	MaxTokensField           string             `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
+	RequestTimeout           int                `json:"request_timeout,omitempty"`
+	InactivityTimeoutSeconds int                `json:"inactivity_timeout_seconds,omitempty"`
+	ThinkingLevel            string             `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
+	ExtraBody                map[string]any     `json:"extra_body,omitempty"`     // Additional fields to inject into request body
 
 	// from security
 	apiKeys []string
 }
 
+const DefaultModelInactivityTimeout = 60 * time.Second
+
+// InactivityTimeout is the maximum wait without decoded model progress.
+func (c *ModelConfig) InactivityTimeout() time.Duration {
+	if c == nil || c.InactivityTimeoutSeconds <= 0 {
+		return DefaultModelInactivityTimeout
+	}
+	return time.Duration(c.InactivityTimeoutSeconds) * time.Second
+}
+
 // Validate checks if the ModelConfig has all required fields.
 func (c *ModelConfig) Validate() error {
+	if c.InactivityTimeoutSeconds < 0 || int64(c.InactivityTimeoutSeconds) > int64((1<<63-1)/time.Second) {
+		return fmt.Errorf("inactivity_timeout_seconds must be a nonnegative duration in seconds")
+	}
 	if c.Capabilities != nil && c.Capabilities.ContextWindow < 0 {
 		return fmt.Errorf("capabilities.context_window must not be negative")
 	}
@@ -1679,22 +1694,23 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 
 			// Create a copy for the additional key
 			additionalEntry := ModelConfig{
-				ID:             derivedKeyModelID(m.ID, suffix),
-				ModelName:      expandedName,
-				Model:          m.Model,
-				APIBase:        m.APIBase,
-				APIKey:         keys[i],
-				Proxy:          m.Proxy,
-				AuthMethod:     m.AuthMethod,
-				AccountID:      m.AccountID,
-				Capabilities:   m.Capabilities,
-				ConnectMode:    m.ConnectMode,
-				Workspace:      m.Workspace,
-				RPM:            m.RPM,
-				MaxTokensField: m.MaxTokensField,
-				RequestTimeout: m.RequestTimeout,
-				ThinkingLevel:  m.ThinkingLevel,
-				ExtraBody:      m.ExtraBody,
+				ID:                       derivedKeyModelID(m.ID, suffix),
+				ModelName:                expandedName,
+				Model:                    m.Model,
+				APIBase:                  m.APIBase,
+				APIKey:                   keys[i],
+				Proxy:                    m.Proxy,
+				AuthMethod:               m.AuthMethod,
+				AccountID:                m.AccountID,
+				Capabilities:             m.Capabilities,
+				ConnectMode:              m.ConnectMode,
+				Workspace:                m.Workspace,
+				RPM:                      m.RPM,
+				MaxTokensField:           m.MaxTokensField,
+				RequestTimeout:           m.RequestTimeout,
+				InactivityTimeoutSeconds: m.InactivityTimeoutSeconds,
+				ThinkingLevel:            m.ThinkingLevel,
+				ExtraBody:                m.ExtraBody,
 			}
 			expanded = append(expanded, additionalEntry)
 			fallbackNames = append(fallbackNames, expandedName)
@@ -1702,23 +1718,24 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 
 		// Create the primary entry with first key and fallbacks
 		primaryEntry := ModelConfig{
-			ID:             m.ID,
-			ModelName:      originalName,
-			Model:          m.Model,
-			APIBase:        m.APIBase,
-			APIKey:         keys[0],
-			Proxy:          m.Proxy,
-			AuthMethod:     m.AuthMethod,
-			AccountID:      m.AccountID,
-			Capabilities:   m.Capabilities,
-			ConnectMode:    m.ConnectMode,
-			Workspace:      m.Workspace,
-			RPM:            m.RPM,
-			MaxTokensField: m.MaxTokensField,
-			RequestTimeout: m.RequestTimeout,
-			ThinkingLevel:  m.ThinkingLevel,
-			ExtraBody:      m.ExtraBody,
-			apiKeys:        []string{keys[0]},
+			ID:                       m.ID,
+			ModelName:                originalName,
+			Model:                    m.Model,
+			APIBase:                  m.APIBase,
+			APIKey:                   keys[0],
+			Proxy:                    m.Proxy,
+			AuthMethod:               m.AuthMethod,
+			AccountID:                m.AccountID,
+			Capabilities:             m.Capabilities,
+			ConnectMode:              m.ConnectMode,
+			Workspace:                m.Workspace,
+			RPM:                      m.RPM,
+			MaxTokensField:           m.MaxTokensField,
+			RequestTimeout:           m.RequestTimeout,
+			InactivityTimeoutSeconds: m.InactivityTimeoutSeconds,
+			ThinkingLevel:            m.ThinkingLevel,
+			ExtraBody:                m.ExtraBody,
+			apiKeys:                  []string{keys[0]},
 		}
 
 		// Prepend new fallbacks to existing ones

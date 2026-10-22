@@ -6,10 +6,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
-const DefaultInactivityTimeout = 60 * time.Second
+const DefaultInactivityTimeout = config.DefaultModelInactivityTimeout
 
 // InactivityTimeoutError ends only the stalled attempt, leaving its request live.
 type InactivityTimeoutError struct{ Timeout time.Duration }

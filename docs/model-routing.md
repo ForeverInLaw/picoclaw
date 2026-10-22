@@ -94,3 +94,22 @@ session clears its own authorization suppression.
 Automated coverage uses local provider fixtures and authenticated dashboard
 requests. Real OpenAI registration and paid inference acceptance remains the
 separate administrator checklist in [Codex accounts](codex-accounts.md).
+
+Model settings include `inactivity_timeout_seconds`. Omit it or set it to `0` for
+60 seconds; a positive integer overrides that candidate's limit. Negative values
+are rejected. The dashboard exposes the same setting in the existing model
+editor. Changes apply to the next user request; an active request keeps its
+captured limit.
+
+The limit covers waiting for the first meaningful event and later stalls. Decoded
+text, exposed reasoning and tool-call generation reset it. Transport keepalives,
+role markers and usage bookkeeping do not. A stalled attempt is canceled and its
+stream closed before the next compatible reserve starts. The user's request
+remains live. Completed tool results stay in the conversation, and local tool
+execution does not use this timer. Retry pauses and context-compaction queue waits
+also sit outside individual model attempts.
+
+`request_timeout` remains a separate total transport deadline where supported.
+Non-streaming adapters have no exposed intermediate generation events, so their
+inactivity window lasts until a complete response. Explicit dashboard probes keep
+their existing shorter overall deadline and never use a reserve to claim success.
