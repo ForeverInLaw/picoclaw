@@ -383,3 +383,34 @@ func TestAccountContextCancellationStopsRefreshAndLockWait(t *testing.T) {
 		t.Fatal("refresh HTTP call did not disconnect")
 	}
 }
+
+func TestAccountStateContextCancelsWhileAuthWriterIsBusy(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	if err := SaveAccount(
+		&AccountConnection{
+			ID:         "selected",
+			Provider:   "openai",
+			Enabled:    true,
+			Credential: &AuthCredential{AccessToken: "selected"},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { _, err := AccountStateContext(ctx, "selected"); done <- err }()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("state preflight lost cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("state preflight hung behind auth writer")
+	}
+}
