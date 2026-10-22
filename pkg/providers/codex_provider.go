@@ -333,7 +333,9 @@ func (p *CodexProvider) chat(
 		return nil, fmt.Errorf("codex API call: stream ended without completed response: %w", io.ErrUnexpectedEOF)
 	}
 
-	return parseCodexResponse(resp), nil
+	reply := parseCodexResponse(resp)
+	reply.ServedModel = resolvedModel
+	return reply, nil
 }
 
 // SupportsImageInput remains false until the Responses adapter serializes Media.

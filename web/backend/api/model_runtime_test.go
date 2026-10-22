@@ -748,3 +748,56 @@ func TestOAuthMachineFailuresSelectReserveWithoutLosingCredentials(t *testing.T)
 		})
 	}
 }
+
+func TestRuntimeLegacyCodexReportsServedWireModel(t *testing.T) {
+	h, cookie, loop, status := runtimeHTTPFixture(t, func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("legacy account must retain its existing endpoint")
+	}, func(cfg *config.Config) {
+		if err := auth.SaveAccount(&auth.AccountConnection{
+			ID: config.LegacyOpenAIAccountID, Provider: "openai", Enabled: true,
+			Credential: &auth.AuthCredential{AccessToken: "legacy-token", AuthMethod: "oauth"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		cfg.ModelList[0].Model = "openai/o1"
+		cfg.ModelList[0].AuthMethod = "oauth"
+		cfg.ModelList[0].AccountID = config.LegacyOpenAIAccountID
+	})
+	original := http.DefaultTransport
+	defer func() { http.DefaultTransport = original }()
+	var wireModel string
+	http.DefaultTransport = accountRecordingTransport{handler: func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "chatgpt.com" {
+			return original.RoundTrip(r)
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		wireModel = body.Model
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Request:    r,
+			Body: io.NopCloser(
+				strings.NewReader(
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"legacy\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"legacy answered\"}]}]}}\n\n",
+				),
+			),
+		}, nil
+	}}
+	answer, err := loop.ProcessDirect(t.Context(), "hello", "legacy-wire")
+	if err != nil || answer != "legacy answered" || wireModel != "gpt-5.3-codex" {
+		t.Fatalf("answer=%q err=%v wire=%q", answer, err, wireModel)
+	}
+	_, snapshot := runtimeSnapshot(t, h, cookie, status)
+	record := snapshot.Records[0]
+	if record.Selected == nil || record.Selected.ID != "a" ||
+		record.Selected.AccountID != config.LegacyOpenAIAccountID ||
+		record.Selected.Model != wireModel ||
+		record.Chain[0].Model != "o1" {
+		t.Fatalf("actual identity must retain configured choice and captured chain: %+v", record)
+	}
+}

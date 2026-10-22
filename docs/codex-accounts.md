@@ -154,3 +154,5 @@ OAuth/inference endpoints. Run `go test ./pkg/auth ./web/backend/api` and
 `pnpm --dir web/frontend test:models`; no personal tokens or paid calls are needed.
 
 Token failures use their OAuth machine codes. A rejected client configuration (`invalid_client`) permits a configured reserve without deleting the saved tokens; repair the client configuration. Temporary service codes preserve tokens and use service recovery even if the token endpoint returns HTTP400. Malformed-request codes remain terminal.
+
+Legacy CLI-compatible accounts retain their existing model substitution policy. Runtime successful outcomes show the model actually sent on the wire, alongside the unchanged configured-model ID and account; captured routing chains keep the configured model. Exact explicit probes continue to use the selected slug without substitution.

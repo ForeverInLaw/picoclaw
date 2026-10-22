@@ -63,6 +63,9 @@ func routingOutcome(
 		Candidate:  candidate.RoutingIdentity(),
 		DurationMS: time.Since(started).Milliseconds(),
 	}
+	if err == nil && response != nil && response.ServedModel != "" {
+		event.Candidate.Model = response.ServedModel
+	}
 	if err == nil && (response == nil || (strings.TrimSpace(response.Content) == "" && len(response.ToolCalls) == 0)) {
 		event.Phase = "failed"
 		event.Reason = "empty_answer"
