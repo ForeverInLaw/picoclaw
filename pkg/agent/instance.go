@@ -74,6 +74,17 @@ func NewAgentInstance(
 	provider providers.LLMProvider,
 	artifactStores ...*tools.ArtifactStore,
 ) *AgentInstance {
+	return newAgentInstance(agentCfg, defaults, cfg, provider, false, artifactStores...)
+}
+
+func newAgentInstance(
+	agentCfg *config.AgentConfig,
+	defaults *config.AgentDefaults,
+	cfg *config.Config,
+	provider providers.LLMProvider,
+	deferModelSelection bool,
+	artifactStores ...*tools.ArtifactStore,
+) *AgentInstance {
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0o755)
 
@@ -290,7 +301,7 @@ func NewAgentInstance(
 
 	instance.ContextProvider = provider
 	ownedContextProvider := false
-	if (name == "seahorse" || name == "legacy") && len(candidates) > 0 {
+	if !deferModelSelection && (name == "seahorse" || name == "legacy") && len(candidates) > 0 {
 		needsClient := model != defaults.GetModelName()
 		if selected, ok := provider.(interface{ ModelConfigKey() string }); ok && selected.ModelConfigKey() != "" {
 			needsClient = selected.ModelConfigKey() != candidates[0].ConfigKey

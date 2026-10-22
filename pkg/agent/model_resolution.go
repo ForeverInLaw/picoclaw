@@ -208,3 +208,24 @@ func candidateProviderResolver(
 		return client, nil
 	}
 }
+
+// ConfiguredDefaultModels uses the same exact-entry resolution as user requests.
+// Startup readiness may inspect this chain without selecting a replacement default.
+func ConfiguredDefaultModels(cfg *config.Config) []config.ModelConfig {
+	if cfg == nil {
+		return nil
+	}
+	candidates := resolveModelCandidates(
+		cfg,
+		cfg.Agents.Defaults.Provider,
+		cfg.Agents.Defaults.GetModelName(),
+		cfg.Agents.Defaults.ModelFallbacks,
+	)
+	models := make([]config.ModelConfig, 0, len(candidates))
+	for _, candidate := range candidates {
+		if mc, err := modelConfigForCandidate(cfg, candidate, ""); err == nil {
+			models = append(models, *mc)
+		}
+	}
+	return models
+}

@@ -27,8 +27,8 @@ func hasModelConfiguration(m config.ModelConfig) bool {
 
 	if authMethod == "oauth" || authMethod == "token" {
 		if modelProtocol(m.Model) == "openai" && m.AccountID != "" {
-			account, err := auth.GetAccount(m.AccountID)
-			return err == nil && account.Enabled && account.CanUsePlan() && account.Credential != nil && (account.Credential.AccessToken != "" || account.Credential.RefreshToken != "")
+			state, err := auth.AccountState(m.AccountID)
+			return err == nil && state.Enabled && !state.RequiresReauthorization
 		}
 		if provider, ok := oauthProviderForModel(m.Model); ok {
 			cred, err := oauthGetCredential(provider)

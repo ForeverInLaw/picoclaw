@@ -5,6 +5,12 @@ same editor can override an existing agent or restore its inherited order. Every
 new choice selects a configured entry, so two entries with the same model or alias
 can use different account connections, API endpoints or keys.
 
+Gateway startup checks the effective configured chain. An unavailable primary
+does not prevent startup when one of its explicitly configured reserves is
+available; unrelated models do not satisfy that precondition. A gateway starts
+with deferred context-provider selection for every agent, so an unavailable
+agent-specific primary cannot block that agent’s reserves during initialization.
+
 The gateway reads saved routing at the start of each user request, even when
 `gateway.hot_reload` is disabled. An active task retains its model configuration
 and order through local tools, foreground compaction and background summaries.

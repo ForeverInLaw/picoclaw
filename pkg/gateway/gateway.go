@@ -103,8 +103,12 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 	}
 
 	msgBus := bus.NewMessageBus()
-	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
-	agentLoop.SetRoutingConfigSource(func() (*config.Config, error) { return config.LoadConfig(configPath) })
+	agentLoop := agent.NewAgentLoop(
+		cfg,
+		msgBus,
+		provider,
+		func() (*config.Config, error) { return config.LoadConfig(configPath) },
+	)
 
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()
@@ -237,7 +241,23 @@ func createStartupProvider(
 		return &startupBlockedProvider{reason: reason}, "", nil
 	}
 
-	return providers.CreateProvider(cfg)
+	provider, modelID, err := providers.CreateProvider(cfg)
+	if err == nil {
+		return provider, modelID, nil
+	}
+	// Validate only configured reserves. The first request resolves its full
+	// captured order; bootstrapping never rewrites that order to a reserve.
+	for _, model := range agent.ConfiguredDefaultModels(cfg) {
+		reserve, _, reserveErr := providers.CreateProviderFromConfig(&model)
+		if reserveErr != nil {
+			continue
+		}
+		if owned, ok := reserve.(providers.StatefulProvider); ok {
+			owned.Close()
+		}
+		return &startupBlockedProvider{reason: "configured models are resolved when a request starts"}, "", nil
+	}
+	return nil, "", err
 }
 
 func setupAndStartServices(

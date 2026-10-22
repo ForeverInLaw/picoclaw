@@ -2,11 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -161,5 +164,88 @@ func TestRoutingScopedSaveAndStableEditPreserveOtherSettingsAndMultiKeyModels(t 
 	w = call("PUT", "/api/models/by-id/"+original[0].ID, `{"id":"changed","model_name":"bad","model":"openai/shared"}`)
 	if w.Code != 400 {
 		t.Fatalf("ID replacement accepted: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestProtectedGatewayReadinessUsesOnlyConfiguredReserveChain(t *testing.T) {
+	for _, mode := range []string{"disabled", "reauthorization"} {
+		t.Run(mode, func(t *testing.T) {
+			resetGatewayTestState(t)
+			resetModelProbeHooks(t)
+			t.Setenv(config.EnvHome, t.TempDir())
+			account := &auth.AccountConnection{ID: "unavailable", Provider: "openai", Enabled: mode != "disabled"}
+			if mode == "disabled" {
+				account.Credential = &auth.AuthCredential{
+					Provider:    "openai",
+					AuthMethod:  "oauth",
+					AccessToken: "unused-token",
+				}
+			}
+			if err := auth.SaveAccount(account); err != nil {
+				t.Fatal(err)
+			}
+			h, cookie, path := modelInferenceDashboard(t, []config.ModelConfig{
+				{ModelName: "primary", Model: "openai/shared", AuthMethod: "oauth", AccountID: "unavailable"},
+				{
+					ModelName: "reserve",
+					Model:     "openai/shared",
+					APIBase:   "https://no-probe.invalid/v1",
+					APIKey:    "reserve-secret",
+				},
+				{ModelName: "outside-chain", Model: "openai/unrelated", APIKey: "unrelated-secret"},
+			})
+			cfg, err := config.LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Agents.Defaults.ModelName = config.ModelIDPrefix + cfg.ModelList[0].ID
+			cfg.Agents.Defaults.ModelFallbacks = []string{config.ModelIDPrefix + cfg.ModelList[1].ID}
+			if err = config.SaveConfig(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			gatewayHealthGet = func(string, time.Duration) (*http.Response, error) { return nil, errors.New("offline") }
+			probes := 0
+			probeOpenAICompatibleModelFunc = func(string, string, string) bool { probes++; return false }
+			probeTCPServiceFunc = func(string) bool { probes++; return false }
+			status := func(authorized bool) *httptest.ResponseRecorder {
+				r := httptest.NewRequest("GET", "/api/gateway/status", nil)
+				if authorized {
+					r.AddCookie(cookie)
+				}
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, r)
+				return w
+			}
+			if w := status(false); w.Code != 401 {
+				t.Fatalf("unprotected status: %d", w.Code)
+			}
+			w := status(true)
+			if w.Code != 200 {
+				t.Fatalf("status: %d %s", w.Code, w.Body.String())
+			}
+			var result struct {
+				Allowed bool `json:"gateway_start_allowed"`
+			}
+			if err = json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if !result.Allowed {
+				t.Fatalf("configured reserve blocked: %s", w.Body.String())
+			}
+			cfg.Agents.Defaults.ModelFallbacks = []string{}
+			if err = config.SaveConfig(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			w = status(true)
+			if err = json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Allowed {
+				t.Fatalf("non-chain model enabled startup: %s", w.Body.String())
+			}
+			if probes != 0 {
+				t.Fatalf("remote readiness probed inference: %d", probes)
+			}
+		})
 	}
 }

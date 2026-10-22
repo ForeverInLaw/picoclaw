@@ -119,12 +119,15 @@ const (
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
 
+// NewAgentLoop accepts an optional saved-routing source at construction so
+// context engines initialize independently of an unavailable primary provider.
 func NewAgentLoop(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
+	routingSources ...func() (*config.Config, error),
 ) *AgentLoop {
-	registry := NewAgentRegistry(cfg, provider)
+	registry := NewAgentRegistry(cfg, provider, len(routingSources) > 0 && routingSources[0] != nil)
 
 	// Set up shared fallback chain
 	cooldown := providers.NewCooldownTracker()
@@ -147,6 +150,9 @@ func NewAgentLoop(
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:    newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+	}
+	if len(routingSources) > 0 {
+		al.routingSource = routingSources[0]
 	}
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
@@ -1071,6 +1077,9 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	var registry *AgentRegistry
 	var panicErr error
 	done := make(chan struct{}, 1)
+	al.mu.RLock()
+	deferModelSelection := al.routingSource != nil
+	al.mu.RUnlock()
 
 	go func() {
 		defer func() {
@@ -1082,7 +1091,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 			close(done)
 		}()
 
-		registry = NewAgentRegistry(cfg, provider)
+		registry = NewAgentRegistry(cfg, provider, deferModelSelection)
 		if ctx.Err() != nil {
 			registry.Close()
 			registry = nil

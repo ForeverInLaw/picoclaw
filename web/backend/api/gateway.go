@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -154,27 +155,27 @@ func (h *Handler) gatewayStartReady() (bool, string, error) {
 		return false, "no default model configured", nil
 	}
 
-	modelCfg := lookupModelConfig(cfg, modelName)
-	if modelCfg == nil {
+	models := agent.ConfiguredDefaultModels(cfg)
+	if len(models) == 0 {
 		return false, fmt.Sprintf("default model %q is invalid", modelName), nil
 	}
-
-	if !hasModelConfiguration(*modelCfg) {
-		return false, fmt.Sprintf("default model %q has no credentials configured", modelName), nil
+	reason := ""
+	for _, modelCfg := range models {
+		if !hasModelConfiguration(modelCfg) {
+			if reason == "" {
+				reason = fmt.Sprintf("model %q has no credentials configured", modelCfg.ModelName)
+			}
+			continue
+		}
+		if requiresRuntimeProbe(modelCfg) && !probeLocalModelAvailability(modelCfg) {
+			if reason == "" {
+				reason = fmt.Sprintf("model %q is not reachable", modelCfg.ModelName)
+			}
+			continue
+		}
+		return true, "", nil
 	}
-	if requiresRuntimeProbe(*modelCfg) && !probeLocalModelAvailability(*modelCfg) {
-		return false, fmt.Sprintf("default model %q is not reachable", modelName), nil
-	}
-
-	return true, "", nil
-}
-
-func lookupModelConfig(cfg *config.Config, modelName string) *config.ModelConfig {
-	modelCfg, err := cfg.GetModelConfig(modelName)
-	if err != nil {
-		return nil
-	}
-	return modelCfg
+	return false, reason, nil
 }
 
 func isCmdProcessAliveLocked(cmd *exec.Cmd) bool {
