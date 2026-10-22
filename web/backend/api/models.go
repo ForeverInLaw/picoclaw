@@ -14,6 +14,7 @@ import (
 // registerModelRoutes binds model list management endpoints to the ServeMux.
 func (h *Handler) registerModelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/models", h.handleListModels)
+	mux.HandleFunc("GET /api/models/runtime", h.handleModelRuntime)
 	mux.HandleFunc("GET /api/models/routing", h.handleGetModelRouting)
 	mux.HandleFunc("PUT /api/models/routing", h.withConfigMutation(h.handlePutModelRouting))
 	mux.HandleFunc("POST /api/models", h.withConfigMutation(h.handleAddModel))

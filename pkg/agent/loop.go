@@ -26,6 +26,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/factcheck"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/modelruntime"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -67,6 +68,7 @@ type AgentLoop struct {
 	turnSeq        atomic.Uint64
 	activeRequests sync.WaitGroup
 
+	runtimeStatus   *modelruntime.Collector
 	temporaryModels map[string]temporaryModelSelection
 	routingSource   func() (*config.Config, error)
 	reloadFunc      func() error
@@ -804,6 +806,12 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	al.mu.RLock()
+	runtimeStatus := al.runtimeStatus
+	al.mu.RUnlock()
+	if runtimeStatus != nil {
+		runtimeStatus.Close()
+	}
 	mcpManager := al.mcp.takeManager()
 
 	if mcpManager != nil {
@@ -1860,12 +1868,23 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// Inject turnState and AgentLoop into context so tools (e.g. spawn) can retrieve them.
 	turnCtx = withTurnState(turnCtx, ts)
 	turnCtx = WithAgentLoop(turnCtx, al)
+	turnCtx = al.beginRuntimeTurn(turnCtx, ts)
 
 	al.registerActiveTurn(ts)
 	defer al.clearActiveTurn(ts)
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {
+		if ts.runtimeTrace != nil {
+			state := "completed"
+			if turnStatus == TurnEndStatusError {
+				state = "failed"
+			}
+			if turnStatus == TurnEndStatusAborted || ctx.Err() != nil {
+				state = "canceled"
+			}
+			ts.runtimeTrace.Finish(state)
+		}
 		al.emitEvent(
 			EventKindTurnEnd,
 			ts.eventMeta("runTurn", "turn.end"),
@@ -2357,6 +2376,7 @@ turnLoop:
 			callProvider := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 				return callProviderOnce(ctx, client, candidate)
 			}
+			ts.runtimeTrace.CaptureChain(routingIdentities(activeCandidates))
 			candidates := ts.agent.requestRouting.prefer(activeCandidates)
 			if len(candidates) == 0 {
 				candidates = []providers.FallbackCandidate{{Model: llmModel}}

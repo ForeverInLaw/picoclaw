@@ -192,6 +192,15 @@ func (fc *FallbackChain) execute(
 			return nil, availabilityErr
 		}
 		if !availability.Available {
+			reportRouting(
+				ctx,
+				RoutingEvent{
+					Phase:          "skipped",
+					Candidate:      candidate.RoutingIdentity(),
+					Reason:         string(availability.Reason),
+					NextEligibleAt: availability.NextEligibleAt,
+				},
+			)
 			unavailable := &CandidateUnavailableError{
 				Reason:  availability.Reason,
 				RetryAt: availability.NextEligibleAt,
@@ -215,6 +224,15 @@ func (fc *FallbackChain) execute(
 		cooldownKey := candidate.StableKey()
 		if !retryOwnFailure && !fc.cooldown.IsAvailable(cooldownKey) {
 			remaining := fc.cooldown.CooldownRemaining(cooldownKey)
+			reportRouting(
+				ctx,
+				RoutingEvent{
+					Phase:          "skipped",
+					Candidate:      candidate.RoutingIdentity(),
+					Reason:         "cooldown",
+					NextEligibleAt: time.Now().UTC().Add(remaining),
+				},
+			)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Candidate: candidate,
 				Provider:  candidate.Provider,
@@ -232,8 +250,10 @@ func (fc *FallbackChain) execute(
 
 		// Execute the run function.
 		start := time.Now()
+		reportRouting(ctx, RoutingEvent{Phase: "attempt", Candidate: candidate.RoutingIdentity()})
 		resp, err := run(ctx, candidate)
 		elapsed := time.Since(start)
+		routingOutcome(ctx, candidate, start, resp, err)
 
 		if err == nil {
 			// Success.
@@ -363,8 +383,10 @@ func (fc *FallbackChain) ExecuteImageCandidate(
 		}
 
 		start := time.Now()
+		reportRouting(ctx, RoutingEvent{Phase: "attempt", Candidate: candidate.RoutingIdentity()})
 		resp, err := run(ctx, candidate)
 		elapsed := time.Since(start)
+		routingOutcome(ctx, candidate, start, resp, err)
 
 		if err == nil {
 			result.Response = resp

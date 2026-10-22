@@ -129,3 +129,56 @@ a partial answer or dispatch an unfinished tool call.
 Non-streaming adapters have no exposed intermediate generation events, so their
 inactivity window lasts until a complete response. Explicit dashboard probes keep
 their existing shorter overall deadline and never use a reserve to claim success.
+
+## Actual requests and recovery state
+
+**Models → Actual model routing** shows observed requests separately from saved
+routing. Each request retains its captured priority, actual configured model and
+account connection, failures/skips and known next attempt time. Changing saved
+priority does not rewrite a completed request. Subtasks and context operations
+have separate records; a late internal result cannot replace its completed
+parent's successful model. Normal switches stay quiet in chat. Capacity waits
+reuse the existing single progress status.
+
+An inactivity failure records the actual attempt's inactivity limit. A 503 wait
+records the scheduler's next eligible attempt; an unknown account quota reset is
+shown without an ETA. **Authorized** describes saved credentials, while **Last
+successful test** describes an explicit selected account/model inference test.
+Neither a token expiry timestamp nor viewing this panel establishes inference
+success. Disabling and reauthorization remain distinct from a temporary pause.
+
+A successful explicit account probe can clear unknown quota suppression only
+when it belongs to the same authorization session and finishes after the quota
+failure. Older probes, rename, enable/disable and rotating refresh do not prove
+recovery. Reconnecting still clears only that account's authorization suppression;
+it does not fabricate quota availability.
+
+The gateway writes sanitized operational state beside its authoritative config
+at `<config-path>.model-runtime.json`, using atomic replacement and mode `0600`.
+It creates a fresh run identity before listeners start, coalesces transition
+writes and refreshes availability every 30 seconds. Graceful shutdown flushes a
+stopped snapshot. Diagnostics storage failures do not interrupt inference;
+missing/invalid state is unknown, an unreachable gateway is offline, and a PID
+mismatch or heartbeat older than 90 seconds is stale. Historical records remain
+readable while current runtime availability is marked unknown. Eligibility can
+lag by one heartbeat; saved disable/authorization changes are checked directly
+by the protected API and next outbound operation.
+
+The artifact retains at most 64 records, 64 events per record and 64 candidates,
+with bounded identifier lengths and a 2 MiB file limit. Older details are omitted
+with an explicit marker. It contains no prompts, answers, tools, chat/session
+identifiers, endpoint URLs, keys, token sets, callback codes or raw provider
+errors. The dashboard reads typed state through protected
+`GET /api/models/runtime` (`Cache-Control: no-store`); it never probes inference
+and adds no routing diagnostics to the public health endpoint. The existing
+Models page uses TanStack Query to refresh this view every 5 seconds.
+
+Verification uses full requests with fake inference endpoints and authenticated
+API fixtures, including inactivity, 503 cancellation, quota/probe recovery,
+parent/subtask isolation, captured priorities and bounded/offline history. Run
+`go test ./web/backend/api -run TestRuntime` and
+`pnpm --dir web/frontend test:models`; no personal credentials are required.
+
+The migrated legacy Codex adapter retains its existing model-name compatibility
+mapping. Its runtime record identifies the configured target; the registered
+ChatGPT route and explicit model/account tests preserve the selected slug.

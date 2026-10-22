@@ -18,6 +18,7 @@ import { EditModelSheet } from "./edit-model-sheet"
 import { ModelRoutingEditor } from "./model-routing-editor"
 import { getProviderKey, getProviderLabel } from "./provider-label"
 import { ProviderSection } from "./provider-section"
+import { RuntimeRoutingStatus } from "./runtime-routing-status"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
   volcengine: 0,
@@ -144,6 +145,7 @@ export function ModelsPage() {
         </div>
 
         <ModelRoutingEditor models={models} />
+        <RuntimeRoutingStatus />
 
         {loading && (
           <div className="flex items-center justify-center py-20">

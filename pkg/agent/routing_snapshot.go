@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/modelruntime"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
@@ -118,11 +119,12 @@ func (al *AgentLoop) captureRouting(agent *AgentInstance) (*AgentInstance, error
 // foreground inference. The adapter retains the request's model configuration
 // when a background summary outlives its originating request.
 type routingContextProvider struct {
-	routing    *requestRouting
-	chain      *providers.FallbackChain
-	agent      *AgentInstance
-	candidates []providers.FallbackCandidate
-	resolve    func(providers.FallbackCandidate) (providers.LLMProvider, error)
+	runtimeParent *modelruntime.Trace
+	routing       *requestRouting
+	chain         *providers.FallbackChain
+	agent         *AgentInstance
+	candidates    []providers.FallbackCandidate
+	resolve       func(providers.FallbackCandidate) (providers.LLMProvider, error)
 }
 
 func (p *routingContextProvider) GetDefaultModel() string {
@@ -137,6 +139,10 @@ func (p *routingContextProvider) Chat(
 	_ string,
 	options map[string]any,
 ) (*providers.LLMResponse, error) {
+	trace := p.runtimeParent.Child("context", routingIdentities(p.candidates))
+	if trace != nil {
+		ctx = providers.WithRoutingObserver(ctx, trace.Record)
+	}
 	result, err := p.chain.ExecuteRecoveryCandidate(
 		ctx,
 		p.routing.prefer(p.candidates),
@@ -178,6 +184,16 @@ func (p *routingContextProvider) Chat(
 		},
 		nil,
 	)
+	if trace != nil {
+		state := "completed"
+		if err != nil {
+			state = "failed"
+		}
+		if ctx.Err() != nil {
+			state = "canceled"
+		}
+		trace.Finish(state)
+	}
 	if err != nil {
 		return nil, err
 	}

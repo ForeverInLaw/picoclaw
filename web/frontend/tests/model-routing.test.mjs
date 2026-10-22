@@ -61,3 +61,24 @@ test("routing actions preserve scoped inheritance, empty reserves and durable mo
     globalThis.fetch = originalFetch
   }
 })
+
+test("runtime status reads observed routing without requesting inference", async () => {
+  const { getModelRuntime } = await import("../src/api/model-runtime.ts")
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (path, options) => {
+    calls.push({ path, options })
+    return Response.json({
+      state: "offline",
+      runtime: { records: [], availability: [] },
+    })
+  }
+  try {
+    assert.equal((await getModelRuntime()).state, "offline")
+    assert.deepEqual(calls, [
+      { path: "/api/models/runtime", options: undefined },
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
