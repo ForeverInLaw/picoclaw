@@ -1668,6 +1668,10 @@ func MergeAPIKeys(apiKey string, apiKeys []string) []string {
 //   - {"model_name": "gpt-4__key_2", "api_key": "k3"}
 func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 	var expanded []ModelConfig
+	usedIDs := make(map[string]bool, len(models))
+	for _, model := range models {
+		usedIDs[model.ID] = true
+	}
 
 	for _, m := range models {
 		keys := MergeAPIKeys(m.APIKey, m.APIKeys)
@@ -1694,7 +1698,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 
 			// Create a copy for the additional key
 			additionalEntry := ModelConfig{
-				ID:                       derivedKeyModelID(m.ID, suffix),
+				ID:                       derivedKeyModelID(m.ID, suffix, usedIDs),
 				ModelName:                expandedName,
 				Model:                    m.Model,
 				APIBase:                  m.APIBase,

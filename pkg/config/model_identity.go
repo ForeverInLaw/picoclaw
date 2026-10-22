@@ -14,6 +14,12 @@ const ModelIDPrefix = "model-id:"
 // The first authorized save persists them; subsequent edits retain that ID.
 func (c *Config) EnsureModelIDs() {
 	occurrences := make(map[string]int)
+	used := make(map[string]bool, len(c.ModelList))
+	for _, m := range c.ModelList {
+		if m.ID != "" {
+			used[m.ID] = true
+		}
+	}
 	for i := range c.ModelList {
 		m := &c.ModelList[i]
 		descriptor, _ := json.Marshal(
@@ -21,11 +27,20 @@ func (c *Config) EnsureModelIDs() {
 		)
 		key := string(descriptor)
 		occurrence := occurrences[key]
-		occurrences[key]++
 		if m.ID == "" {
-			m.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("picoclaw:model:%s:%d", key, occurrence))).
-				String()
+			for {
+				m.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("picoclaw:model:%s:%d", key, occurrence))).
+					String()
+				occurrence++
+				if !used[m.ID] {
+					used[m.ID] = true
+					break
+				}
+			}
+		} else {
+			occurrence++
 		}
+		occurrences[key] = occurrence
 	}
 }
 
@@ -87,9 +102,15 @@ func (c *Config) ModelReferences(model ModelConfig) []string {
 	return refs
 }
 
-func derivedKeyModelID(parent, suffix string) string {
+func derivedKeyModelID(parent, suffix string, used map[string]bool) string {
 	if parent == "" {
 		return ""
 	}
-	return parent + suffix
+	base := parent + suffix
+	id := base
+	for n := 1; used[id]; n++ {
+		id = fmt.Sprintf("%s__slot_%d", base, n)
+	}
+	used[id] = true
+	return id
 }
