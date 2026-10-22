@@ -27,12 +27,13 @@ func (c FallbackCandidate) RoutingIdentity() RoutingIdentity {
 
 // RoutingEvent deliberately carries no raw error, response or request data.
 type RoutingEvent struct {
-	At             time.Time       `json:"at"`
-	Phase          string          `json:"phase"`
-	Candidate      RoutingIdentity `json:"candidate"`
-	Reason         string          `json:"reason,omitempty"`
-	DurationMS     int64           `json:"duration_ms,omitempty"`
-	NextEligibleAt time.Time       `json:"next_eligible_at,omitzero"`
+	At                  time.Time       `json:"at"`
+	Phase               string          `json:"phase"`
+	Candidate           RoutingIdentity `json:"candidate"`
+	Reason              string          `json:"reason,omitempty"`
+	InactivityTimeoutMS int64           `json:"inactivity_timeout_ms,omitempty"`
+	DurationMS          int64           `json:"duration_ms,omitempty"`
+	NextEligibleAt      time.Time       `json:"next_eligible_at,omitzero"`
 }
 
 type routingObserverKey struct{}
@@ -63,6 +64,7 @@ func routingOutcome(ctx context.Context, candidate FallbackCandidate, started ti
 		switch {
 		case errors.As(err, &inactivity):
 			event.Reason = "inactivity_timeout"
+			event.InactivityTimeoutMS = inactivity.Timeout.Milliseconds()
 		case ctx.Err() != nil:
 			event.Phase = "canceled"
 			event.Reason = "canceled"
@@ -84,6 +86,7 @@ func routingOutcome(ctx context.Context, candidate FallbackCandidate, started ti
 
 // RoutingAvailability uses the same health state as the executor.
 type RoutingAvailability struct {
+	Authorization  string          `json:"authorization,omitempty"`
 	Candidate      RoutingIdentity `json:"candidate"`
 	Available      bool            `json:"available"`
 	Reason         string          `json:"reason,omitempty"`

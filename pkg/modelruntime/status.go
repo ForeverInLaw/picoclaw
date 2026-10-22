@@ -23,6 +23,8 @@ const (
 	StaleAfter    = 90 * time.Second
 )
 
+const maxSnapshotBytes = 2 << 20
+
 func Path(configPath string) string { return configPath + ".model-runtime.json" }
 
 type Record struct {
@@ -41,14 +43,15 @@ type Record struct {
 }
 
 type Snapshot struct {
-	Version      int                             `json:"version"`
-	RunID        string                          `json:"run_id"`
-	PID          int                             `json:"pid"`
-	StartedAt    time.Time                       `json:"started_at"`
-	UpdatedAt    time.Time                       `json:"updated_at"`
-	StoppedAt    time.Time                       `json:"stopped_at,omitzero"`
-	Records      []Record                        `json:"records"`
-	Availability []providers.RoutingAvailability `json:"availability"`
+	DroppedRecords int                             `json:"dropped_records,omitempty"`
+	Version        int                             `json:"version"`
+	RunID          string                          `json:"run_id"`
+	PID            int                             `json:"pid"`
+	StartedAt      time.Time                       `json:"started_at"`
+	UpdatedAt      time.Time                       `json:"updated_at"`
+	StoppedAt      time.Time                       `json:"stopped_at,omitzero"`
+	Records        []Record                        `json:"records"`
+	Availability   []providers.RoutingAvailability `json:"availability"`
 }
 
 // Collector updates memory synchronously and coalesces disk writes on one worker.
@@ -148,6 +151,7 @@ func (c *Collector) Begin(agentID, kind, parentID string, chain []providers.Rout
 	record.Truncated = len(chain) > MaxCandidates
 	c.snapshot.Records = append(c.snapshot.Records, record)
 	if len(c.snapshot.Records) > MaxRecords {
+		c.snapshot.DroppedRecords += len(c.snapshot.Records) - MaxRecords
 		c.snapshot.Records = c.snapshot.Records[len(c.snapshot.Records)-MaxRecords:]
 	}
 	c.changed()
@@ -173,7 +177,9 @@ func (t *Trace) Record(event providers.RoutingEvent) {
 		}
 		event.Candidate = identity(event.Candidate)
 		event.Reason = bounded(event.Reason)
-		record.TotalAttempts++
+		if event.Phase == "attempt" {
+			record.TotalAttempts++
+		}
 		record.Attempts = append(record.Attempts, event)
 		if len(record.Attempts) > MaxAttempts {
 			record.Attempts = record.Attempts[len(record.Attempts)-MaxAttempts:]
@@ -234,6 +240,11 @@ func (c *Collector) Flush() error {
 	c.snapshot.UpdatedAt = time.Now().UTC()
 	c.snapshot.Availability = available
 	data, err := json.Marshal(c.snapshot)
+	for err == nil && len(data) > maxSnapshotBytes && len(c.snapshot.Records) > 1 {
+		c.snapshot.Records = c.snapshot.Records[1:]
+		c.snapshot.DroppedRecords++
+		data, err = json.Marshal(c.snapshot)
+	}
 	c.mu.Unlock()
 	if err != nil {
 		return err
@@ -259,7 +270,7 @@ func Read(configPath string) (Snapshot, error) {
 	}
 	defer file.Close()
 	var snapshot Snapshot
-	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
+	decoder := json.NewDecoder(io.LimitReader(file, maxSnapshotBytes+1))
 	if err := decoder.Decode(&snapshot); err != nil {
 		return Snapshot{}, err
 	}

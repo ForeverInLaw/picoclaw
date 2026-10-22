@@ -8,12 +8,14 @@ import (
 )
 
 type accountHealth struct {
-	sessionVersion    string
-	reauthorization   bool
-	quota             bool
-	quotaReset        time.Time
-	rateLimitUntil    time.Time
-	rateLimitFailures int
+	sessionVersion      string
+	reauthorization     bool
+	quota               bool
+	quotaReset          time.Time
+	quotaFailedAt       time.Time
+	quotaSessionVersion string
+	rateLimitUntil      time.Time
+	rateLimitFailures   int
 }
 
 // AccountAvailability is a sanitized view of the scheduler's live connection
@@ -59,6 +61,11 @@ func (ct *CooldownTracker) AccountAvailabilityContext(ctx context.Context, id st
 		return result, nil
 	}
 	now := ct.nowFunc()
+	if health != nil && health.quota && health.quotaReset.IsZero() &&
+		health.quotaSessionVersion == state.SessionVersion &&
+		state.LastSuccessfulProbeAt.After(health.quotaFailedAt) {
+		health.quota = false
+	}
 	if health != nil && health.quota {
 		if health.quotaReset.IsZero() || now.Before(health.quotaReset) {
 			result.Available = false
@@ -108,6 +115,8 @@ func (ct *CooldownTracker) recordAccountFailure(
 	case FailoverAuth:
 		health.reauthorization = true
 	case FailoverBilling:
+		health.quotaFailedAt = ct.nowFunc()
+		health.quotaSessionVersion = version
 		health.quota = true
 		health.quotaReset = time.Time{}
 		if failure.RetryAfter > 0 {

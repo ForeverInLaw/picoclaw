@@ -153,3 +153,109 @@ func TestRuntimeStatusReportsActualCapturedModelWithoutRequestData(t *testing.T)
 		}
 	}
 }
+
+func TestRuntimeQuotaRecoversOnlyAfterExplicitSelectedProbe(t *testing.T) {
+	previous := gatewayHealthGet
+	gatewayHealthGet = func(_ string, _ time.Duration) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 200,
+			Body:       io.NopCloser(strings.NewReader(fmt.Sprintf(`{"pid":%d,"status":"ok"}`, os.Getpid()))),
+		}, nil
+	}
+	defer func() { gatewayHealthGet = previous }()
+	t.Setenv(config.EnvHome, t.TempDir())
+	var quota atomic.Bool
+	quota.Store(true)
+	var firstCalls atomic.Int32
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		selected := r.Header.Get("Authorization") == "Bearer first-token"
+		answer := "second"
+		if selected {
+			firstCalls.Add(1)
+			answer = "first"
+			if quota.Load() {
+				w.WriteHeader(429)
+				_, _ = io.WriteString(w, `{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}`)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(
+			w,
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}]}}\n\n",
+			answer,
+		)
+	}))
+	defer endpoint.Close()
+	for _, id := range []string{"first", "second"} {
+		if err := auth.SaveAccount(
+			&auth.AccountConnection{
+				ID:         id,
+				Provider:   "openai",
+				Enabled:    true,
+				Resource:   endpoint.URL + "/v1",
+				Scopes:     auth.OpenAIPlanScope,
+				Credential: &auth.AuthCredential{AccessToken: id + "-token", Provider: "openai", AuthMethod: "oauth"},
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h, cookie, path := modelInferenceDashboard(
+		t,
+		[]config.ModelConfig{
+			{ID: "a", ModelName: "A", Model: "openai/same", AuthMethod: "oauth", AccountID: "first"},
+			{ID: "b", ModelName: "B", Model: "openai/same", AuthMethod: "oauth", AccountID: "second"},
+		},
+	)
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Agents.Defaults.ModelName = config.ModelIDPrefix + "a"
+	cfg.Agents.Defaults.Model = cfg.Agents.Defaults.ModelName
+	cfg.Agents.Defaults.ModelFallbacks = []string{config.ModelIDPrefix + "b"}
+	cfg.Agents.Defaults.ContextManager = "legacy"
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	loop := agent.NewAgentLoop(cfg, mb, provider, func() (*config.Config, error) { return config.LoadConfig(path) })
+	defer loop.Close()
+	status, err := loop.EnableRuntimeStatus(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer status.Close()
+	answer, err := loop.ProcessDirect(t.Context(), "hello", "quota")
+	if err != nil || answer != "second" {
+		t.Fatalf("initial=%q %v", answer, err)
+	}
+	if err := status.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	w := dashboardRequest(h, "GET", "/api/models/runtime", "", cookie)
+	if !strings.Contains(w.Body.String(), `"reason":"billing"`) ||
+		strings.Contains(w.Body.String(), `"next_eligible_at"`) {
+		t.Fatalf("unknown quota invented ETA: %s", w.Body.String())
+	}
+	quota.Store(false)
+	answer, err = loop.ProcessDirect(t.Context(), "again", "quota")
+	if err != nil || answer != "second" || firstCalls.Load() != 1 {
+		t.Fatal("unknown quota silently retried")
+	}
+	w = dashboardRequest(h, "POST", "/api/oauth/accounts/first/test", `{"model":"same"}`, cookie)
+	if w.Code != 200 {
+		t.Fatalf("explicit selected proof=%d %s", w.Code, w.Body.String())
+	}
+	answer, err = loop.ProcessDirect(t.Context(), "after proof", "quota")
+	if err != nil || answer != "first" || firstCalls.Load() != 3 {
+		t.Fatalf("real selected success did not recover quota: %q %v first%d", answer, err, firstCalls.Load())
+	}
+}

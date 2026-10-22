@@ -283,6 +283,7 @@ func clearRejectedAccountSession(ctx context.Context, expected *AccountConnectio
 
 // AccountSessionState is a local snapshot; reading it never refreshes or probes.
 type AccountSessionState struct {
+	LastSuccessfulProbeAt   time.Time
 	SessionVersion          string
 	Enabled                 bool
 	RequiresReauthorization bool
@@ -299,8 +300,9 @@ func AccountStateContext(ctx context.Context, id string) (AccountSessionState, e
 	}
 	credential := account.Credential
 	return AccountSessionState{
-		SessionVersion: account.SessionVersion,
-		Enabled:        account.Enabled,
+		LastSuccessfulProbeAt: account.LastSuccessAt,
+		SessionVersion:        account.SessionVersion,
+		Enabled:               account.Enabled,
 		RequiresReauthorization: !account.CanUsePlan() || credential == nil || credential.AccessToken == "" ||
 			(credential.IsExpired() && credential.RefreshToken == ""),
 	}, nil
