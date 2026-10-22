@@ -79,6 +79,10 @@ func (fc *FallbackChain) ExecuteRecoveryCandidate(
 		}
 		for _, attempt := range exhausted.Attempts {
 			state := states[attempt.Candidate.StableKey()]
+			if attempt.Reason == FailoverIncompatible {
+				state.excluded = true
+				continue
+			}
 			var unavailable *CandidateUnavailableError
 			if errors.As(attempt.Error, &unavailable) {
 				state.unavail = unavailable

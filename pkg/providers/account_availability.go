@@ -14,7 +14,6 @@ type accountHealth struct {
 	quota               bool
 	quotaReset          time.Time
 	quotaFailedAt       time.Time
-	quotaSessionVersion string
 	rateLimitUntil      time.Time
 	rateLimitFailures   int
 }
@@ -68,8 +67,9 @@ func (ct *CooldownTracker) AccountAvailabilityContext(ctx context.Context, id st
 		return result, nil
 	}
 	now := ct.nowFunc()
+	// Quota belongs to the connection, across token sessions. Probe writes already
+	// reject superseded sessions; only a success after this failure proves recovery.
 	if health != nil && health.quota && health.quotaReset.IsZero() &&
-		health.quotaSessionVersion == state.SessionVersion &&
 		state.LastSuccessfulProbeAt.After(health.quotaFailedAt) {
 		health.quota = false
 	}
@@ -126,7 +126,6 @@ func (ct *CooldownTracker) recordAccountFailure(
 		health.reauthorization = true
 	case FailoverBilling:
 		health.quotaFailedAt = ct.nowFunc()
-		health.quotaSessionVersion = version
 		health.quota = true
 		health.quotaReset = time.Time{}
 		if failure.RetryAfter > 0 {
@@ -141,4 +140,21 @@ func (ct *CooldownTracker) recordAccountFailure(
 		health.rateLimitUntil = ct.nowFunc().Add(delay)
 	}
 	return true
+}
+
+// A successful attempt ends a sequence of rate-limit failures. Keep any active
+// Retry-After pause from another concurrent request and other health unchanged.
+func (ct *CooldownTracker) recordAccountSuccess(ctx context.Context, id, version string) {
+	if id == "" {
+		return
+	}
+	current, err := auth.AccountStateContext(ctx, id)
+	if err != nil || current.SessionVersion != version {
+		return
+	}
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	if health := ct.accounts[id]; health != nil && health.sessionVersion == version {
+		health.rateLimitFailures = 0
+	}
 }

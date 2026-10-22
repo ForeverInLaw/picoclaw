@@ -228,6 +228,7 @@ func (fc *FallbackChain) execute(
 		if err == nil {
 			// Success.
 			fc.cooldown.MarkSuccess(cooldownKey)
+			fc.cooldown.recordAccountSuccess(ctx, candidate.AccountID, availability.SessionVersion)
 			result.Response = resp
 			result.Provider = candidate.Provider
 			result.Model = candidate.Model
