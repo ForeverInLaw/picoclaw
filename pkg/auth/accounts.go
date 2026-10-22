@@ -77,7 +77,8 @@ func SaveAccount(account *AccountConnection) error {
 	return saveStore(store)
 }
 
-func UpdateAccount(id, label string, enabled bool) error {
+// PatchAccount applies only provided fields under the store lock.
+func PatchAccount(id string, label *string, enabled *bool) error {
 	unlock, err := lockStore()
 	if err != nil {
 		return err
@@ -91,10 +92,16 @@ func UpdateAccount(id, label string, enabled bool) error {
 	if account == nil {
 		return ErrAccountNotFound
 	}
-	account.Label = label
-	account.Enabled = enabled
+	if label != nil {
+		account.Label = *label
+	}
+	if enabled != nil {
+		account.Enabled = *enabled
+	}
 	return saveStore(store)
 }
+
+func UpdateAccount(id, label string, enabled bool) error { return PatchAccount(id, &label, &enabled) }
 
 func DeleteAccount(id string) error {
 	unlock, err := lockStore()

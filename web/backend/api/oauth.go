@@ -129,6 +129,7 @@ type oauthFlowResponse struct {
 // registerOAuthRoutes binds OAuth login/logout endpoints to the ServeMux.
 func (h *Handler) registerOAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/oauth/accounts", h.handleListAccounts)
+	mux.HandleFunc("PATCH /api/oauth/accounts/{id}", h.handlePatchAccount)
 	mux.HandleFunc("POST /api/oauth/flows/{id}/complete", h.handleCompleteCodexAccount)
 	mux.HandleFunc("GET /api/oauth/providers", h.handleListOAuthProviders)
 	mux.HandleFunc("POST /api/oauth/login", h.handleOAuthLogin)

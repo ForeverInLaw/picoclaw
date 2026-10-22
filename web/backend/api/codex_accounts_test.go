@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -164,5 +165,45 @@ func TestModelRenamePreservesBindingAndUneditedSettings(t *testing.T) {
 	model := saved.ModelList[0]
 	if model.ModelName != "renamed" || model.APIKey != "saved-key" || model.APIBase != "https://custom.example/v1" || model.RequestTimeout != 97 || len(model.Fallbacks) != 1 || model.Fallbacks[0] != "backup" || model.ExtraBody["frequency_penalty"] != 0.3 {
 		t.Fatalf("rename lost model settings: %+v", model)
+	}
+}
+
+func TestCodexAccountPatchPreservesReferencesAndIndependentFields(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	if err := auth.SaveAccount(&auth.AccountConnection{ID: "first", Label: "Same email", Provider: "openai", Enabled: true, Credential: &auth.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "first-secret"}}); err != nil {
+		t.Fatal(err)
+	}
+	h, cookie, path := modelInferenceDashboard(t, []config.ModelConfig{{ModelName: "selected", Model: "openai/gpt-5.4", AuthMethod: "oauth", AccountID: "first"}})
+	if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/first", `{"label":"Renamed"}`, nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unprotected patch=%d", w.Code)
+	}
+	for _, body := range []string{`{"enabled":false}`, `{"label":"Renamed"}`} {
+		w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/first", body, cookie)
+		if w.Code != 200 {
+			t.Fatalf("patch=%d %s", w.Code, w.Body.String())
+		}
+	}
+	a, err := auth.GetAccount("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Label != "Renamed" || a.Enabled || a.Credential.AccessToken != "first-secret" {
+		t.Fatalf("patch lost independent field: %+v", a)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ModelList[0].AccountID != "first" {
+		t.Fatal("rename changed stable model reference")
+	}
+	for _, body := range []string{`{"label":"  "}`, `{"enabled":true,"label":""}`, `{"access_token":"replace"}`} {
+		if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/first", body, cookie); w.Code != 400 {
+			t.Fatalf("invalid patch accepted=%d %s", w.Code, w.Body.String())
+		}
+	}
+	a, _ = auth.GetAccount("first")
+	if a.Enabled {
+		t.Fatal("partially applied invalid patch")
 	}
 }
