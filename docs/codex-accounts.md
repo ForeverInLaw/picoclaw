@@ -84,6 +84,13 @@ The new HTTP Responses route sends the selected model slug unchanged, uses
 `store: false` and streaming, groups local functions in a namespace, and retains
 completed tool calls/results in normal conversation history. Image input remains
 unsupported by this adapter until its existing Media boundary can serialize it.
+
+Some streams deliver completed messages and tool calls in `response.output_item.done`
+events while the final response snapshot has an empty `output`. Picoclaw retains
+those completed items in output order and uses them only after a successful
+`response.completed` when that final list is empty. Partial deltas, failed and
+incomplete responses never become a completed answer through this recovery.
+
 Token refresh, refresh-lock waits and the final account save respect request
 cancellation. Confirmed unusable refresh tokens clear only that account's token
 set; its registration mapping remains available for reauthorization. Temporary

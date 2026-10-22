@@ -197,6 +197,7 @@ func (p *CodexProvider) chat(
 
 	var resp *responses.Response
 	var terminalError error
+	completedItems := make(map[int64]responses.ResponseOutputItemUnion)
 	type contentPosition struct{ output, content int64 }
 	partials := make(map[contentPosition]*strings.Builder)
 	phases := make(map[int64]ContentPhase)
@@ -216,6 +217,9 @@ func (p *CodexProvider) chat(
 		}
 		if evt.Type == "response.output_item.added" || evt.Type == "response.output_item.done" {
 			phases[evt.OutputIndex] = codexMessagePhase(evt.Item)
+		}
+		if evt.Type == "response.output_item.done" {
+			completedItems[evt.OutputIndex] = evt.Item
 		}
 		if evt.Type == "response.output_text.delta" {
 			deltaEvent := evt.AsResponseOutputTextDelta()
@@ -331,6 +335,18 @@ func (p *CodexProvider) chat(
 		}
 		logger.ErrorCF("provider.codex", "Codex stream ended without completed response event", fields)
 		return nil, fmt.Errorf("codex API call: stream ended without completed response: %w", io.ErrUnexpectedEOF)
+	}
+
+	// The final snapshot can omit output already sent in output_item.done.
+	if len(resp.Output) == 0 {
+		indexes := make([]int64, 0, len(completedItems))
+		for index := range completedItems {
+			indexes = append(indexes, index)
+		}
+		slices.Sort(indexes)
+		for _, index := range indexes {
+			resp.Output = append(resp.Output, completedItems[index])
+		}
 	}
 
 	reply := parseCodexResponse(resp)
