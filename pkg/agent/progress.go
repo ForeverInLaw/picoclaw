@@ -10,6 +10,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -62,24 +63,27 @@ func (al *AgentLoop) publishProgress(
 	progress *bus.ProgressMessage,
 	content string,
 ) {
-	if al.bus == nil || constants.IsInternalChannel(ts.channel) {
-		return
-	}
-	pubCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	msg := bus.OutboundMessage{
-		Channel:          ts.channel,
-		ChatID:           ts.chatID,
-		ReplyToMessageID: ts.opts.ReplyToMessageID,
-		Content:          content,
-		Progress:         progress,
-	}
-	if al.cfg.IsChannelType(ts.channel, "telegram") && progress.Kind == bus.ProgressTool && al.channelManager != nil {
-		// Complete activity delivery before the next answer starts streaming.
-		_ = al.channelManager.SendMessage(pubCtx, msg)
-		return
-	}
-	_ = al.bus.PublishOutbound(pubCtx, msg)
+	providers.WithoutModelInactivity(ctx, func() {
+		if al.bus == nil || constants.IsInternalChannel(ts.channel) {
+			return
+		}
+		pubCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		msg := bus.OutboundMessage{
+			Channel:          ts.channel,
+			ChatID:           ts.chatID,
+			ReplyToMessageID: ts.opts.ReplyToMessageID,
+			Content:          content,
+			Progress:         progress,
+		}
+		if al.cfg.IsChannelType(ts.channel, "telegram") && progress.Kind == bus.ProgressTool &&
+			al.channelManager != nil {
+			// Complete activity delivery before the next answer starts streaming.
+			_ = al.channelManager.SendMessage(pubCtx, msg)
+			return
+		}
+		_ = al.bus.PublishOutbound(pubCtx, msg)
+	})
 }
 
 func (al *AgentLoop) publishToolProgress(

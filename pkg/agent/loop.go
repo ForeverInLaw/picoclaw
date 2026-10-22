@@ -26,6 +26,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/factcheck"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/modelruntime"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -67,8 +68,11 @@ type AgentLoop struct {
 	turnSeq        atomic.Uint64
 	activeRequests sync.WaitGroup
 
-	reloadFunc func() error
-	runCancel  context.CancelFunc
+	runtimeStatus   *modelruntime.Collector
+	temporaryModels map[string]temporaryModelSelection
+	routingSource   func() (*config.Config, error)
+	reloadFunc      func() error
+	runCancel       context.CancelFunc
 }
 
 // processOptions configures how a message is processed
@@ -118,12 +122,15 @@ const (
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
 
+// NewAgentLoop accepts an optional saved-routing source at construction so
+// context engines initialize independently of an unavailable primary provider.
 func NewAgentLoop(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
+	routingSources ...func() (*config.Config, error),
 ) *AgentLoop {
-	registry := NewAgentRegistry(cfg, provider)
+	registry := NewAgentRegistry(cfg, provider, len(routingSources) > 0 && routingSources[0] != nil)
 
 	// Set up shared fallback chain
 	cooldown := providers.NewCooldownTracker()
@@ -146,6 +153,9 @@ func NewAgentLoop(
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:    newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+	}
+	if len(routingSources) > 0 {
+		al.routingSource = routingSources[0]
 	}
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
@@ -796,6 +806,12 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	al.mu.RLock()
+	runtimeStatus := al.runtimeStatus
+	al.mu.RUnlock()
+	if runtimeStatus != nil {
+		runtimeStatus.Close()
+	}
 	mcpManager := al.mcp.takeManager()
 
 	if mcpManager != nil {
@@ -1070,6 +1086,9 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	var registry *AgentRegistry
 	var panicErr error
 	done := make(chan struct{}, 1)
+	al.mu.RLock()
+	deferModelSelection := al.routingSource != nil
+	al.mu.RUnlock()
 
 	go func() {
 		defer func() {
@@ -1081,7 +1100,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 			close(done)
 		}()
 
-		registry = NewAgentRegistry(cfg, provider)
+		registry = NewAgentRegistry(cfg, provider, deferModelSelection)
 		if ctx.Err() != nil {
 			registry.Close()
 			registry = nil
@@ -1710,7 +1729,10 @@ func (al *AgentLoop) runAgentLoop(
 	if err != nil {
 		return "", err
 	}
-	agent = captured
+	agent, err = al.captureRouting(captured)
+	if err != nil {
+		return "", err
+	}
 	if publicationFor(ctx) == nil {
 		ctx = withResponsePublication(ctx)
 	}
@@ -1838,7 +1860,7 @@ func (al *AgentLoop) handleReasoning(
 	}
 }
 
-func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, error) {
+func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (result turnResult, turnErr error) {
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	defer turnCancel()
 	ts.setTurnCancel(turnCancel)
@@ -1846,12 +1868,26 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// Inject turnState and AgentLoop into context so tools (e.g. spawn) can retrieve them.
 	turnCtx = withTurnState(turnCtx, ts)
 	turnCtx = WithAgentLoop(turnCtx, al)
+	turnCtx = al.beginRuntimeTurn(turnCtx, ts)
 
 	al.registerActiveTurn(ts)
 	defer al.clearActiveTurn(ts)
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {
+		if turnErr != nil && turnStatus == TurnEndStatusCompleted {
+			turnStatus = TurnEndStatusError
+		}
+		if ts.runtimeTrace != nil {
+			state := "completed"
+			if turnStatus == TurnEndStatusError {
+				state = "failed"
+			}
+			if turnStatus == TurnEndStatusAborted || ctx.Err() != nil {
+				state = "canceled"
+			}
+			ts.runtimeTrace.Finish(state)
+		}
 		al.emitEvent(
 			EventKindTurnEnd,
 			ts.eventMeta("runTurn", "turn.end"),
@@ -1939,6 +1975,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	)
 
 	cfg := al.GetConfig()
+	if ts.agent.requestRouting != nil {
+		cfg = ts.agent.requestRouting.cfg
+	}
 	messages = al.resolveTurnMedia(turnCtx, ts, messages, maxMediaSize)
 	allowedTools := newToolAllowlist(ts.opts.AllowedTools)
 
@@ -2016,15 +2055,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	if !cfg.IsChannelType(ts.channel, "pico") || len(ts.media) == 0 {
 		activeProvider, activeCandidates, activeModel = al.selectCandidates(ts.agent, ts.userMessage, messages)
 	}
-	resolveCandidateProvider := candidateProviderResolver(al.cfg, ts.agent.Workspace, activeProvider, activeCandidates)
-	if len(activeCandidates) > 0 {
-		resolvedProvider, err := resolveCandidateProvider(activeCandidates[0])
-		if err != nil {
-			turnStatus = TurnEndStatusError
-			return turnResult{}, err
-		}
-		activeProvider = resolvedProvider
-	}
+	resolveCandidateProvider := candidateProviderResolver(cfg, ts.agent.Workspace, activeProvider, activeCandidates)
+
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
 	var finalModelContent string
@@ -2143,35 +2175,6 @@ turnLoop:
 		gracefulTerminal, _ := ts.gracefulInterruptRequested()
 		providerToolDefs := ts.agent.Tools.ToProviderDefsFiltered(allowedTools)
 
-		// Native web search support (from HEAD)
-		_, hasWebSearch := ts.agent.Tools.Get("web_search")
-		if !allowedTools.Allows("web_search") {
-			hasWebSearch = false
-		}
-		useNativeSearch := al.cfg.Tools.Web.PreferNative &&
-			al.cfg.Tools.Web.PrimaryProvider == "" &&
-			!(al.cfg.Tools.Web.Parallel.Enabled && len(config.MergeAPIKeys(al.cfg.Tools.Web.Parallel.APIKey, al.cfg.Tools.Web.Parallel.APIKeys)) > 0) &&
-			!(al.cfg.Tools.Web.Exa.Enabled && len(config.MergeAPIKeys(al.cfg.Tools.Web.Exa.APIKey, al.cfg.Tools.Web.Exa.APIKeys)) > 0) &&
-			hasWebSearch &&
-			func() bool {
-				// Check if provider supports native search
-				if ns, ok := activeProvider.(interface{ SupportsNativeSearch() bool }); ok {
-					return ns.SupportsNativeSearch()
-				}
-				return false
-			}()
-
-		if useNativeSearch {
-			// Filter out client-side web_search tool
-			filtered := make([]providers.ToolDefinition, 0, len(providerToolDefs))
-			for _, td := range providerToolDefs {
-				if td.Function.Name != "web_search" {
-					filtered = append(filtered, td)
-				}
-			}
-			providerToolDefs = filtered
-		}
-
 		callMessages := messages
 		if gracefulTerminal {
 			callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -2189,17 +2192,6 @@ turnLoop:
 			"max_tokens":       ts.agent.MaxTokens,
 			"temperature":      ts.agent.Temperature,
 			"prompt_cache_key": ts.agent.ID,
-		}
-		if useNativeSearch {
-			llmOpts["native_search"] = true
-		}
-		if ts.agent.ThinkingLevel != ThinkingOff {
-			if tc, ok := activeProvider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
-				llmOpts["thinking_level"] = string(ts.agent.ThinkingLevel)
-			} else {
-				logger.WarnCF("agent", "thinking_level is set but current provider does not support it, ignoring",
-					map[string]any{"agent_id": ts.agent.ID, "thinking_level": string(ts.agent.ThinkingLevel)})
-			}
 		}
 
 		llmModel := activeModel
@@ -2263,8 +2255,8 @@ turnLoop:
 			})
 
 		modelAttempts := 0
+		modelBudgetAttempts := 0
 		retryAnnounced := false
-		var lastProviderError error
 		var lastCandidateFailure *providers.FailoverError
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
 			providerCtx, providerCancel := context.WithCancel(bus.WithStreamReplyTo(turnCtx, ts.opts.ReplyToMessageID))
@@ -2277,20 +2269,28 @@ turnLoop:
 			al.activeRequests.Add(1)
 			defer al.activeRequests.Done()
 
-			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
+			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (reply *providers.LLMResponse, requestErr error) {
+				model := candidate.Model
+				attemptLimit := candidateInactivityTimeout(cfg, candidate, ts.agent.Workspace)
+				candidateDefs, candidateOpts := prepareCandidateRequest(cfg, client, candidate, toolDefsForCall, llmOpts, ts.agent.ThinkingLevel)
+				if err := checkCandidateContext(cfg, candidate, client, messagesForCall, candidateDefs, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
+					al.emitEvent(EventKindLLMRetry, ts.eventMeta("runTurn", "turn.llm.candidate_skipped"), LLMRetryPayload{Reason: "incompatible", Error: err.Error()})
+					logger.WarnCF("agent", "Skipping incompatible model candidate", map[string]any{"model": candidate.Model, "config_name": candidate.ConfigName, "reason": err.Error()})
+					return nil, &providers.FailoverError{Reason: providers.FailoverIncompatible, Wrapped: err, Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model}
+				}
 				lastResponseModel = model
 				defer func() {
-					if requestErr != nil {
-						lastProviderError = requestErr
+					if failure := providers.ClassifyError(requestErr, "", ""); failure != nil && failure.Status == 503 {
+						modelBudgetAttempts--
 					}
 				}()
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if modelAttempts >= modelMaxAttempts {
-					return nil, errModelAttemptBudget
-				}
+				// The scheduler owns complete candidate passes and 503 recovery rounds.
+				// Only the outer ordinary/empty/context retries consume this budget.
 				modelAttempts++
+				modelBudgetAttempts++
 				reasoningActionID := fmt.Sprintf("reasoning:%d:%d", iteration, modelAttempts)
 				streamProvider, providerCanStream := client.(providers.StreamingProvider)
 				phasedProvider, providerCanStreamPhases := client.(providers.PhasedStreamingProvider)
@@ -2300,7 +2300,9 @@ turnLoop:
 					!ts.opts.NoHistory && !constants.IsInternalChannel(ts.channel)
 				if streamingEnabled {
 					// Each candidate gets its own preview; failed attempts cancel theirs.
-					streamer, streamUpdater = selectStreamingTargets(ctx, al.bus, al.channelManager, ts.channel, ts.chatID)
+					providers.WithoutModelInactivity(ctx, func() {
+						streamer, streamUpdater = selectStreamingTargets(ctx, al.bus, al.channelManager, ts.channel, ts.chatID)
+					})
 				}
 				if streamingEnabled && (streamer != nil || streamUpdater != nil) {
 					lastSnapshots := make(map[providers.ContentPhase]string)
@@ -2336,9 +2338,17 @@ turnLoop:
 						}
 					}
 					if providerCanStreamPhases {
-						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, toolDefsForCall, model, llmOpts, onUpdate)
+						response, err = providers.RunModelAttempt(ctx, attemptLimit, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+							return phasedProvider.ChatStreamContent(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, func(update providers.StreamContent) {
+								providers.WithoutModelInactivity(attemptCtx, func() { onUpdate(update) })
+							})
+						})
 					} else {
-						response, err = streamProvider.ChatStream(ctx, messagesForCall, toolDefsForCall, model, llmOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
+						response, err = providers.RunModelAttempt(ctx, attemptLimit, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+							return streamProvider.ChatStream(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, func(content string) {
+								providers.WithoutModelInactivity(attemptCtx, func() { onUpdate(providers.StreamContent{Content: content}) })
+							})
+						})
 					}
 					if err != nil {
 						al.publishWebReasoning(ctx, ts, reasoningActionID, bus.ProgressFailed, lastSnapshots[providers.ContentPhaseReasoning])
@@ -2363,64 +2373,57 @@ turnLoop:
 					}
 					return response, nil
 				}
-				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
+				return providers.RunModelAttempt(ctx, attemptLimit, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+					return client.Chat(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts)
+				})
 			}
-			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (*providers.LLMResponse, error) {
-				for retry := 0; ; retry++ {
-					response, err := callProviderOnce(ctx, client, model)
-					delay, capacity := capacityRetryDelay(err, retry)
-					if !capacity {
-						return response, err
-					}
-					if ctx.Err() != nil {
-						return nil, ctx.Err()
-					}
-					// Capacity rejections do not spend the ordinary recovery/fallback budget.
-					modelAttempts--
-					retryAnnounced = true
-					al.reportModelRetry(ctx, ts, retry+1, "capacity_unavailable", err, delay)
-					if err := sleepWithContext(ctx, delay); err != nil {
-						return nil, err
-					}
-				}
+			callProvider := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
+				return callProviderOnce(ctx, client, candidate)
 			}
-
-			if len(activeCandidates) > 1 && al.fallback != nil {
-				retryCurrentCandidate := lastCandidateFailure != nil && lastCandidateFailure.IsTransient()
-				runCandidate := func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
-					if !retryCurrentCandidate && modelAttempts > 0 && modelAttempts < modelMaxAttempts && lastProviderError != nil {
-						retryAnnounced = true
-						al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
-					}
-					client, err := resolveCandidateProvider(candidate)
+			ts.runtimeTrace.CaptureChain(routingIdentities(activeCandidates))
+			candidates := ts.agent.requestRouting.prefer(activeCandidates)
+			if len(candidates) == 0 {
+				candidates = []providers.FallbackCandidate{{Model: llmModel}}
+			} else if llmModel != activeModel {
+				candidates = append([]providers.FallbackCandidate(nil), candidates...)
+				candidates[0].Model = llmModel
+			}
+			runCandidate := func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
+				client := activeProvider
+				if len(activeCandidates) > 0 {
+					var err error
+					client, err = resolveCandidateProvider(ctx, candidate)
 					if err != nil {
 						return nil, err
 					}
-					response, err := callProvider(ctx, client, candidate.Model)
-					lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
-					return response, err
 				}
-				var fbResult *providers.FallbackResult
-				var fbErr error
-				if retryCurrentCandidate {
-					fbResult, fbErr = al.fallback.RetryCandidate(providerCtx, lastCandidateFailure, runCandidate)
-				} else {
-					fbResult, fbErr = al.fallback.ExecuteCandidate(providerCtx, activeCandidates, runCandidate)
+				if stateful, owned := client.(providers.StatefulProvider); owned && client != activeProvider {
+					defer stateful.Close()
 				}
-				if fbErr != nil {
-					return nil, fbErr
-				}
-				if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
-					logger.InfoCF(
-						"agent",
-						fmt.Sprintf("Fallback: succeeded with %s/%s after %d attempts",
-							fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
-						map[string]any{"agent_id": ts.agent.ID, "iteration": iteration},
-					)
-				}
-				return fbResult.Response, nil
+				response, err := callProvider(ctx, client, candidate)
+				lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
+				return response, err
 			}
-			return callProvider(providerCtx, activeProvider, llmModel)
+			for i := range candidates {
+				candidates[i].InactivityTimeout = candidateInactivityTimeout(cfg, candidates[i], ts.agent.Workspace)
+			}
+			var fbResult *providers.FallbackResult
+			var fbErr error
+			if lastCandidateFailure != nil && lastCandidateFailure.IsTransient() && lastCandidateFailure.Status != 503 {
+				fbResult, fbErr = al.fallback.RetryCandidate(providerCtx, lastCandidateFailure, runCandidate)
+			} else {
+				waits := 0
+				fbResult, fbErr = al.fallback.ExecuteRecoveryCandidate(providerCtx, candidates, runCandidate, func(delay time.Duration, err error) {
+					retryAnnounced = true
+					waits++
+					al.reportModelRetry(providerCtx, ts, waits, "service_unavailable", err, delay)
+				})
+			}
+			if fbErr != nil {
+				return nil, fbErr
+			}
+			ts.agent.requestRouting.served(fbResult.Candidate)
+			return fbResult.Response, nil
 		}
 
 		var response *providers.LLMResponse
@@ -2454,10 +2457,10 @@ turnLoop:
 					break
 				}
 				err = errEmptyAnswer
-				if !emptyRecoveryUsed && retry < maxRetries && modelAttempts < modelMaxAttempts {
+				if !emptyRecoveryUsed && retry < maxRetries && modelBudgetAttempts < modelMaxAttempts {
 					emptyRecoveryUsed = true
 					retryAnnounced = true
-					al.reportModelRetry(turnCtx, ts, modelAttempts, "empty_answer", err, 0)
+					al.reportModelRetry(turnCtx, ts, modelBudgetAttempts, "empty_answer", err, 0)
 					continue
 				}
 				break
@@ -2492,9 +2495,9 @@ turnLoop:
 				strings.Contains(errMsg, "request too large"))
 
 			delay, reason, isTransient := modelRetryDelay(err, retry, waited)
-			if isTransient && retry < maxRetries && modelAttempts < modelMaxAttempts {
+			if isTransient && retry < maxRetries && modelBudgetAttempts < modelMaxAttempts {
 				retryAnnounced = true
-				al.reportModelRetry(turnCtx, ts, modelAttempts, reason, err, delay)
+				al.reportModelRetry(turnCtx, ts, modelBudgetAttempts, reason, err, delay)
 				if sleepErr := sleepWithContext(turnCtx, delay); sleepErr != nil {
 					if ts.hardAbortRequested() {
 						if retryAnnounced {
@@ -2510,7 +2513,7 @@ turnLoop:
 				continue
 			}
 
-			if isContextError && retry < maxRetries && modelAttempts < modelMaxAttempts && !ts.opts.NoHistory {
+			if isContextError && retry < maxRetries && modelBudgetAttempts < modelMaxAttempts && !ts.opts.NoHistory {
 				logger.WarnCF(
 					"agent",
 					"Context window error detected, attempting compression",
@@ -2521,7 +2524,7 @@ turnLoop:
 				)
 
 				retryAnnounced = true
-				al.reportModelRetry(turnCtx, ts, modelAttempts, "context_limit", err, 0)
+				al.reportModelRetry(turnCtx, ts, modelBudgetAttempts, "context_limit", err, 0)
 
 				ts.mu.RLock()
 				protectedMessages := len(ts.persistedMessages)
@@ -3796,10 +3799,9 @@ func (al *AgentLoop) retryLLMCall(
 		al.activeRequests.Add(1)
 		resp, err = func() (*providers.LLMResponse, error) {
 			defer al.activeRequests.Done()
-			return agent.Provider.Chat(
-				ctx,
+			return chatContextModel(
+				ctx, agent.Provider, contextInactivityTimeout(agent),
 				[]providers.Message{{Role: "user", Content: prompt}},
-				nil,
 				agent.Model,
 				map[string]any{
 					"max_tokens":       agent.MaxTokens,
@@ -3971,10 +3973,16 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 	}
 	if agent != nil {
 		rt.GetModelInfo = func() (string, string) {
+			if al.hasSavedRouting() {
+				return al.savedModelInfo(agent)
+			}
 			return agent.Model, resolvedCandidateProvider(agent.Candidates, cfg.Agents.Defaults.Provider)
 		}
 		rt.SwitchModel = func(value string) (string, error) {
 			value = strings.TrimSpace(value)
+			if al.hasSavedRouting() {
+				return al.switchSavedModel(agent, value)
+			}
 			modelCfg, err := resolvedModelConfig(cfg, value, agent.Workspace)
 			if err != nil {
 				return "", err

@@ -27,8 +27,6 @@ func publicProviderError(err error) error {
 	var budget *contextBudgetError
 	if errors.As(err, &budget) {
 		message = budget.Error()
-	} else if errors.Is(err, errModelAttemptBudget) {
-		message = errModelAttemptBudget.Error()
 	} else if errors.Is(err, errEmptyAnswer) {
 		message = errEmptyAnswer.Error()
 	}

@@ -15,6 +15,7 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
@@ -40,7 +41,7 @@ var (
 	rateLimitPatterns = []errorPattern{
 		rxp(`rate[_ ]limit`),
 		substr("too many requests"),
-		substr("429"),
+		rxp(`\b429\b`),
 		substr("exceeded your current quota"),
 		rxp(`exceeded.*quota`),
 		rxp(`resource has been exhausted`),
@@ -154,9 +155,20 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	msg := strings.ToLower(err.Error())
 	status, delay, code := errorHTTPMetadata(err)
 	msg += " " + strings.ToLower(code)
+	var tokenFailure *auth.TokenRequestError
+	if errors.As(err, &tokenFailure) && tokenFailure.Code == "invalid_client" {
+		return &FailoverError{
+			Reason:   FailoverClientConfiguration,
+			Provider: provider,
+			Model:    model,
+			Status:   status,
+			Wrapped:  err,
+		}
+	}
 	// Hard quota exhaustion often arrives as HTTP 429; it cannot recover with backoff.
 	if strings.Contains(msg, "insufficient_quota") || strings.Contains(msg, "exceeded your current quota") ||
 		strings.Contains(msg, "billing_hard_limit") ||
+		strings.Contains(msg, "subscription_sharing_usage_limit_exceeded") ||
 		strings.Contains(msg, "quota exhausted") ||
 		strings.Contains(msg, "quota_exceeded") ||
 		strings.Contains(msg, "quota exceeded") ||

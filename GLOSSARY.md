@@ -4,6 +4,15 @@ Picoclaw provides assistant conversations through chat channels and Telegram inl
 
 ## Language
 
+**Account connection**:
+An administrator-managed ChatGPT registration saved for this Picoclaw instance, with its own identity, credentials and availability. Several configured models may use the same connection; a display name or email alone does not identify one.
+
+**Configured model**:
+A named choice of model and its account connection or provider credentials. The same underlying model used through different connections represents separate choices.
+
+**Routing chain**:
+The ordered choice of a primary configured model and its reserves for a user request. Agents inherit the instance default unless they have an explicit override, which may contain no reserves.
+
 **Inline conversation**:
 A Telegram user's ongoing conversation with the assistant through inline calls, shared across the chats where that user invokes the bot. It is separate from the user's direct conversation and from group conversations.
 

@@ -21,13 +21,14 @@ import (
 )
 
 type OAuthProviderConfig struct {
-	Issuer       string
-	ClientID     string
-	ClientSecret string // Required for Google OAuth (confidential client)
-	TokenURL     string // Override token endpoint (Google uses a different URL than issuer)
-	Scopes       string
-	Originator   string
-	Port         int
+	Resource     string `json:"resource,omitempty"` // Registered ChatGPT API resource; empty for legacy flows.
+	Issuer       string `json:"Issuer,omitempty"`
+	ClientID     string `json:"ClientID,omitempty"`
+	ClientSecret string `json:"ClientSecret,omitempty"` // Required for Google OAuth (confidential client)
+	TokenURL     string `json:"TokenURL,omitempty"`     // Override token endpoint (Google uses a different URL than issuer)
+	Scopes       string `json:"Scopes,omitempty"`
+	Originator   string `json:"Originator,omitempty"`
+	Port         int    `json:"Port,omitempty"`
 }
 
 func OpenAIOAuthConfig() OAuthProviderConfig {
@@ -385,6 +386,16 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 }
 
 func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
+	return RefreshAccessTokenContext(context.Background(), cred, cfg)
+}
+
+func RefreshAccessTokenContext(
+	ctx context.Context,
+	cred *AuthCredential,
+	cfg OAuthProviderConfig,
+) (*AuthCredential, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	if cred.RefreshToken == "" {
 		return nil, fmt.Errorf("no refresh token available")
 	}
@@ -398,24 +409,36 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 	if cfg.ClientSecret != "" {
 		data.Set("client_secret", cfg.ClientSecret)
 	}
+	if cfg.Resource != "" {
+		data.Set("resource", cfg.Resource)
+		data.Del("scope")
+	}
 
 	tokenURL := cfg.Issuer + "/oauth/token"
 	if cfg.TokenURL != "" {
 		tokenURL = cfg.TokenURL
 	}
 
-	resp, err := http.PostForm(tokenURL, data)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("refreshing token: %w", err)
+		return nil, fmt.Errorf("preparing token refresh: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &TokenRequestError{Wrapped: err}
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, tokenEndpointError(resp)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("reading token refresh response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed: %s", string(body))
 	}
 
 	refreshed, err := parseTokenResponse(body, cred.Provider)
@@ -487,6 +510,10 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 	}
 	if cfg.ClientSecret != "" {
 		data.Set("client_secret", cfg.ClientSecret)
+	}
+	if cfg.Resource != "" {
+		data.Set("resource", cfg.Resource)
+		data.Del("scope")
 	}
 
 	tokenURL := cfg.Issuer + "/oauth/token"

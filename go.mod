@@ -1,6 +1,6 @@
 module github.com/sipeed/picoclaw
 
-go 1.27.2
+go 1.27.3
 
 require (
 	fyne.io/systray v1.12.0
@@ -9,12 +9,14 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.4.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-message v0.18.2
 	github.com/ergochat/irc-go v0.6.0
 	github.com/ergochat/readline v0.1.3
 	github.com/gdamore/tcell/v2 v2.13.8
 	github.com/github/copilot-sdk/go v0.1.32
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/gomarkdown/markdown v0.0.0-20261011113952-f83953680332
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3

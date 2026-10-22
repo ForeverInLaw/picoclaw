@@ -1,8 +1,7 @@
-import { refreshGatewayState } from "@/store/gateway"
-
 // API client for model list management.
 
 export interface ModelInfo {
+  id: string
   index: number
   model_name: string
   model: string
@@ -10,12 +9,17 @@ export interface ModelInfo {
   api_key: string
   proxy?: string
   auth_method?: string
+  account_id?: string
+  capabilities?: { images?: boolean; tools?: boolean; context_window?: number }
+  api_keys?: string[]
+  fallbacks?: string[] | null
   // Advanced fields
   connect_mode?: string
   workspace?: string
   rpm?: number
   max_tokens_field?: string
   request_timeout?: number
+  inactivity_timeout_seconds?: number
   thinking_level?: string
   extra_body?: Record<string, unknown>
   // Meta
@@ -32,6 +36,7 @@ interface ModelsListResponse {
 interface ModelActionResponse {
   status: string
   index?: number
+  id?: string
   default_model?: string
 }
 
@@ -40,7 +45,8 @@ const BASE_URL = ""
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, options)
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`)
+    const text = await res.text()
+    throw new Error(text || `API error: ${res.status} ${res.statusText}`)
   }
   return res.json() as Promise<T>
 }
@@ -60,20 +66,26 @@ export async function addModel(
 }
 
 export async function updateModel(
-  index: number,
+  id: string,
   model: Partial<ModelInfo>,
 ): Promise<ModelActionResponse> {
-  return request<ModelActionResponse>(`/api/models/${index}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(model),
-  })
+  return request<ModelActionResponse>(
+    `/api/models/by-id/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(model),
+    },
+  )
 }
 
-export async function deleteModel(index: number): Promise<ModelActionResponse> {
-  return request<ModelActionResponse>(`/api/models/${index}`, {
-    method: "DELETE",
-  })
+export async function deleteModel(id: string): Promise<ModelActionResponse> {
+  return request<ModelActionResponse>(
+    `/api/models/by-id/${encodeURIComponent(id)}`,
+    {
+      method: "DELETE",
+    },
+  )
 }
 
 export async function setDefaultModel(
@@ -85,8 +97,11 @@ export async function setDefaultModel(
     body: JSON.stringify({ model_name: modelName }),
   })
 
-  await refreshGatewayState()
   return response
 }
 
 export type { ModelsListResponse, ModelActionResponse }
+
+export function modelReference(model: ModelInfo) {
+  return `model-id:${model.id}`
+}

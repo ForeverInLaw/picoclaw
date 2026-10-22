@@ -69,9 +69,9 @@ func (p *ClaudeProvider) GetDefaultModel() string {
 	return p.delegate.GetDefaultModel()
 }
 
-func createClaudeTokenSource() func() (string, error) {
-	return func() (string, error) {
-		cred, err := getCredential("anthropic")
+func createClaudeTokenSource() func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		cred, err := getCredential(ctx, "anthropic")
 		if err != nil {
 			return "", fmt.Errorf("loading auth credentials: %w", err)
 		}

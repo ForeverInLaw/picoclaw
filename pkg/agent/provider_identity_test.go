@@ -265,7 +265,7 @@ func TestRunSameModelFallbackRetryRetainsEndpointAndCredential(t *testing.T) {
 		w.Header().Set("Connection", "close")
 		primaryCalls.Add(1)
 		assertConfiguredRequest(t, r, "primary-key", "shared")
-		w.WriteHeader(http.StatusServiceUnavailable)
+		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":{"message":"temporarily unavailable primary-key"}}`))
 	}))
 	defer primary.Close()

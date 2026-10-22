@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -154,37 +156,44 @@ func (h *Handler) gatewayStartReady() (bool, string, error) {
 		return false, "no default model configured", nil
 	}
 
-	modelCfg := lookupModelConfig(cfg, modelName)
-	if modelCfg == nil {
+	models := agent.ConfiguredDefaultModels(cfg)
+	if len(models) == 0 {
 		return false, fmt.Sprintf("default model %q is invalid", modelName), nil
 	}
-
-	if !hasModelConfiguration(*modelCfg) {
-		return false, fmt.Sprintf("default model %q has no credentials configured", modelName), nil
+	reason := ""
+	for _, modelCfg := range models {
+		if !hasModelConfiguration(modelCfg) {
+			if reason == "" {
+				reason = unavailableModelReason(modelCfg)
+			}
+			continue
+		}
+		if requiresRuntimeProbe(modelCfg) && !probeLocalModelAvailability(modelCfg) {
+			if reason == "" {
+				reason = fmt.Sprintf("model %q is not reachable", modelCfg.ModelName)
+			}
+			continue
+		}
+		return true, "", nil
 	}
-	if requiresRuntimeProbe(*modelCfg) && !probeLocalModelAvailability(*modelCfg) {
-		return false, fmt.Sprintf("default model %q is not reachable", modelName), nil
-	}
-
-	return true, "", nil
+	return false, reason, nil
 }
 
-func lookupModelConfig(cfg *config.Config, modelName string) *config.ModelConfig {
-	modelCfg, err := cfg.GetModelConfig(modelName)
-	if err != nil {
-		return nil
+func unavailableModelReason(model config.ModelConfig) string {
+	method := strings.ToLower(strings.TrimSpace(model.AuthMethod))
+	if (method == "oauth" || method == "token") && modelProtocol(model.Model) == "openai" && model.AccountID != "" {
+		if state, err := auth.AccountState(model.AccountID); err == nil {
+			switch state.Authorization {
+			case auth.AccountDisabled:
+				return fmt.Sprintf("model %q account connection is disabled", model.ModelName)
+			case auth.AccountReauthorizationRequired:
+				return fmt.Sprintf("model %q account connection requires reauthorization", model.ModelName)
+			case auth.AccountPlanPermissionRequired:
+				return fmt.Sprintf("model %q account connection requires ChatGPT plan permission", model.ModelName)
+			}
+		}
 	}
-	return modelCfg
-}
-
-func gatewayRestartRequired(configDefaultModel, bootDefaultModel, gatewayStatus string) bool {
-	if gatewayStatus != "running" {
-		return false
-	}
-	if strings.TrimSpace(configDefaultModel) == "" || strings.TrimSpace(bootDefaultModel) == "" {
-		return false
-	}
-	return configDefaultModel != bootDefaultModel
+	return fmt.Sprintf("model %q has no credentials configured", model.ModelName)
 }
 
 func isCmdProcessAliveLocked(cmd *exec.Cmd) bool {
@@ -713,10 +722,9 @@ func (h *Handler) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) gatewayStatusData() map[string]any {
 	data := map[string]any{}
-	configDefaultModel := ""
 	cfg, cfgErr := config.LoadConfig(h.configPath)
 	if cfgErr == nil && cfg != nil {
-		configDefaultModel = strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
+		configDefaultModel := strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
 		if configDefaultModel != "" {
 			data["config_default_model"] = configDefaultModel
 		}
@@ -784,13 +792,8 @@ func (h *Handler) gatewayStatusData() map[string]any {
 		}
 	}
 
-	bootDefaultModel, _ := data["boot_default_model"].(string)
-	gatewayStatus, _ := data["gateway_status"].(string)
-	data["gateway_restart_required"] = gatewayRestartRequired(
-		configDefaultModel,
-		bootDefaultModel,
-		gatewayStatus,
-	)
+	// Saved model routing is captured by the gateway on the next request.
+	data["gateway_restart_required"] = false
 
 	ready, reason, readyErr := h.gatewayStartReady()
 	if readyErr != nil {

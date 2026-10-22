@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -14,9 +15,10 @@ import (
 )
 
 type AudioModelTranscriber struct {
-	provider providers.LLMProvider
-	modelID  string
-	prompt   string
+	provider          providers.LLMProvider
+	modelID           string
+	prompt            string
+	inactivityTimeout time.Duration
 }
 
 const (
@@ -41,9 +43,10 @@ func NewAudioModelTranscriber(modelCfg *config.ModelConfig) *AudioModelTranscrib
 	}
 
 	return &AudioModelTranscriber{
-		provider: provider,
-		modelID:  modelID,
-		prompt:   defaultTranscriptionPrompt,
+		provider:          provider,
+		modelID:           modelID,
+		prompt:            defaultTranscriptionPrompt,
+		inactivityTimeout: modelCfg.InactivityTimeout(),
 	}
 }
 
@@ -65,17 +68,23 @@ func (t *AudioModelTranscriber) Transcribe(ctx context.Context, audioFilePath st
 		return nil, err
 	}
 
-	resp, err := t.provider.Chat(ctx, []providers.Message{
-		{
-			Role:    "user",
-			Content: t.prompt,
-			Media: []string{
-				fmt.Sprintf("data:audio/%s;base64,%s", format, base64.StdEncoding.EncodeToString(audioBytes)),
-			},
+	resp, err := providers.RunModelAttempt(
+		ctx,
+		t.inactivityTimeout,
+		func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+			return t.provider.Chat(attemptCtx, []providers.Message{
+				{
+					Role:    "user",
+					Content: t.prompt,
+					Media: []string{
+						fmt.Sprintf("data:audio/%s;base64,%s", format, base64.StdEncoding.EncodeToString(audioBytes)),
+					},
+				},
+			}, nil, t.modelID, map[string]any{
+				"temperature": 0,
+			})
 		},
-	}, nil, t.modelID, map[string]any{
-		"temperature": 0,
-	})
+	)
 	if err != nil {
 		logger.ErrorCF("voice", "Audio model transcription request failed", map[string]any{"error": err})
 		return nil, fmt.Errorf("transcription request failed: %w", err)

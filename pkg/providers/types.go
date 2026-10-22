@@ -64,6 +64,12 @@ type ThinkingCapable interface {
 	SupportsThinking() bool
 }
 
+// ImageInputCapable reports whether an adapter actually transmits image media.
+// Model-specific restrictions are configured separately in ModelCapabilities.
+type ImageInputCapable interface {
+	SupportsImageInput() bool
+}
+
 // NativeSearchCapable is an optional interface for providers that support
 // built-in web search during LLM inference (e.g. OpenAI web_search_preview,
 // xAI Grok search). When the active provider implements this interface and
@@ -77,14 +83,16 @@ type NativeSearchCapable interface {
 type FailoverReason string
 
 const (
-	FailoverAuth       FailoverReason = "auth"
-	FailoverRateLimit  FailoverReason = "rate_limit"
-	FailoverBilling    FailoverReason = "billing"
-	FailoverTimeout    FailoverReason = "timeout"
-	FailoverFormat     FailoverReason = "format"
-	FailoverOverloaded FailoverReason = "overloaded"
-	FailoverUnknown    FailoverReason = "unknown"
-	FailoverNetwork    FailoverReason = "network"
+	FailoverAuth                FailoverReason = "auth"
+	FailoverClientConfiguration FailoverReason = "client_configuration"
+	FailoverIncompatible        FailoverReason = "incompatible"
+	FailoverRateLimit           FailoverReason = "rate_limit"
+	FailoverBilling             FailoverReason = "billing"
+	FailoverTimeout             FailoverReason = "timeout"
+	FailoverFormat              FailoverReason = "format"
+	FailoverOverloaded          FailoverReason = "overloaded"
+	FailoverUnknown             FailoverReason = "unknown"
+	FailoverNetwork             FailoverReason = "network"
 )
 
 // FailoverError wraps an LLM provider error with classification metadata.
@@ -144,3 +152,9 @@ func (e *FailoverError) IsTransient() bool {
 	return e.Reason == FailoverTimeout || e.Reason == FailoverNetwork || e.Reason == FailoverRateLimit ||
 		e.Reason == FailoverOverloaded
 }
+
+// IncompatibleCandidateError excludes a candidate from this operation without
+// declaring its credentials or endpoint unhealthy.
+type IncompatibleCandidateError struct{ Reason string }
+
+func (e *IncompatibleCandidateError) Error() string { return "incompatible candidate: " + e.Reason }

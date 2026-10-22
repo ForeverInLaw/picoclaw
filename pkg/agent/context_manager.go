@@ -42,6 +42,7 @@ type ContextSnapshot struct {
 	Options              map[string]any
 	CanonicalFingerprint string
 	ReadError            error
+	InactivityTimeout    time.Duration
 }
 
 type ContextAssembly struct {
@@ -51,10 +52,11 @@ type ContextAssembly struct {
 
 func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 	snapshot := ContextSnapshot{
-		SessionKey: key,
-		ScopeKey:   key,
-		Provider:   agent.ContextProvider,
-		Model:      resolvedCandidateModel(agent.Candidates, agent.Model),
+		SessionKey:        key,
+		InactivityTimeout: contextInactivityTimeout(agent),
+		ScopeKey:          key,
+		Provider:          agent.ContextProvider,
+		Model:             resolvedCandidateModel(agent.Candidates, agent.Model),
 		Options: map[string]any{
 			"temperature":      agent.Temperature,
 			"max_tokens":       agent.MaxTokens,
@@ -326,10 +328,9 @@ func (m *seahorseContextManager) complete(
 		return "", fmt.Errorf("compaction has no configured output limit")
 	}
 	requestOptions["max_tokens"] = min(options.MaxTokens, maxTokens)
-	response, err := runtime.Provider.Chat(
-		ctx,
+	response, err := chatContextModel(
+		ctx, runtime.Provider, runtime.InactivityTimeout,
 		[]providers.Message{{Role: "user", Content: prompt}},
-		nil,
 		runtime.Model,
 		requestOptions,
 	)
@@ -480,6 +481,8 @@ func contextHistory(ctx context.Context, agent *AgentInstance, key string, prote
 	return result, err
 }
 
+type foregroundCompactionKey struct{}
+
 func (al *AgentLoop) compressContext(
 	ctx context.Context,
 	agent *AgentInstance,
@@ -489,6 +492,7 @@ func (al *AgentLoop) compressContext(
 	defs []providers.ToolDefinition,
 	reserve int,
 ) (compressionResult, bool, error) {
+	ctx = context.WithValue(ctx, foregroundCompactionKey{}, true)
 	if agent.ContextManager == nil || agent.ContextManager.Name() == "legacy" {
 		result, ok := al.forceCompression(agent, key, protected)
 		return result, ok, nil

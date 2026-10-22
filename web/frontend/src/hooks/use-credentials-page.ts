@@ -1,3 +1,4 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -12,6 +13,8 @@ import {
   pollOAuthFlow,
 } from "@/api/oauth"
 
+const EMPTY_PROVIDERS: OAuthProviderStatus[] = []
+
 type FlowWatchMode = "" | "status" | "poll"
 
 function getProviderLabel(provider: OAuthProvider | ""): string {
@@ -23,8 +26,14 @@ function getProviderLabel(provider: OAuthProvider | ""): string {
 
 export function useCredentialsPage() {
   const { t } = useTranslation()
-  const [providers, setProviders] = useState<OAuthProviderStatus[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
+  const providersQuery = useQuery({
+    queryKey: ["oauth-providers"],
+    queryFn: getOAuthProviders,
+  })
+  const providers: OAuthProviderStatus[] =
+    providersQuery.data?.providers ?? EMPTY_PROVIDERS
+  const loading = providersQuery.isPending
   const [error, setError] = useState("")
 
   const [activeAction, setActiveAction] = useState("")
@@ -47,22 +56,11 @@ export function useCredentialsPage() {
   const [deviceFlow, setDeviceFlow] = useState<OAuthFlowState | null>(null)
 
   const loadProviders = useCallback(async () => {
-    try {
-      const data = await getOAuthProviders()
-      setProviders(data.providers)
-      setError("")
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : t("credentials.errors.loadFailed"),
-      )
-    } finally {
-      setLoading(false)
-    }
-  }, [t])
-
-  useEffect(() => {
-    void loadProviders()
-  }, [loadProviders])
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["oauth-providers"] }),
+      queryClient.invalidateQueries({ queryKey: ["codex-accounts"] }),
+    ])
+  }, [queryClient])
 
   useEffect(() => {
     if (!watchFlowID || !watchMode) {
@@ -408,7 +406,7 @@ export function useCredentialsPage() {
 
   return {
     loading,
-    error,
+    error: error || providersQuery.error?.message || "",
     activeAction,
     activeFlow,
     flowHint,

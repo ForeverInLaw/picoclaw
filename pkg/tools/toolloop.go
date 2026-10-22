@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -19,11 +20,12 @@ import (
 
 // ToolLoopConfig configures the tool execution loop.
 type ToolLoopConfig struct {
-	Provider      providers.LLMProvider
-	Model         string
-	Tools         *ToolRegistry
-	MaxIterations int
-	LLMOptions    map[string]any
+	Provider          providers.LLMProvider
+	Model             string
+	Tools             *ToolRegistry
+	MaxIterations     int
+	LLMOptions        map[string]any
+	InactivityTimeout time.Duration
 }
 
 // ToolLoopResult contains the result of running the tool loop.
@@ -64,7 +66,13 @@ func RunToolLoop(
 			llmOpts = map[string]any{}
 		}
 		// 3. Call LLM
-		response, err := config.Provider.Chat(ctx, messages, providerToolDefs, config.Model, llmOpts)
+		response, err := providers.RunModelAttempt(
+			ctx,
+			config.InactivityTimeout,
+			func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+				return config.Provider.Chat(attemptCtx, messages, providerToolDefs, config.Model, llmOpts)
+			},
+		)
 		if err != nil {
 			logger.ErrorCF("toolloop", "LLM call failed",
 				map[string]any{

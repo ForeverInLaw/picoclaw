@@ -6,36 +6,127 @@
 package providers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
+	anthropicprovider "github.com/sipeed/picoclaw/pkg/providers/anthropic"
 	anthropicmessages "github.com/sipeed/picoclaw/pkg/providers/anthropic_messages"
 	"github.com/sipeed/picoclaw/pkg/providers/azure"
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.
-func createClaudeAuthProvider() (LLMProvider, error) {
-	cred, err := getCredential("anthropic")
+func createClaudeAuthProvider(ctx context.Context) (LLMProvider, error) {
+	cred, err := getCredential(ctx, "anthropic")
 	if err != nil {
 		return nil, fmt.Errorf("loading auth credentials: %w", err)
 	}
 	if cred == nil {
 		return nil, fmt.Errorf("no credentials for anthropic. Run: picoclaw auth login --provider anthropic")
 	}
-	return NewClaudeProviderWithTokenSource(cred.AccessToken, createClaudeTokenSource()), nil
+	return newClaudeProviderWithDelegate(
+		anthropicprovider.NewProviderWithContextTokenSource(cred.AccessToken, createClaudeTokenSource(), ""),
+	), nil
 }
 
 // createCodexAuthProvider creates a Codex provider using OAuth credentials from auth store.
-func createCodexAuthProvider() (LLMProvider, error) {
-	cred, err := getCredential("openai")
+func createCodexAuthProvider(ctx context.Context, accountIDs ...string) (LLMProvider, error) {
+	accountID := config.LegacyOpenAIAccountID
+	if len(accountIDs) > 0 && accountIDs[0] != "" {
+		accountID = accountIDs[0]
+	}
+	account, err := auth.GetAccountContext(ctx, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("loading auth credentials: %w", err)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is unavailable"}
 	}
-	if cred == nil {
-		return nil, fmt.Errorf("no credentials for openai. Run: picoclaw auth login --provider openai")
+	if account.Credential == nil {
+		return nil, &CandidateUnavailableError{
+			Reason:  FailoverAuth,
+			Message: "Codex account connection requires authorization",
+		}
 	}
-	return NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexTokenSource()), nil
+	if !account.Enabled {
+		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is disabled"}
+	}
+	cred := account.Credential
+	provider := NewCodexProvider(cred.AccessToken, cred.AccountID)
+	provider.contextTokenSource = func(ctx context.Context) (string, string, error) {
+		state, err := auth.AccountStateContext(ctx, accountID)
+		if ctx.Err() != nil {
+			return "", "", ctx.Err()
+		}
+		if err != nil || !state.Enabled || state.RequiresReauthorization {
+			return "", "", &CandidateUnavailableError{
+				Reason:  FailoverAuth,
+				Message: "Codex account connection is unavailable",
+			}
+		}
+		current, err := auth.AccountCredentialContext(ctx, accountID)
+		if err != nil {
+			var tokenError *auth.TokenRequestError
+			if errors.As(err, &tokenError) {
+				status := tokenError.StatusCode
+				if tokenError.ReauthorizationRequired {
+					status = 401
+				} else {
+					// OAuth token endpoints may use HTTP400 for operational failures.
+					// Client configuration failures permit fallback without revoking tokens.
+					switch tokenError.Code {
+					case "invalid_client":
+						status = 403
+					case "temporarily_unavailable",
+						"server_error",
+						"usage_unavailable",
+						"user_unavailable",
+						"subscription_sharing_usage_unavailable":
+						status = 503
+					case "subscription_sharing_usage_limit_exceeded", "rate_limit_exceeded":
+						status = 429
+					}
+				}
+				err = &protocoltypes.HTTPError{
+					StatusCode: status,
+					Code:       tokenError.Code,
+					RetryAfter: tokenError.RetryAfter,
+					Wrapped:    err,
+				}
+			} else {
+				live, liveErr := auth.AccountStateContext(ctx, accountID)
+				if ctx.Err() != nil {
+					return "", "", ctx.Err()
+				}
+				if liveErr != nil || !live.Enabled || live.RequiresReauthorization {
+					err = &CandidateUnavailableError{
+						Reason:  FailoverAuth,
+						Message: "Codex account connection is unavailable",
+					}
+				}
+			}
+			return "", "", err
+		}
+		return current.AccessToken, current.AccountID, nil
+	}
+	if account.Resource != "" {
+		provider.registered = true
+		// Registered ChatGPT accounts use the issued API resource; legacy CLI sessions retain their endpoint.
+		client := openai.NewClient(
+			option.WithBaseURL(account.Resource),
+			option.WithAPIKey(cred.AccessToken),
+			option.WithMaxRetries(0),
+		)
+		provider.client = &client
+	}
+	return provider, nil
 }
 
 // ExtractProtocol extracts the protocol prefix and model identifier from a model string.
@@ -59,6 +150,11 @@ func ExtractProtocol(model string) (protocol, modelID string) {
 // antigravity, claude-cli, codex-cli, github-copilot
 // Returns the provider, the model ID (without protocol prefix), and any error.
 func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, error) {
+	return CreateProviderFromConfigContext(context.Background(), cfg)
+}
+
+// CreateProviderFromConfigContext includes credential acquisition in the caller's model attempt.
+func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfig) (LLMProvider, string, error) {
 	if cfg == nil {
 		return nil, "", fmt.Errorf("config is nil")
 	}
@@ -73,7 +169,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	case "openai":
 		// OpenAI with OAuth/token auth (Codex-style)
 		if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
-			provider, err := createCodexAuthProvider()
+			provider, err := createCodexAuthProvider(ctx, cfg.AccountID)
 			if err != nil {
 				return nil, "", err
 			}
@@ -139,7 +235,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	case "anthropic":
 		if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
 			// Use OAuth credentials from auth store
-			provider, err := createClaudeAuthProvider()
+			provider, err := createClaudeAuthProvider(ctx)
 			if err != nil {
 				return nil, "", err
 			}

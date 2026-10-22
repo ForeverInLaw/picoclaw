@@ -18,7 +18,6 @@ export function CredentialsPage() {
     activeAction,
     activeFlow,
     flowHint,
-    openAIToken,
     anthropicToken,
     openaiStatus,
     anthropicStatus,
@@ -28,10 +27,8 @@ export function CredentialsPage() {
     logoutProviderLabel,
     deviceSheetOpen,
     deviceFlow,
-    setOpenAIToken,
     setAnthropicToken,
     startBrowserOAuth,
-    startOpenAIDeviceCode,
     stopLoading,
     saveToken,
     askLogout,
@@ -74,12 +71,6 @@ export function CredentialsPage() {
             <OpenAICredentialCard
               status={openaiStatus}
               activeAction={activeAction}
-              token={openAIToken}
-              onTokenChange={setOpenAIToken}
-              onStartBrowserOAuth={() => void startBrowserOAuth("openai")}
-              onStartDeviceCode={() => void startOpenAIDeviceCode()}
-              onStopLoading={stopLoading}
-              onSaveToken={() => void saveToken("openai", openAIToken.trim())}
               onAskLogout={() => askLogout("openai")}
             />
 

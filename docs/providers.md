@@ -414,16 +414,11 @@ picoclaw agent -m "Hello"
 
 ## Model request recovery
 
-Direct and Telegram inline turns use the same model recovery policy: at most three provider calls for each model operation, including fallback candidates, context recovery, and the single allowed empty-answer recovery. Completed tool actions remain in context and are not executed again when a later model call is retried.
+Direct and Telegram inline turns use the same recovery policy. Each candidate has one inactivity scope covering its live account check, credential/provider acquisition and inference; decoded progress resets that clock. Credential-store contention honors both attempt timeout and user cancellation. Retry waits, local tools and synchronous preview/status delivery stay outside the model clock. Every available configured fallback is reachable on the first pass, including chains longer than three candidates. Ordinary retries, context recovery and the single allowed empty-answer recovery remain bounded. Completed tool actions remain in context and are not executed again when a later model call is retried.
 
-An HTTP `503` with the structured code `capacity_unavailable` is the exception
-([IVO-111](https://linear.app/ivoxygen/issue/IVO-111)). It retries the same configured
-candidate until capacity returns or the request is canceled. These rejected
-requests do not consume the ordinary three-attempt budget. Backoff grows from
-1 second to 30 seconds, honoring a longer `Retry-After`; `/stop` and cancellation
-interrupt the wait. A different error returns to the normal bounded recovery
-policy. Both top-level and nested JSON error codes are recognized; other `503`
-responses retain the ordinary retry limit.
+HTTP `503`, including `capacity_unavailable`, first tries every available backup without waiting on the failed candidate. If the chain is exhausted and a temporary `503` remains, recovery revisits eligible candidates in configured priority order until one responds or the request is canceled. Both a recovered primary and a recovered backup can answer. Each unavailable candidate pauses from 1 second up to a 30-second exponential cap; a longer `Retry-After` takes precedence. Other temporarily unavailable candidates return after their own pause, including a supplied quota reset. Disabled connections and connections requiring reauthorization are excluded. During a long `Retry-After`, live account eligibility is checked once per second without sending inference early; losing the last recoverable connection ends the wait.
+
+Ordinary successful failover is silent. Foreground context compaction uses the same single waiting status during 503 recovery; background compaction remains quiet. Exhausted-chain waiting updates one progress status separate from answer content and Tool activity messages; success, failure and cancellation close it. `/stop` and request cancellation interrupt both waits and further model calls. Recovery ends with a clear error when no temporary `503` path remains; it does not create a durable background request or replay a canceled turn.
 
 Fallbacks retain the selected `model_list` entry, including its endpoint and API key. Two aliases using the same provider/model with different credentials or endpoints remain separate candidates. A duplicate alias is selected once by round-robin; retries keep that exact configuration. Configured candidates never borrow credentials from another alias after selection.
 
@@ -433,7 +428,7 @@ Authentication failures explain how to repair the model's API key, token or logi
 
 Fallback candidates already in cooldown are skipped. If this operation exhausts its available candidates with a transient failure and still has an attempt remaining, it retries the last attempted candidate after the required delay. That request-local retry preserves global cooldowns for other requests and candidates; its success or failure updates the retried candidate's health normally.
 
-Transient network failures, timeouts, HTTP 429 rate limits, and HTTP 5xx errors can be retried. The default retry delays are one and two seconds. A server's `Retry-After` delay (seconds or HTTP date) takes precedence; total retry waiting is limited to 30 seconds, and requests requiring a longer delay fail instead of retrying too early. Cancellation stops waiting immediately. Authentication, invalid requests, and exhausted quota are not retried against the same provider; existing configured model/credential fallback remains available within the shared attempt limit.
+Outside HTTP `503` recovery, transient network failures, timeouts, HTTP 429 rate limits and other HTTP 5xx errors can be retried. The default retry delays are one and two seconds. A server's `Retry-After` delay (seconds or HTTP date) takes precedence; total retry waiting is limited to 30 seconds, and requests requiring a longer delay fail instead of retrying too early. Cancellation stops waiting immediately. Authentication, invalid requests, and exhausted quota are not retried against the same provider; existing configured model/credential fallback remains available.
 
 OpenAI and Anthropic SDK retries are disabled so hidden SDK attempts do not multiply this budget. Retry statuses are independent progress messages, separate from the answer. Reasoning never substitutes for an answer. Providers that expose `final_answer`/`commentary` phases preserve those phases; unclassified streamed text waits until the complete response is known to be an answer.
 
@@ -458,3 +453,49 @@ OpenAI and Anthropic SDK retries are disabled so hidden SDK attempts do not mult
 <div align="center">
   <img src="assets/logo.jpg" alt="PicoClaw Meme" width="512">
 </div>
+
+### Context and tool compatibility during failover
+
+Each attempt prepares its own model options and tool definitions. A provider with
+native search can use it when `tools.web.prefer_native` is enabled; a reserve
+without native search receives the existing `web_search` tool instead. Completed
+tool calls and their results stay in the same conversation and accompany the
+reserve request. Recovery repeats the model operation, so it does not execute
+previous tool actions again. A replacement model can still request a new action;
+this is not a general tool deduplication guarantee.
+
+Declare known limits on each `model_list` entry when mixing model families:
+
+```json
+{
+  "model_name": "backup",
+  "model": "openai/example-model",
+  "api_base": "https://provider.example/v1",
+  "capabilities": {
+    "images": true,
+    "tools": true,
+    "context_window": 128000
+  }
+}
+```
+
+`images: false` excludes that candidate when Active context contains images.
+`tools: false` excludes it when the request needs tool definitions, native search,
+or recorded tool calls/results. `context_window` includes estimated input and
+reserved output tokens; a smaller reserve is skipped without truncating history.
+The existing ContextManager and compaction settings still manage Active context.
+Text-only CLI, Copilot, Antigravity, and the legacy Codex Responses adapter are
+skipped for image requests, including images retained from earlier turns.
+
+Omitted capabilities preserve existing adapter behavior and the agent's configured
+context window. Picoclaw does not infer a model's actual limits or entitlement
+from its name or endpoint; configure known limits explicitly. Skipped candidates
+appear in agent logs and `llm_retry` events with reason `incompatible` and an
+explanation. Compatibility failures do not mean the credentials are invalid.
+
+An SSE stream must report completion before its answer is accepted. A truncated
+OpenAI-compatible stream, or a Codex stream ending without a completed response,
+is a recoverable network failure. Its preview is canceled, and a reserve starts a
+fresh preview and final answer. Inline conversations retain their separate scope
+and response quote; Conversation reset still excludes earlier dialog while
+retaining Saved facts only where that conversation normally permits them.

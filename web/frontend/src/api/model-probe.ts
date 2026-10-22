@@ -2,8 +2,8 @@ import type { ModelInfo } from "./models"
 
 export type ModelTestConfiguration = Omit<
   ModelInfo,
-  "index" | "configured" | "is_default" | "api_key"
-> & { api_key?: string; model_index?: number }
+  "id" | "index" | "configured" | "is_default" | "api_key"
+> & { id?: string; api_key?: string; model_index?: number }
 
 export interface ModelTestResult {
   status: "valid" | "success"

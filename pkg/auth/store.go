@@ -1,10 +1,16 @@
 package auth
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -21,8 +27,12 @@ type AuthCredential struct {
 	ProjectID    string    `json:"project_id,omitempty"`
 }
 
+var storeMu sync.Mutex
+
 type AuthStore struct {
-	Credentials map[string]*AuthCredential `json:"credentials"`
+	HostID      string                        `json:"host_id,omitempty"`
+	Accounts    map[string]*AccountConnection `json:"accounts,omitempty"`
+	Credentials map[string]*AuthCredential    `json:"credentials"`
 }
 
 func (c *AuthCredential) IsExpired() bool {
@@ -47,12 +57,26 @@ func authFilePath() string {
 	return filepath.Join(home, ".picoclaw", "auth.json")
 }
 
-func LoadStore() (*AuthStore, error) {
+func LoadStore() (*AuthStore, error) { return LoadStoreContext(context.Background()) }
+
+func LoadStoreContext(ctx context.Context) (*AuthStore, error) {
+	unlock, err := lockStoreContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return loadStore()
+}
+
+func loadStore() (*AuthStore, error) {
 	path := authFilePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &AuthStore{Credentials: make(map[string]*AuthCredential)}, nil
+			return &AuthStore{
+				Credentials: make(map[string]*AuthCredential),
+				Accounts:    make(map[string]*AccountConnection),
+			}, nil
 		}
 		return nil, err
 	}
@@ -64,10 +88,51 @@ func LoadStore() (*AuthStore, error) {
 	if store.Credentials == nil {
 		store.Credentials = make(map[string]*AuthCredential)
 	}
+	if store.Accounts == nil {
+		store.Accounts = make(map[string]*AccountConnection)
+	}
+	if cred := store.Credentials["openai"]; cred != nil && (cred.AccessToken != "" || cred.RefreshToken != "") &&
+		store.Accounts[config.LegacyOpenAIAccountID] == nil {
+		label := cred.Email
+		if label == "" {
+			label = "Existing Codex account"
+		}
+		store.Accounts[config.LegacyOpenAIAccountID] = &AccountConnection{
+			ID:         config.LegacyOpenAIAccountID,
+			Label:      label,
+			Provider:   "openai",
+			Enabled:    true,
+			Credential: cred,
+			OAuth:      OpenAIOAuthConfig(),
+		}
+		if err := saveStore(&store); err != nil {
+			return nil, err
+		}
+	}
+	for _, account := range store.Accounts {
+		if account.SessionVersion == "" {
+			// Legacy records need a stable revision before their first mutation/refresh.
+			account.SessionVersion = fmt.Sprintf(
+				"legacy-%x",
+				sha256.Sum256(
+					[]byte(account.ID+"\x00"+account.Issuer+"\x00"+account.Subject+"\x00"+account.OAuth.ClientID),
+				),
+			)
+		}
+	}
 	return &store, nil
 }
 
 func SaveStore(store *AuthStore) error {
+	unlock, err := lockStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return saveStore(store)
+}
+
+func saveStore(store *AuthStore) error {
 	path := authFilePath()
 	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
@@ -79,7 +144,11 @@ func SaveStore(store *AuthStore) error {
 }
 
 func GetCredential(provider string) (*AuthCredential, error) {
-	store, err := LoadStore()
+	return GetCredentialContext(context.Background(), provider)
+}
+
+func GetCredentialContext(ctx context.Context, provider string) (*AuthCredential, error) {
+	store, err := LoadStoreContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -91,27 +160,75 @@ func GetCredential(provider string) (*AuthCredential, error) {
 }
 
 func SetCredential(provider string, cred *AuthCredential) error {
-	store, err := LoadStore()
+	return SetCredentialContext(context.Background(), provider, cred)
+}
+
+func SetCredentialContext(ctx context.Context, provider string, cred *AuthCredential) error {
+	unlock, err := lockStoreContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	store, err := loadStore()
 	if err != nil {
 		return err
 	}
 	store.Credentials[provider] = cred
-	return SaveStore(store)
+	if provider == "openai" {
+		account := store.Accounts[config.LegacyOpenAIAccountID]
+		if account == nil {
+			account = &AccountConnection{
+				ID:       config.LegacyOpenAIAccountID,
+				Label:    "Existing Codex account",
+				Provider: "openai",
+				Enabled:  true,
+				OAuth:    OpenAIOAuthConfig(),
+			}
+			store.Accounts[account.ID] = account
+		}
+		account.SessionVersion = uuid.NewString()
+		account.Credential = cred
+		if cred.Email != "" && account.Label == "Existing Codex account" {
+			account.Label = cred.Email
+		}
+	}
+	return saveStore(store)
 }
 
 func DeleteCredential(provider string) error {
-	store, err := LoadStore()
+	unlock, err := lockStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	store, err := loadStore()
 	if err != nil {
 		return err
 	}
 	delete(store.Credentials, provider)
-	return SaveStore(store)
+	if provider == "openai" {
+		if account := store.Accounts[config.LegacyOpenAIAccountID]; account != nil {
+			account.Credential = nil
+			account.IDToken = ""
+		}
+	}
+	return saveStore(store)
 }
 
 func DeleteAllCredentials() error {
-	path := authFilePath()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	unlock, err := lockStore()
+	if err != nil {
 		return err
 	}
-	return nil
+	defer unlock()
+	store, err := loadStore()
+	if err != nil {
+		return err
+	}
+	store.Credentials = make(map[string]*AuthCredential)
+	for _, account := range store.Accounts {
+		account.Credential = nil
+		account.IDToken = ""
+	}
+	return saveStore(store)
 }

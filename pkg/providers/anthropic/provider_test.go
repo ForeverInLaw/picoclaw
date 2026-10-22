@@ -239,8 +239,10 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 				"output_tokens": 1,
 			},
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("event: message_start\ndata: "))
+		json.NewEncoder(w).Encode(map[string]any{"type": "message_start", "message": resp})
+		w.Write([]byte("\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 	}))
 	defer server.Close()
 
@@ -248,7 +250,7 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 		return "refreshed-token", nil
 	}, server.URL)
 
-	_, err := p.Chat(
+	response, err := p.Chat(
 		t.Context(),
 		[]Message{{Role: "user", Content: "hello"}},
 		nil,
@@ -257,6 +259,9 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("Chat() error: %v", err)
+	}
+	if response.Content != "ok" {
+		t.Fatalf("Content = %q, want ok", response.Content)
 	}
 	if got := atomic.LoadInt32(&requests); got != 1 {
 		t.Fatalf("requests = %d, want 1", got)

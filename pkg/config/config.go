@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 
@@ -241,7 +242,7 @@ type AgentsConfig struct {
 // Object format: {"primary": "gpt-4", "fallbacks": ["claude-haiku"]}
 type AgentModelConfig struct {
 	Primary   string   `json:"primary,omitempty"`
-	Fallbacks []string `json:"fallbacks,omitempty"`
+	Fallbacks []string `json:"fallbacks"`
 }
 
 func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
@@ -265,12 +266,12 @@ func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
 }
 
 func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
-	if len(m.Fallbacks) == 0 && m.Primary != "" {
+	if m.Fallbacks == nil && m.Primary != "" {
 		return json.Marshal(m.Primary)
 	}
 	type raw struct {
 		Primary   string   `json:"primary,omitempty"`
-		Fallbacks []string `json:"fallbacks,omitempty"`
+		Fallbacks []string `json:"fallbacks"`
 	}
 	return json.Marshal(raw{Primary: m.Primary, Fallbacks: m.Fallbacks})
 }
@@ -385,7 +386,7 @@ type AgentDefaults struct {
 	Provider                  string                `json:"provider"                         env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
 	ModelName                 string                `json:"model_name"                       env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
 	Model                     string                `json:"model,omitempty"                  env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
-	ModelFallbacks            []string              `json:"model_fallbacks,omitempty"`
+	ModelFallbacks            []string              `json:"model_fallbacks"`
 	ImageModel                string                `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string              `json:"image_model_fallbacks,omitempty"`
 	MaxTokens                 int                   `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
@@ -905,6 +906,17 @@ type OpenAIProviderConfig struct {
 	WebSearch bool `json:"web_search" env:"PICOCLAW_PROVIDERS_OPENAI_WEB_SEARCH"`
 }
 
+// LegacyOpenAIAccountID preserves the single-account OAuth configuration.
+const LegacyOpenAIAccountID = "codex-default"
+
+// ModelCapabilities declares model limits that cannot be inferred from an endpoint.
+// Nil booleans preserve the protocol adapter's existing compatibility defaults.
+type ModelCapabilities struct {
+	Images        *bool `json:"images,omitempty"`
+	Tools         *bool `json:"tools,omitempty"`
+	ContextWindow int   `json:"context_window,omitempty"`
+}
+
 // ModelConfig represents a model-centric provider configuration.
 // It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
 // The model field uses protocol prefix format: [protocol/]model-identifier
@@ -913,35 +925,57 @@ type OpenAIProviderConfig struct {
 // groq, deepseek, modelscope, and novita.
 // Default protocol is "openai" if no prefix is specified.
 type ModelConfig struct {
+	// ID identifies the configured entry independently of credentials and labels.
+	ID string `json:"id,omitempty"`
+
 	// Required fields
 	ModelName string `json:"model_name"` // User-facing alias for the model
 	Model     string `json:"model"`      // Protocol/model-identifier (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4.6")
 
 	// HTTP-based providers
-	APIBase   string   `json:"api_base,omitempty"`  // API endpoint URL
-	APIKey    string   `json:"api_key"`             // API authentication key (single key)
-	APIKeys   []string `json:"api_keys,omitempty"`  // API authentication keys (multiple keys for failover)
-	Proxy     string   `json:"proxy,omitempty"`     // HTTP proxy URL
-	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
+	APIBase   string   `json:"api_base,omitempty"` // API endpoint URL
+	APIKey    string   `json:"api_key"`            // API authentication key (single key)
+	APIKeys   []string `json:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
+	Proxy     string   `json:"proxy,omitempty"`    // HTTP proxy URL
+	Fallbacks []string `json:"fallbacks"`          // Fallback model names for failover
 
 	// Special providers (CLI-based, OAuth, etc.)
+	AccountID   string `json:"account_id,omitempty"`   // Saved OAuth connection reference, distinct from provider workspace identity.
 	AuthMethod  string `json:"auth_method,omitempty"`  // Authentication method: oauth, token
 	ConnectMode string `json:"connect_mode,omitempty"` // Connection mode: stdio, grpc
 	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
 
-	// Optional optimizations
-	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
-	MaxTokensField string         `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
-	RequestTimeout int            `json:"request_timeout,omitempty"`
-	ThinkingLevel  string         `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
-	ExtraBody      map[string]any `json:"extra_body,omitempty"`     // Additional fields to inject into request body
+	// Optional model limits and optimizations
+	Capabilities             *ModelCapabilities `json:"capabilities,omitempty"`
+	RPM                      int                `json:"rpm,omitempty"`              // Requests per minute limit
+	MaxTokensField           string             `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
+	RequestTimeout           int                `json:"request_timeout,omitempty"`
+	InactivityTimeoutSeconds int                `json:"inactivity_timeout_seconds,omitempty"`
+	ThinkingLevel            string             `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
+	ExtraBody                map[string]any     `json:"extra_body,omitempty"`     // Additional fields to inject into request body
 
 	// from security
 	apiKeys []string
 }
 
+const DefaultModelInactivityTimeout = 60 * time.Second
+
+// InactivityTimeout is the maximum wait without decoded model progress.
+func (c *ModelConfig) InactivityTimeout() time.Duration {
+	if c == nil || c.InactivityTimeoutSeconds <= 0 {
+		return DefaultModelInactivityTimeout
+	}
+	return time.Duration(c.InactivityTimeoutSeconds) * time.Second
+}
+
 // Validate checks if the ModelConfig has all required fields.
 func (c *ModelConfig) Validate() error {
+	if c.InactivityTimeoutSeconds < 0 || int64(c.InactivityTimeoutSeconds) > int64((1<<63-1)/time.Second) {
+		return fmt.Errorf("inactivity_timeout_seconds must be a nonnegative duration in seconds")
+	}
+	if c.Capabilities != nil && c.Capabilities.ContextWindow < 0 {
+		return fmt.Errorf("capabilities.context_window must not be negative")
+	}
 	if c.ModelName == "" {
 		return fmt.Errorf("model_name is required")
 	}
@@ -1271,6 +1305,16 @@ func LoadConfig(path string) (*Config, error) {
 		InheritProviderCredentials(cfg.ModelList, cfg.Providers)
 	}
 
+	// Old OAuth models keep the original connection; API-key models stay independent.
+	for i := range cfg.ModelList {
+		m := &cfg.ModelList[i]
+		protocol, _, _ := strings.Cut(m.Model, "/")
+		if m.AccountID == "" && (protocol == "openai" || !strings.Contains(m.Model, "/")) &&
+			(m.AuthMethod == "oauth" || m.AuthMethod == "token") {
+			m.AccountID = LegacyOpenAIAccountID
+		}
+	}
+
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
 		for _, m := range cfg.ModelList {
 			if m.APIKey != "" && !strings.HasPrefix(m.APIKey, "enc://") &&
@@ -1302,6 +1346,8 @@ func LoadConfig(path string) (*Config, error) {
 	if err := resolveAPIKeys(cfg.ModelList, filepath.Dir(path)); err != nil {
 		return nil, err
 	}
+
+	cfg.EnsureModelIDs()
 
 	// Expand multi-key configs into separate entries for key-level failover
 	cfg.configuredModels = cloneModels(cfg.ModelList)
@@ -1421,7 +1467,8 @@ func PrepareConfig(source, output string) error {
 
 func saveConfig(path string, cfg *Config, syncSidecar bool) error {
 	copyCfg := *cfg
-	copyCfg.ModelList = cfg.modelsForSave()
+	copyCfg.ModelList = cloneModels(cfg.modelsForSave())
+	copyCfg.EnsureModelIDs()
 	copyCfg.runtimeModelBaseline = nil
 	cfg = &copyCfg
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
@@ -1552,9 +1599,12 @@ func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 // findMatches finds all ModelConfig entries with the given model_name.
 func (c *Config) findMatches(modelName string) []ModelConfig {
 	var matches []ModelConfig
+	byID := strings.HasPrefix(modelName, ModelIDPrefix)
+	id := strings.TrimPrefix(modelName, ModelIDPrefix)
 	for i := range c.ModelList {
-		if c.ModelList[i].ModelName == modelName {
-			matches = append(matches, c.ModelList[i])
+		model := c.ModelList[i]
+		if byID && model.ID == id || !byID && model.ModelName == modelName {
+			matches = append(matches, model)
 		}
 	}
 	return matches
@@ -1569,7 +1619,14 @@ func (c *Config) HasProvidersConfig() bool {
 // It checks that each model config is valid.
 // Note: Multiple entries with the same model_name are allowed for load balancing.
 func (c *Config) ValidateModelList() error {
+	ids := make(map[string]bool)
 	for i := range c.ModelList {
+		if id := c.ModelList[i].ID; id != "" {
+			if ids[id] {
+				return fmt.Errorf("duplicate configured model id %q", id)
+			}
+			ids[id] = true
+		}
 		if err := c.ModelList[i].Validate(); err != nil {
 			return fmt.Errorf("model_list[%d]: %w", i, err)
 		}
@@ -1611,6 +1668,10 @@ func MergeAPIKeys(apiKey string, apiKeys []string) []string {
 //   - {"model_name": "gpt-4__key_2", "api_key": "k3"}
 func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 	var expanded []ModelConfig
+	usedIDs := make(map[string]bool, len(models))
+	for _, model := range models {
+		usedIDs[model.ID] = true
+	}
 
 	for _, m := range models {
 		keys := MergeAPIKeys(m.APIKey, m.APIKeys)
@@ -1637,19 +1698,23 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 
 			// Create a copy for the additional key
 			additionalEntry := ModelConfig{
-				ModelName:      expandedName,
-				Model:          m.Model,
-				APIBase:        m.APIBase,
-				APIKey:         keys[i],
-				Proxy:          m.Proxy,
-				AuthMethod:     m.AuthMethod,
-				ConnectMode:    m.ConnectMode,
-				Workspace:      m.Workspace,
-				RPM:            m.RPM,
-				MaxTokensField: m.MaxTokensField,
-				RequestTimeout: m.RequestTimeout,
-				ThinkingLevel:  m.ThinkingLevel,
-				ExtraBody:      m.ExtraBody,
+				ID:                       derivedKeyModelID(m.ID, suffix, usedIDs),
+				ModelName:                expandedName,
+				Model:                    m.Model,
+				APIBase:                  m.APIBase,
+				APIKey:                   keys[i],
+				Proxy:                    m.Proxy,
+				AuthMethod:               m.AuthMethod,
+				AccountID:                m.AccountID,
+				Capabilities:             m.Capabilities,
+				ConnectMode:              m.ConnectMode,
+				Workspace:                m.Workspace,
+				RPM:                      m.RPM,
+				MaxTokensField:           m.MaxTokensField,
+				RequestTimeout:           m.RequestTimeout,
+				InactivityTimeoutSeconds: m.InactivityTimeoutSeconds,
+				ThinkingLevel:            m.ThinkingLevel,
+				ExtraBody:                m.ExtraBody,
 			}
 			expanded = append(expanded, additionalEntry)
 			fallbackNames = append(fallbackNames, expandedName)
@@ -1657,20 +1722,24 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 
 		// Create the primary entry with first key and fallbacks
 		primaryEntry := ModelConfig{
-			ModelName:      originalName,
-			Model:          m.Model,
-			APIBase:        m.APIBase,
-			APIKey:         keys[0],
-			Proxy:          m.Proxy,
-			AuthMethod:     m.AuthMethod,
-			ConnectMode:    m.ConnectMode,
-			Workspace:      m.Workspace,
-			RPM:            m.RPM,
-			MaxTokensField: m.MaxTokensField,
-			RequestTimeout: m.RequestTimeout,
-			ThinkingLevel:  m.ThinkingLevel,
-			ExtraBody:      m.ExtraBody,
-			apiKeys:        []string{keys[0]},
+			ID:                       m.ID,
+			ModelName:                originalName,
+			Model:                    m.Model,
+			APIBase:                  m.APIBase,
+			APIKey:                   keys[0],
+			Proxy:                    m.Proxy,
+			AuthMethod:               m.AuthMethod,
+			AccountID:                m.AccountID,
+			Capabilities:             m.Capabilities,
+			ConnectMode:              m.ConnectMode,
+			Workspace:                m.Workspace,
+			RPM:                      m.RPM,
+			MaxTokensField:           m.MaxTokensField,
+			RequestTimeout:           m.RequestTimeout,
+			InactivityTimeoutSeconds: m.InactivityTimeoutSeconds,
+			ThinkingLevel:            m.ThinkingLevel,
+			ExtraBody:                m.ExtraBody,
+			apiKeys:                  []string{keys[0]},
 		}
 
 		// Prepend new fallbacks to existing ones

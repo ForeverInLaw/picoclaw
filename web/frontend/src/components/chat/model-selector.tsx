@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next"
 
-import type { ModelInfo } from "@/api/models"
+import { type ModelInfo, modelReference } from "@/api/models"
 import {
   Select,
   SelectContent,
@@ -42,8 +42,11 @@ export function ModelSelector({
           <SelectGroup>
             <SelectLabel>{t("chat.modelGroup.apikey")}</SelectLabel>
             {apiKeyModels.map((model) => (
-              <SelectItem key={model.index} value={model.model_name}>
+              <SelectItem key={model.id} value={modelReference(model)}>
                 {model.model_name}
+                {model.account_id
+                  ? ` · ${model.account_id.slice(-8)}`
+                  : ` · ${model.id.slice(-8)}`}
               </SelectItem>
             ))}
           </SelectGroup>
@@ -57,8 +60,11 @@ export function ModelSelector({
           <SelectGroup>
             <SelectLabel>{t("chat.modelGroup.oauth")}</SelectLabel>
             {oauthModels.map((model) => (
-              <SelectItem key={model.index} value={model.model_name}>
+              <SelectItem key={model.id} value={modelReference(model)}>
                 {model.model_name}
+                {model.account_id
+                  ? ` · ${model.account_id.slice(-8)}`
+                  : ` · ${model.id.slice(-8)}`}
               </SelectItem>
             ))}
           </SelectGroup>
@@ -72,8 +78,11 @@ export function ModelSelector({
           <SelectGroup>
             <SelectLabel>{t("chat.modelGroup.local")}</SelectLabel>
             {localModels.map((model) => (
-              <SelectItem key={model.index} value={model.model_name}>
+              <SelectItem key={model.id} value={modelReference(model)}>
                 {model.model_name}
+                {model.account_id
+                  ? ` · ${model.account_id.slice(-8)}`
+                  : ` · ${model.id.slice(-8)}`}
               </SelectItem>
             ))}
           </SelectGroup>

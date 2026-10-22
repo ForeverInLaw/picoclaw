@@ -15,6 +15,7 @@ const (
 type CooldownTracker struct {
 	mu            sync.RWMutex
 	entries       map[string]*cooldownEntry
+	accounts      map[string]*accountHealth
 	failureWindow time.Duration
 	nowFunc       func() time.Time // for testing
 }
@@ -26,12 +27,14 @@ type cooldownEntry struct {
 	DisabledUntil  time.Time      // billing-specific disable expiry
 	DisabledReason FailoverReason // reason for disable (billing)
 	LastFailure    time.Time
+	Failure        *FailoverError
 }
 
 // NewCooldownTracker creates a tracker with default 24h failure window.
 func NewCooldownTracker() *CooldownTracker {
 	return &CooldownTracker{
 		entries:       make(map[string]*cooldownEntry),
+		accounts:      make(map[string]*accountHealth),
 		failureWindow: defaultFailureWindow,
 		nowFunc:       time.Now,
 	}
@@ -40,6 +43,25 @@ func NewCooldownTracker() *CooldownTracker {
 // MarkFailure records a failure for a provider and sets appropriate cooldown.
 // Resets error counts if last failure was more than failureWindow ago.
 func (ct *CooldownTracker) MarkFailure(provider string, reason FailoverReason) {
+	ct.markFailure(provider, reason, 0, nil)
+}
+
+// RecordFailure retains retry metadata so a later request can wait for an
+// existing service-unavailable pause instead of treating it as a permanent loss.
+func (ct *CooldownTracker) RecordFailure(provider string, failure *FailoverError) {
+	delay := failure.RetryAfter
+	if failure.Status == 503 {
+		delay = max(time.Second, delay)
+	}
+	ct.markFailure(provider, failure.Reason, delay, failure)
+}
+
+func (ct *CooldownTracker) markFailure(
+	provider string,
+	reason FailoverReason,
+	delay time.Duration,
+	failure *FailoverError,
+) {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 
@@ -55,13 +77,20 @@ func (ct *CooldownTracker) MarkFailure(provider string, reason FailoverReason) {
 	entry.ErrorCount++
 	entry.FailureCounts[reason]++
 	entry.LastFailure = now
+	entry.Failure = failure
 
 	if reason == FailoverBilling {
 		billingCount := entry.FailureCounts[FailoverBilling]
-		entry.DisabledUntil = now.Add(calculateBillingCooldown(billingCount))
+		if delay > 0 {
+			entry.DisabledUntil = now.Add(delay)
+		} else {
+			entry.DisabledUntil = now.Add(calculateBillingCooldown(billingCount))
+		}
 		entry.DisabledReason = FailoverBilling
+	} else if failure != nil && failure.Status == 503 {
+		entry.CooldownEnd = now.Add(delay)
 	} else {
-		entry.CooldownEnd = now.Add(calculateStandardCooldown(entry.ErrorCount))
+		entry.CooldownEnd = now.Add(max(delay, calculateStandardCooldown(entry.ErrorCount)))
 	}
 }
 
@@ -80,6 +109,7 @@ func (ct *CooldownTracker) MarkSuccess(provider string) {
 	entry.CooldownEnd = time.Time{}
 	entry.DisabledUntil = time.Time{}
 	entry.DisabledReason = ""
+	entry.Failure = nil
 }
 
 // IsAvailable returns true if the provider is not in cooldown or disabled.
@@ -136,6 +166,18 @@ func (ct *CooldownTracker) CooldownRemaining(provider string) time.Duration {
 	}
 
 	return remaining
+}
+
+// Failure returns a copy of the latest classified failure, if one was recorded.
+func (ct *CooldownTracker) Failure(provider string) *FailoverError {
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
+	entry := ct.entries[provider]
+	if entry == nil || entry.Failure == nil {
+		return nil
+	}
+	failure := *entry.Failure
+	return &failure
 }
 
 // ErrorCount returns the current error count for a provider.

@@ -122,6 +122,9 @@ func (p *GitHubCopilotProvider) Chat(
 	}, nil
 }
 
+// SupportsImageInput reports whether this adapter transmits image payloads.
+func (p *GitHubCopilotProvider) SupportsImageInput() bool { return false }
+
 func (p *GitHubCopilotProvider) GetDefaultModel() string {
 	return "gpt-4.1"
 }

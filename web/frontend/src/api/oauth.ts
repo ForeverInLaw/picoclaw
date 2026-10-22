@@ -15,6 +15,7 @@ export interface OAuthProviderStatus {
 }
 
 export interface OAuthFlowState {
+  account_id?: string
   flow_id: string
   provider: OAuthProvider
   method: OAuthMethod
@@ -30,6 +31,8 @@ export interface OAuthLoginRequest {
   provider: OAuthProvider
   method: OAuthMethod
   token?: string
+  account_id?: string
+  label?: string
 }
 
 export interface OAuthLoginResponse {
@@ -97,6 +100,20 @@ export async function logoutOAuth(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider }),
+    },
+  )
+}
+
+export async function completeCodexOAuth(
+  flowID: string,
+  callbackURL: string,
+): Promise<OAuthFlowState> {
+  return request<OAuthFlowState>(
+    `/api/oauth/flows/${encodeURIComponent(flowID)}/complete`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_url: callbackURL }),
     },
   )
 }

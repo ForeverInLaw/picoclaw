@@ -9,6 +9,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 const (
@@ -163,13 +164,15 @@ func selectStreamingTargets(
 }
 
 func offerStreamingContent(ctx context.Context, streamer streamingSink, updater *partialReplyUpdater, content string) {
-	if streamer != nil {
-		_ = streamer.Update(ctx, clampStreamingPreview(content))
-		return
-	}
-	if updater != nil {
-		updater.Offer(content)
-	}
+	providers.WithoutModelInactivity(ctx, func() {
+		if streamer != nil {
+			_ = streamer.Update(ctx, clampStreamingPreview(content))
+			return
+		}
+		if updater != nil {
+			updater.Offer(content)
+		}
+	})
 }
 
 func finalizeStreamingContent(
@@ -178,19 +181,25 @@ func finalizeStreamingContent(
 	updater *partialReplyUpdater,
 	content string,
 ) error {
-	if streamer != nil {
-		return streamer.Finalize(ctx, content)
-	}
-	if updater != nil {
-		updater.Flush()
-	}
-	return nil
+	var err error
+	providers.WithoutModelInactivity(ctx, func() {
+		if streamer != nil {
+			err = streamer.Finalize(ctx, content)
+			return
+		}
+		if updater != nil {
+			updater.Flush()
+		}
+	})
+	return err
 }
 
 func cancelStreamingContent(ctx context.Context, streamer streamingSink) {
-	if streamer != nil {
-		streamer.Cancel(ctx)
-	}
+	providers.WithoutModelInactivity(ctx, func() {
+		if streamer != nil {
+			streamer.Cancel(context.WithoutCancel(ctx))
+		}
+	})
 }
 
 func clampStreamingPreview(content string) string {

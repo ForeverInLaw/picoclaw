@@ -163,6 +163,28 @@
       "url": "验证地址",
       "polling": "正在轮询登录状态...",
       "open": "打开验证页面"
+    },
+    "accounts": {
+      "loading": "正在加载 Codex 账户…",
+      "empty": "尚未连接 Codex 账户。",
+      "authenticated": "已授权",
+      "reauthorization_required": "请重新登录",
+      "disabled": "已禁用",
+      "models": "模型",
+      "connection": "Codex 账户",
+      "select": "选择账户",
+      "plan_permission_required": "ChatGPT plan permission required"
+    },
+    "manual": {
+      "continueWithChatGPT": "使用 ChatGPT 继续",
+      "resume": "继续登录",
+      "title": "连接 ChatGPT 账户",
+      "instructions": "在 OpenAI 完成登录，复制浏览器中的完整最终地址，然后粘贴到下方。",
+      "loopbackError": "最终地址以 http://127.0.0.1:1455/auth/callback 开头。浏览器可能显示连接错误，请仍然复制地址。Picoclaw 会在服务器上完成登录；此次登录会保持待完成状态，直到提交地址或过期。",
+      "openBrowser": "打开 OpenAI 登录",
+      "callbackLabel": "完整回调网址",
+      "complete": "连接账户",
+      "success": "账户已连接。请在模型设置中选择此账户。"
     }
   },
   "models": {
@@ -229,7 +251,9 @@
       "thinkingLevel": "思考级别",
       "thinkingLevelHint": "扩展思考预算：off、low、medium、high、xhigh、adaptive。",
       "maxTokensField": "Max Tokens 字段名",
-      "maxTokensFieldHint": "覆盖请求中 max_tokens 的字段名，例如 max_completion_tokens。"
+      "maxTokensFieldHint": "覆盖请求中 max_tokens 的字段名，例如 max_completion_tokens。",
+      "inactivityTimeout": "模型无进展等待上限（秒）",
+      "inactivityTimeoutHint": "默认 60 秒。文本、推理和工具调用生成会重新计时，执行本地工具不计入等待时间。留空或 0 使用默认值；修改对下一次请求生效。"
     },
     "edit": {
       "title": "配置 {{name}}",

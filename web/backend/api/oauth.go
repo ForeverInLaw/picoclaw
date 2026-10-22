@@ -74,21 +74,30 @@ var (
 )
 
 type oauthFlow struct {
-	ID           string
-	Provider     string
-	Method       string
-	Status       string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	ExpiresAt    time.Time
-	Error        string
-	CodeVerifier string
-	OAuthState   string
-	RedirectURI  string
-	DeviceAuthID string
-	UserCode     string
-	VerifyURL    string
-	Interval     int
+	Manual          bool
+	Consumed        bool
+	Owner           string
+	Nonce           string
+	HostID          string
+	Label           string
+	AccountID       string
+	OAuthConfig     auth.OAuthProviderConfig
+	PreviousAccount *auth.AccountConnection
+	ID              string
+	Provider        string
+	Method          string
+	Status          string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	ExpiresAt       time.Time
+	Error           string
+	CodeVerifier    string
+	OAuthState      string
+	RedirectURI     string
+	DeviceAuthID    string
+	UserCode        string
+	VerifyURL       string
+	Interval        int
 }
 
 type oauthProviderStatus struct {
@@ -105,6 +114,7 @@ type oauthProviderStatus struct {
 }
 
 type oauthFlowResponse struct {
+	AccountID string `json:"account_id,omitempty"`
 	FlowID    string `json:"flow_id"`
 	Provider  string `json:"provider"`
 	Method    string `json:"method"`
@@ -118,6 +128,11 @@ type oauthFlowResponse struct {
 
 // registerOAuthRoutes binds OAuth login/logout endpoints to the ServeMux.
 func (h *Handler) registerOAuthRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/oauth/accounts", h.handleListAccounts)
+	mux.HandleFunc("PATCH /api/oauth/accounts/{id}", h.handlePatchAccount)
+	mux.HandleFunc("DELETE /api/oauth/accounts/{id}", h.handleDeleteAccount)
+	mux.HandleFunc("POST /api/oauth/accounts/{id}/test", h.handleTestAccount)
+	mux.HandleFunc("POST /api/oauth/flows/{id}/complete", h.handleCompleteCodexAccount)
 	mux.HandleFunc("GET /api/oauth/providers", h.handleListOAuthProviders)
 	mux.HandleFunc("POST /api/oauth/login", h.handleOAuthLogin)
 	mux.HandleFunc("GET /api/oauth/flows/{id}", h.handleGetOAuthFlow)
@@ -179,9 +194,11 @@ func (h *Handler) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var req struct {
-		Provider string `json:"provider"`
-		Method   string `json:"method"`
-		Token    string `json:"token"`
+		Provider  string `json:"provider"`
+		AccountID string `json:"account_id"`
+		Label     string `json:"label"`
+		Method    string `json:"method"`
+		Token     string `json:"token"`
 	}
 	if err = json.Unmarshal(body, &req); err != nil {
 		http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
@@ -268,6 +285,10 @@ func (h *Handler) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case oauthMethodBrowser:
+		if provider == oauthProviderOpenAI {
+			h.startCodexAccountLogin(w, r, req.AccountID, req.Label)
+			return
+		}
 		cfg, err := oauthConfigForProvider(provider)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -326,7 +347,7 @@ func (h *Handler) handleGetOAuthFlow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	flow, ok := h.getOAuthFlow(flowID)
-	if !ok {
+	if !ok || (flow.Manual && (flow.Owner != dashboardFlowOwner(r) || flow.Owner == "")) {
 		http.Error(w, "flow not found", http.StatusNotFound)
 		return
 	}
@@ -343,7 +364,7 @@ func (h *Handler) handlePollOAuthFlow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	flow, ok := h.getOAuthFlow(flowID)
-	if !ok {
+	if !ok || (flow.Manual && (flow.Owner != dashboardFlowOwner(r) || flow.Owner == "")) {
 		http.Error(w, "flow not found", http.StatusNotFound)
 		return
 	}
@@ -407,6 +428,16 @@ func (h *Handler) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if flow.Manual {
+		renderOAuthCallbackPage(
+			w,
+			"",
+			oauthFlowError,
+			"Complete this sign-in in the dashboard",
+			"manual_callback_required",
+		)
+		return
+	}
 	if flow.Status != oauthFlowPending {
 		renderOAuthCallbackPage(w, flow.ID, flow.Status, "Flow already completed", flow.Error)
 		return
@@ -575,11 +606,12 @@ func buildOAuthRedirectURI(r *http.Request) string {
 
 func flowToResponse(flow *oauthFlow) oauthFlowResponse {
 	resp := oauthFlowResponse{
-		FlowID:   flow.ID,
-		Provider: flow.Provider,
-		Method:   flow.Method,
-		Status:   flow.Status,
-		Error:    flow.Error,
+		FlowID:    flow.ID,
+		AccountID: flow.AccountID,
+		Provider:  flow.Provider,
+		Method:    flow.Method,
+		Status:    flow.Status,
+		Error:     flow.Error,
 	}
 	if !flow.ExpiresAt.IsZero() {
 		resp.ExpiresAt = flow.ExpiresAt.Format(time.RFC3339)
@@ -654,6 +686,9 @@ func (h *Handler) setOAuthFlowSuccess(flowID string) {
 	if !ok {
 		return
 	}
+	flow.CodeVerifier = ""
+	flow.Nonce = ""
+	flow.PreviousAccount = nil
 	flow.Status = oauthFlowSuccess
 	flow.Error = ""
 	flow.UpdatedAt = now
@@ -671,6 +706,9 @@ func (h *Handler) setOAuthFlowError(flowID, errMsg string) {
 	if !ok {
 		return
 	}
+	flow.CodeVerifier = ""
+	flow.Nonce = ""
+	flow.PreviousAccount = nil
 	flow.Status = oauthFlowError
 	flow.Error = errMsg
 	flow.UpdatedAt = now
@@ -682,6 +720,9 @@ func (h *Handler) setOAuthFlowError(flowID, errMsg string) {
 func (h *Handler) gcOAuthFlowsLocked(now time.Time) {
 	for id, flow := range h.oauthFlows {
 		if flow.Status == oauthFlowPending && !flow.ExpiresAt.IsZero() && now.After(flow.ExpiresAt) {
+			flow.CodeVerifier = ""
+			flow.Nonce = ""
+			flow.PreviousAccount = nil
 			flow.Status = oauthFlowExpired
 			flow.Error = "flow expired"
 			flow.UpdatedAt = now
@@ -739,35 +780,51 @@ func (h *Handler) persistCredentialAndConfig(provider, authMethod string, cred *
 }
 
 func (h *Handler) syncProviderAuthMethod(provider, authMethod string) error {
-	cfg, err := oauthLoadConfig(h.configPath)
-	if err != nil {
-		return err
-	}
-
-	switch provider {
-	case oauthProviderOpenAI:
-		cfg.Providers.OpenAI.AuthMethod = authMethod
-	case oauthProviderAnthropic:
-		cfg.Providers.Anthropic.AuthMethod = authMethod
-	case oauthProviderGoogleAntigravity:
-		cfg.Providers.Antigravity.AuthMethod = authMethod
-	default:
-		return fmt.Errorf("unsupported provider %q", provider)
-	}
-
-	found := false
-	for i := range cfg.ModelList {
-		if modelBelongsToProvider(provider, cfg.ModelList[i].Model) {
-			cfg.ModelList[i].AuthMethod = authMethod
-			found = true
+	return config.WithConfigMutation(h.configPath, func() error {
+		cfg, err := oauthLoadConfig(h.configPath)
+		if err != nil {
+			return err
 		}
-	}
 
-	if !found && authMethod != "" {
-		cfg.ModelList = append(cfg.ModelList, defaultModelConfigForProvider(provider, authMethod))
-	}
+		if provider == oauthProviderOpenAI {
+			if authMethod == "" {
+				cfg.Providers.OpenAI.AuthMethod = ""
+			}
+			// OAuth authorizes its saved connection, never every OpenAI API-key model.
+			// Keep disconnected model references so reauthorization restores their identity.
+			if authMethod != "" {
+				if _, err := auth.GetAccount(config.LegacyOpenAIAccountID); err != nil {
+					return err
+				}
+				cfg.BindLegacyCodexAccount(authMethod)
+			}
+			return oauthSaveConfig(h.configPath, cfg)
+		}
+		switch provider {
+		case oauthProviderOpenAI:
+			cfg.Providers.OpenAI.AuthMethod = authMethod
+		case oauthProviderAnthropic:
+			cfg.Providers.Anthropic.AuthMethod = authMethod
+		case oauthProviderGoogleAntigravity:
+			cfg.Providers.Antigravity.AuthMethod = authMethod
+		default:
+			return fmt.Errorf("unsupported provider %q", provider)
+		}
 
-	return oauthSaveConfig(h.configPath, cfg)
+		found := false
+		for i := range cfg.ModelList {
+			if modelBelongsToProvider(provider, cfg.ModelList[i].Model) {
+				cfg.ModelList[i].AuthMethod = authMethod
+				found = true
+			}
+		}
+
+		if !found && authMethod != "" {
+			cfg.ModelList = append(cfg.ModelList, defaultModelConfigForProvider(provider, authMethod))
+		}
+
+		return oauthSaveConfig(h.configPath, cfg)
+	})
 }
 
 func modelBelongsToProvider(provider, model string) bool {

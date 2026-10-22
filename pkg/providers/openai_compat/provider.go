@@ -249,7 +249,7 @@ func (p *Provider) ChatStream(
 		return common.ReadAndParseResponse(resp, p.apiBase)
 	}
 
-	return parseStreamingResponse(resp.Body, onChunk)
+	return parseStreamingResponse(ctx, resp.Body, onChunk)
 }
 
 type streamedToolCall struct {
@@ -260,7 +260,7 @@ type streamedToolCall struct {
 	ThoughtSignature string
 }
 
-func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLMResponse, error) {
+func parseStreamingResponse(ctx context.Context, body io.Reader, onUpdate func(content string)) (*LLMResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -271,11 +271,16 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 	var reasoningDetails []ReasoningDetail
 	var toolCalls []streamedToolCall
 	var finishReason string
+	completed := false
 	var usage *UsageInfo
 
 	processEvent := func(raw string) error {
 		raw = strings.TrimSpace(raw)
-		if raw == "" || raw == "[DONE]" {
+		if raw == "" {
+			return nil
+		}
+		if raw == "[DONE]" {
+			completed = true
 			return nil
 		}
 
@@ -315,6 +320,18 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 		}
 
 		for _, choice := range chunk.Choices {
+			progress := choice.Delta.Content != "" || choice.Delta.ReasoningContent != "" ||
+				choice.Delta.Reasoning != ""
+			for _, detail := range choice.Delta.ReasoningDetails {
+				progress = progress || detail.Text != ""
+			}
+			for _, call := range choice.Delta.ToolCalls {
+				progress = progress || call.ID != "" ||
+					(call.Function != nil && (call.Function.Name != "" || call.Function.Arguments != ""))
+			}
+			if progress {
+				protocoltypes.ReportModelProgress(ctx)
+			}
 			if choice.Delta.Content != "" {
 				content.WriteString(choice.Delta.Content)
 				if onUpdate != nil {
@@ -353,6 +370,7 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 				}
 			}
 			if choice.FinishReason != "" {
+				completed = true
 				finishReason = choice.FinishReason
 			}
 		}
@@ -382,6 +400,10 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 		if err := processEvent(strings.Join(dataLines, "\n")); err != nil {
 			return nil, err
 		}
+	}
+
+	if !completed {
+		return nil, fmt.Errorf("stream ended without completion: %w", io.ErrUnexpectedEOF)
 	}
 
 	normalizedToolCalls := make([]ToolCall, 0, len(toolCalls))

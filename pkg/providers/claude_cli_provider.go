@@ -67,6 +67,9 @@ func (p *ClaudeCliProvider) Chat(
 	return p.parseClaudeCliResponse(stdout.String())
 }
 
+// SupportsImageInput reports whether this adapter transmits image payloads.
+func (p *ClaudeCliProvider) SupportsImageInput() bool { return false }
+
 // GetDefaultModel returns the default model identifier.
 func (p *ClaudeCliProvider) GetDefaultModel() string {
 	return "claude-code"

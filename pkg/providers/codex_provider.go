@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 const (
@@ -22,13 +26,19 @@ const (
 )
 
 type CodexProvider struct {
-	client          *openai.Client
-	accountID       string
-	tokenSource     func() (string, string, error)
-	enableWebSearch bool
+	exactModel         bool
+	registered         bool
+	contextTokenSource func(context.Context) (string, string, error)
+	client             *openai.Client
+	accountID          string
+	tokenSource        func() (string, string, error)
+	enableWebSearch    bool
 }
 
 const defaultCodexInstructions = "You are Codex, a coding assistant."
+
+// SetExactModel prevents legacy compatibility substitution for explicit probes.
+func (p *CodexProvider) SetExactModel(exact bool) { p.exactModel = exact }
 
 func NewCodexProvider(token, accountID string) *CodexProvider {
 	opts := []option.RequestOption{
@@ -99,7 +109,10 @@ func (p *CodexProvider) chat(
 ) (*LLMResponse, error) {
 	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	accountID := p.accountID
-	resolvedModel, fallbackReason := resolveCodexModel(model)
+	resolvedModel, fallbackReason := model, ""
+	if !p.registered && !p.exactModel {
+		resolvedModel, fallbackReason = resolveCodexModel(model)
+	}
 	if fallbackReason != "" {
 		logger.WarnCF(
 			"provider.codex",
@@ -111,8 +124,14 @@ func (p *CodexProvider) chat(
 			},
 		)
 	}
-	if p.tokenSource != nil {
-		tok, accID, err := p.tokenSource()
+	if p.contextTokenSource != nil || p.tokenSource != nil {
+		var tok, accID string
+		var err error
+		if p.contextTokenSource != nil {
+			tok, accID, err = p.contextTokenSource(ctx)
+		} else {
+			tok, accID, err = p.tokenSource()
+		}
 		if err != nil {
 			return nil, fmt.Errorf("refreshing token: %w", err)
 		}
@@ -121,9 +140,9 @@ func (p *CodexProvider) chat(
 			accountID = accID
 		}
 	}
-	if accountID != "" {
+	if accountID != "" && !p.registered {
 		opts = append(opts, option.WithHeader("Chatgpt-Account-Id", accountID))
-	} else {
+	} else if !p.registered {
 		logger.WarnCF(
 			"provider.codex",
 			"No account id found for Codex request; backend may reject with 400",
@@ -138,16 +157,63 @@ func (p *CodexProvider) chat(
 	// loop requested it (options["native_search"]), so prefer_native: false
 	useNativeSearch := p.enableWebSearch && (options["native_search"] == true)
 	params := buildCodexParams(messages, tools, resolvedModel, options, useNativeSearch)
+	if p.registered {
+		// The public ChatGPT-plan route accepts local functions inside a namespace.
+		// Reuse existing history translation and streaming response parsing.
+		var functions []responses.FunctionToolParam
+		var namespaced []any
+		for _, tool := range params.Tools {
+			if tool.OfFunction != nil {
+				functions = append(functions, *tool.OfFunction)
+			} else {
+				namespaced = append(namespaced, tool)
+			}
+		}
+		if len(functions) > 0 {
+			namespaced = append(
+				namespaced,
+				map[string]any{
+					"type":        "namespace",
+					"name":        "picoclaw",
+					"description": "Picoclaw local tools",
+					"tools":       functions,
+				},
+			)
+		}
+		if len(namespaced) > 0 {
+			opts = append(opts, option.WithJSONSet("tools", namespaced))
+		}
+		for i := range params.Input.OfInputItemList {
+			if call := params.Input.OfInputItemList[i].OfFunctionCall; call != nil {
+				call.SetExtraFields(map[string]any{"namespace": "picoclaw"})
+			}
+		}
+	}
 
+	var transportResponse *http.Response
+	opts = append(opts, option.WithResponseInto(&transportResponse))
 	stream := p.client.Responses.NewStreaming(ctx, params, opts...)
 	defer stream.Close()
 
 	var resp *responses.Response
+	var terminalError error
 	type contentPosition struct{ output, content int64 }
 	partials := make(map[contentPosition]*strings.Builder)
 	phases := make(map[int64]ContentPhase)
 	for stream.Next() {
 		evt := stream.Current()
+		switch evt.Type {
+		case "response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta",
+			"response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+			if evt.Delta != "" {
+				protocoltypes.ReportModelProgress(ctx)
+			}
+		case "response.output_item.added":
+			if (evt.Item.Type == "function_call" || evt.Item.Type == "custom_tool_call") &&
+				(evt.Item.CallID != "" || evt.Item.Name != "" || evt.Item.Arguments != "" || evt.Item.Input != "") {
+				protocoltypes.ReportModelProgress(ctx)
+			}
+		}
 		if evt.Type == "response.output_item.added" || evt.Type == "response.output_item.done" {
 			phases[evt.OutputIndex] = codexMessagePhase(evt.Item)
 		}
@@ -184,13 +250,30 @@ func (p *CodexProvider) chat(
 				onUpdate(StreamContent{Content: snapshot.String(), Phase: phase})
 			}
 		}
+		if evt.Type == "response.failed" {
+			if status, ok := codexResponseErrorStatus(string(evt.Response.Error.Code)); ok {
+				failure := &protocoltypes.HTTPError{
+					StatusCode: status,
+					Code:       string(evt.Response.Error.Code),
+					Wrapped:    fmt.Errorf("Codex response failed (%s)", evt.Response.Error.Code),
+				}
+				if transportResponse != nil {
+					failure.RetryAfter = common.RetryAfter(transportResponse.Header, time.Now())
+				}
+				terminalError = failure
+			}
+		}
 		if evt.Type == "response.completed" || evt.Type == "response.failed" || evt.Type == "response.incomplete" {
 			evtResp := evt.Response
 			if evtResp.ID != "" {
 				evtRespCopy := evtResp
 				resp = &evtRespCopy
 			}
+			break // A terminal event completes this model operation even if the transport stays open.
 		}
+	}
+	if terminalError != nil {
+		return nil, terminalError
 	}
 	err := stream.Err()
 	if err != nil {
@@ -200,15 +283,19 @@ func (p *CodexProvider) chat(
 			"messages_count":     len(messages),
 			"tools_count":        len(tools),
 			"account_id_present": accountID != "",
-			"error":              err.Error(),
+			"error":              "provider request failed",
 		}
 		var apiErr *openai.Error
 		if errors.As(err, &apiErr) {
 			fields["status_code"] = apiErr.StatusCode
 			fields["api_type"] = apiErr.Type
-			fields["api_code"] = apiErr.Code
-			fields["api_param"] = apiErr.Param
-			fields["api_message"] = apiErr.Message
+			if _, known := codexResponseErrorStatus(apiErr.Code); known || !p.registered {
+				fields["api_code"] = apiErr.Code
+			}
+			if !p.registered {
+				fields["api_param"] = apiErr.Param
+			}
+			fields["api_message"] = "provider request failed"
 			if apiErr.StatusCode == 400 {
 				fields["hint"] = "verify account id header and model compatibility for codex backend"
 			}
@@ -217,9 +304,24 @@ func (p *CodexProvider) chat(
 			}
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
+		if p.registered && apiErr != nil {
+			code := ""
+			if _, ok := codexResponseErrorStatus(apiErr.Code); ok {
+				code = apiErr.Code
+			}
+			failure := &protocoltypes.HTTPError{
+				StatusCode: apiErr.StatusCode,
+				Code:       code,
+				Wrapped:    fmt.Errorf("ChatGPT model request failed (HTTP %d)", apiErr.StatusCode),
+			}
+			if apiErr.Response != nil {
+				failure.RetryAfter = common.RetryAfter(apiErr.Response.Header, time.Now())
+			}
+			return nil, failure
+		}
 		return nil, fmt.Errorf("codex API call: %w", err)
 	}
-	if resp == nil {
+	if resp == nil || resp.Status != "completed" {
 		fields := map[string]any{
 			"requested_model":    model,
 			"resolved_model":     resolvedModel,
@@ -228,11 +330,16 @@ func (p *CodexProvider) chat(
 			"account_id_present": accountID != "",
 		}
 		logger.ErrorCF("provider.codex", "Codex stream ended without completed response event", fields)
-		return nil, fmt.Errorf("codex API call: stream ended without completed response")
+		return nil, fmt.Errorf("codex API call: stream ended without completed response: %w", io.ErrUnexpectedEOF)
 	}
 
-	return parseCodexResponse(resp), nil
+	reply := parseCodexResponse(resp)
+	reply.ServedModel = resolvedModel
+	return reply, nil
 }
+
+// SupportsImageInput remains false until the Responses adapter serializes Media.
+func (p *CodexProvider) SupportsImageInput() bool { return false }
 
 func (p *CodexProvider) GetDefaultModel() string {
 	return codexDefaultModel
@@ -513,35 +620,6 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 	}
 }
 
-func createCodexTokenSource() func() (string, string, error) {
-	return func() (string, string, error) {
-		cred, err := auth.GetCredential("openai")
-		if err != nil {
-			return "", "", fmt.Errorf("loading auth credentials: %w", err)
-		}
-		if cred == nil {
-			return "", "", fmt.Errorf("no credentials for openai. Run: picoclaw auth login --provider openai")
-		}
-
-		if cred.AuthMethod == "oauth" && cred.NeedsRefresh() && cred.RefreshToken != "" {
-			oauthCfg := auth.OpenAIOAuthConfig()
-			refreshed, err := auth.RefreshAccessToken(cred, oauthCfg)
-			if err != nil {
-				return "", "", fmt.Errorf("refreshing token: %w", err)
-			}
-			if refreshed.AccountID == "" {
-				refreshed.AccountID = cred.AccountID
-			}
-			if err := auth.SetCredential("openai", refreshed); err != nil {
-				return "", "", fmt.Errorf("saving refreshed token: %w", err)
-			}
-			return refreshed.AccessToken, refreshed.AccountID, nil
-		}
-
-		return cred.AccessToken, cred.AccountID, nil
-	}
-}
-
 // The pinned SDK preserves newer message phase fields as JSON extras.
 func codexMessagePhase(item responses.ResponseOutputItemUnion) ContentPhase {
 	var value struct {
@@ -549,4 +627,26 @@ func codexMessagePhase(item responses.ResponseOutputItemUnion) ContentPhase {
 	}
 	_ = json.Unmarshal([]byte(item.RawJSON()), &value)
 	return value.Phase
+}
+
+// Codes are a fixed provider contract; free-form error messages never enter diagnostics.
+func codexResponseErrorStatus(code string) (int, bool) {
+	switch code {
+	case "subscription_sharing_usage_limit_exceeded", "rate_limit_exceeded":
+		return 429, true
+	case "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable":
+		return 503, true
+	case "subscription_sharing_invalid_user":
+		return 401, true
+	case "subscription_sharing_user_not_eligible",
+		"subscription_sharing_route_not_supported",
+		"chatpass_v2_scope_not_authorized",
+		"chatpass_v2_invalid_authorization_context":
+		return 403, true
+	case "subscription_sharing_unsupported_capability", "invalid_prompt", "invalid_request":
+		return 400, true
+	case "server_error":
+		return 500, true
+	}
+	return 0, false
 }

@@ -59,7 +59,7 @@ func TestOAuthBrowserFlowCreatedAndQueried(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/api/oauth/login",
-		strings.NewReader(`{"provider":"openai","method":"browser"}`),
+		strings.NewReader(`{"provider":"google-antigravity","method":"browser"}`),
 	)
 	req.Host = "localhost:18800"
 	req.Header.Set("Content-Type", "application/json")
@@ -157,7 +157,7 @@ func TestOAuthCallbackUnknownState(t *testing.T) {
 	}
 }
 
-func TestOAuthLogoutClearsCredentialAndConfig(t *testing.T) {
+func TestOAuthLogoutClearsCredentialAndPreservesModelBindings(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 	resetOAuthHooks(t)
@@ -212,8 +212,8 @@ func TestOAuthLogoutClearsCredentialAndConfig(t *testing.T) {
 		t.Fatalf("providers.openai.auth_method = %q, want empty", updated.Providers.OpenAI.AuthMethod)
 	}
 	for _, m := range updated.ModelList {
-		if strings.HasPrefix(m.Model, "openai/") && m.AuthMethod != "" {
-			t.Fatalf("openai model auth_method = %q, want empty", m.AuthMethod)
+		if m.ModelName == "gpt-5.4" && (m.AuthMethod != "oauth" || m.AccountID != config.LegacyOpenAIAccountID) {
+			t.Fatalf("logout lost model connection binding: %+v", m)
 		}
 	}
 }
