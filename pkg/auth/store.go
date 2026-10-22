@@ -144,7 +144,11 @@ func saveStore(store *AuthStore) error {
 }
 
 func GetCredential(provider string) (*AuthCredential, error) {
-	store, err := LoadStore()
+	return GetCredentialContext(context.Background(), provider)
+}
+
+func GetCredentialContext(ctx context.Context, provider string) (*AuthCredential, error) {
+	store, err := LoadStoreContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +160,11 @@ func GetCredential(provider string) (*AuthCredential, error) {
 }
 
 func SetCredential(provider string, cred *AuthCredential) error {
-	unlock, err := lockStore()
+	return SetCredentialContext(context.Background(), provider, cred)
+}
+
+func SetCredentialContext(ctx context.Context, provider string, cred *AuthCredential) error {
+	unlock, err := lockStoreContext(ctx)
 	if err != nil {
 		return err
 	}

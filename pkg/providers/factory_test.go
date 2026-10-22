@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -314,7 +315,7 @@ func TestCreateProviderReturnsClaudeProviderForAnthropicOAuth(t *testing.T) {
 	originalGetCredential := getCredential
 	t.Cleanup(func() { getCredential = originalGetCredential })
 
-	getCredential = func(provider string) (*auth.AuthCredential, error) {
+	getCredential = func(_ context.Context, provider string) (*auth.AuthCredential, error) {
 		if provider != "anthropic" {
 			t.Fatalf("provider = %q, want anthropic", provider)
 		}

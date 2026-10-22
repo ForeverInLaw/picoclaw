@@ -581,7 +581,7 @@ func sanitizeSchemaForGemini(schema map[string]any) map[string]any {
 
 func createAntigravityTokenSource() func(context.Context) (string, string, error) {
 	return func(ctx context.Context) (string, string, error) {
-		cred, err := auth.GetCredential("google-antigravity")
+		cred, err := auth.GetCredentialContext(ctx, "google-antigravity")
 		if err != nil {
 			return "", "", fmt.Errorf("loading auth credentials: %w", err)
 		}
@@ -602,7 +602,7 @@ func createAntigravityTokenSource() func(context.Context) (string, string, error
 			if refreshed.ProjectID == "" {
 				refreshed.ProjectID = cred.ProjectID
 			}
-			if err := auth.SetCredential("google-antigravity", refreshed); err != nil {
+			if err := auth.SetCredentialContext(ctx, "google-antigravity", refreshed); err != nil {
 				return "", "", fmt.Errorf("saving refreshed token: %w", err)
 			}
 			cred = refreshed
@@ -629,7 +629,7 @@ func createAntigravityTokenSource() func(context.Context) (string, string, error
 			} else {
 				projectID = fetchedID
 				cred.ProjectID = projectID
-				_ = auth.SetCredential("google-antigravity", cred)
+				_ = auth.SetCredentialContext(ctx, "google-antigravity", cred)
 			}
 		}
 

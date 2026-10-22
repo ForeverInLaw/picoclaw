@@ -346,7 +346,11 @@ type AccountProbe struct {
 
 // RecordAccountProbe ignores results from a deleted or superseded session.
 func RecordAccountProbe(id, version string, probe AccountProbe) error {
-	unlock, err := lockStore()
+	return RecordAccountProbeContext(context.Background(), id, version, probe)
+}
+
+func RecordAccountProbeContext(ctx context.Context, id, version string, probe AccountProbe) error {
+	unlock, err := lockStoreContext(ctx)
 	if err != nil {
 		return err
 	}

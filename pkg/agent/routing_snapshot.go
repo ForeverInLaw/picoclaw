@@ -125,7 +125,7 @@ type routingContextProvider struct {
 	chain         *providers.FallbackChain
 	agent         *AgentInstance
 	candidates    []providers.FallbackCandidate
-	resolve       func(providers.FallbackCandidate) (providers.LLMProvider, error)
+	resolve       func(context.Context, providers.FallbackCandidate) (providers.LLMProvider, error)
 }
 
 func (p *routingContextProvider) GetDefaultModel() string {
@@ -158,7 +158,7 @@ func (p *routingContextProvider) Chat(
 		ctx,
 		p.routing.prefer(p.candidates),
 		func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
-			client, err := p.resolve(candidate)
+			client, err := p.resolve(ctx, candidate)
 			if err != nil {
 				return nil, err
 			}
