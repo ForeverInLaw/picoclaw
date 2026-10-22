@@ -241,7 +241,7 @@ type AgentsConfig struct {
 // Object format: {"primary": "gpt-4", "fallbacks": ["claude-haiku"]}
 type AgentModelConfig struct {
 	Primary   string   `json:"primary,omitempty"`
-	Fallbacks []string `json:"fallbacks,omitempty"`
+	Fallbacks []string `json:"fallbacks"`
 }
 
 func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
@@ -265,12 +265,12 @@ func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
 }
 
 func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
-	if len(m.Fallbacks) == 0 && m.Primary != "" {
+	if m.Fallbacks == nil && m.Primary != "" {
 		return json.Marshal(m.Primary)
 	}
 	type raw struct {
 		Primary   string   `json:"primary,omitempty"`
-		Fallbacks []string `json:"fallbacks,omitempty"`
+		Fallbacks []string `json:"fallbacks"`
 	}
 	return json.Marshal(raw{Primary: m.Primary, Fallbacks: m.Fallbacks})
 }
@@ -385,7 +385,7 @@ type AgentDefaults struct {
 	Provider                  string                `json:"provider"                         env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
 	ModelName                 string                `json:"model_name"                       env:"PICOCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
 	Model                     string                `json:"model,omitempty"                  env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"` // Deprecated: use model_name instead
-	ModelFallbacks            []string              `json:"model_fallbacks,omitempty"`
+	ModelFallbacks            []string              `json:"model_fallbacks"`
 	ImageModel                string                `json:"image_model,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks       []string              `json:"image_model_fallbacks,omitempty"`
 	MaxTokens                 int                   `json:"max_tokens"                       env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
@@ -924,16 +924,19 @@ type ModelCapabilities struct {
 }
 
 type ModelConfig struct {
+	// ID identifies the configured entry independently of credentials and labels.
+	ID string `json:"id,omitempty"`
+
 	// Required fields
 	ModelName string `json:"model_name"` // User-facing alias for the model
 	Model     string `json:"model"`      // Protocol/model-identifier (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4.6")
 
 	// HTTP-based providers
-	APIBase   string   `json:"api_base,omitempty"`  // API endpoint URL
-	APIKey    string   `json:"api_key"`             // API authentication key (single key)
-	APIKeys   []string `json:"api_keys,omitempty"`  // API authentication keys (multiple keys for failover)
-	Proxy     string   `json:"proxy,omitempty"`     // HTTP proxy URL
-	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
+	APIBase   string   `json:"api_base,omitempty"` // API endpoint URL
+	APIKey    string   `json:"api_key"`            // API authentication key (single key)
+	APIKeys   []string `json:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
+	Proxy     string   `json:"proxy,omitempty"`    // HTTP proxy URL
+	Fallbacks []string `json:"fallbacks"`          // Fallback model names for failover
 
 	// Special providers (CLI-based, OAuth, etc.)
 	AccountID   string `json:"account_id,omitempty"`   // Saved OAuth connection reference, distinct from provider workspace identity.
@@ -1328,6 +1331,8 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	cfg.EnsureModelIDs()
+
 	// Expand multi-key configs into separate entries for key-level failover
 	cfg.configuredModels = cloneModels(cfg.ModelList)
 	cfg.ModelList = ExpandMultiKeyModels(cfg.ModelList)
@@ -1446,7 +1451,8 @@ func PrepareConfig(source, output string) error {
 
 func saveConfig(path string, cfg *Config, syncSidecar bool) error {
 	copyCfg := *cfg
-	copyCfg.ModelList = cfg.modelsForSave()
+	copyCfg.ModelList = cloneModels(cfg.modelsForSave())
+	copyCfg.EnsureModelIDs()
 	copyCfg.runtimeModelBaseline = nil
 	cfg = &copyCfg
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
@@ -1578,7 +1584,7 @@ func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 func (c *Config) findMatches(modelName string) []ModelConfig {
 	var matches []ModelConfig
 	for i := range c.ModelList {
-		if c.ModelList[i].ModelName == modelName {
+		if c.ModelList[i].ModelName == modelName && !strings.HasPrefix(modelName, ModelIDPrefix) || strings.HasPrefix(modelName, ModelIDPrefix) && c.ModelList[i].ID == strings.TrimPrefix(modelName, ModelIDPrefix) {
 			matches = append(matches, c.ModelList[i])
 		}
 	}
@@ -1594,7 +1600,14 @@ func (c *Config) HasProvidersConfig() bool {
 // It checks that each model config is valid.
 // Note: Multiple entries with the same model_name are allowed for load balancing.
 func (c *Config) ValidateModelList() error {
+	ids := make(map[string]bool)
 	for i := range c.ModelList {
+		if id := c.ModelList[i].ID; id != "" {
+			if ids[id] {
+				return fmt.Errorf("duplicate configured model id %q", id)
+			}
+			ids[id] = true
+		}
 		if err := c.ModelList[i].Validate(); err != nil {
 			return fmt.Errorf("model_list[%d]: %w", i, err)
 		}
@@ -1662,6 +1675,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 
 			// Create a copy for the additional key
 			additionalEntry := ModelConfig{
+				ID:             m.ID + suffix,
 				ModelName:      expandedName,
 				Model:          m.Model,
 				APIBase:        m.APIBase,
@@ -1684,6 +1698,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 
 		// Create the primary entry with first key and fallbacks
 		primaryEntry := ModelConfig{
+			ID:             m.ID,
 			ModelName:      originalName,
 			Model:          m.Model,
 			APIBase:        m.APIBase,
