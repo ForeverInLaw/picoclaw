@@ -193,7 +193,7 @@ func SaveRegisteredAccountContext(ctx context.Context, account, previous *Accoun
 	}
 	if previous != nil {
 		current := store.Accounts[previous.ID]
-		if current == nil || current.Subject != previous.Subject || current.Issuer != previous.Issuer || current.OAuth.ClientID != previous.OAuth.ClientID {
+		if current == nil || current.Subject != previous.Subject || current.Issuer != previous.Issuer || current.OAuth.ClientID != previous.OAuth.ClientID || current.SessionVersion != previous.SessionVersion {
 			return nil, errors.New("selected account registration changed")
 		}
 		account.Label = current.Label
@@ -214,6 +214,7 @@ func SaveRegisteredAccountContext(ctx context.Context, account, previous *Accoun
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	account.SessionVersion = uuid.NewString()
 	store.Accounts[account.ID] = account
 	if err := saveStore(store); err != nil {
 		return nil, err

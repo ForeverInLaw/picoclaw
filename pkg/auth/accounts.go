@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"sort"
 	"sync"
 
@@ -16,18 +17,19 @@ var ErrAccountNotFound = errors.New("account connection not found")
 // AccountConnection owns one renewable session. OAuth client metadata and tokens
 // stay in the protected auth store; dashboard responses use a separate view.
 type AccountConnection struct {
-	ID         string              `json:"id"`
-	Label      string              `json:"label"`
-	Provider   string              `json:"provider"`
-	Enabled    bool                `json:"enabled"`
-	Subject    string              `json:"subject,omitempty"`
-	Issuer     string              `json:"issuer,omitempty"`
-	HostID     string              `json:"host_id,omitempty"`
-	IDToken    string              `json:"id_token,omitempty"`
-	Resource   string              `json:"resource,omitempty"`
-	Scopes     string              `json:"scopes,omitempty"`
-	OAuth      OAuthProviderConfig `json:"oauth"`
-	Credential *AuthCredential     `json:"credential,omitempty"`
+	SessionVersion string              `json:"session_version,omitempty"`
+	ID             string              `json:"id"`
+	Label          string              `json:"label"`
+	Provider       string              `json:"provider"`
+	Enabled        bool                `json:"enabled"`
+	Subject        string              `json:"subject,omitempty"`
+	Issuer         string              `json:"issuer,omitempty"`
+	HostID         string              `json:"host_id,omitempty"`
+	IDToken        string              `json:"id_token,omitempty"`
+	Resource       string              `json:"resource,omitempty"`
+	Scopes         string              `json:"scopes,omitempty"`
+	OAuth          OAuthProviderConfig `json:"oauth"`
+	Credential     *AuthCredential     `json:"credential,omitempty"`
 }
 
 func GetAccount(id string) (*AccountConnection, error) {
@@ -69,6 +71,11 @@ func SaveAccount(account *AccountConnection) error {
 	store, err := loadStore()
 	if err != nil {
 		return err
+	}
+	if current := store.Accounts[account.ID]; sameAccountSession(current, account) {
+		account.SessionVersion = current.SessionVersion
+	} else {
+		account.SessionVersion = uuid.NewString()
 	}
 	store.Accounts[account.ID] = account
 	if account.ID == config.LegacyOpenAIAccountID {
@@ -227,7 +234,7 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 }
 
 func sameAccountSession(current, expected *AccountConnection) bool {
-	return current != nil && current.Credential != nil && expected.Credential != nil && *current.Credential == *expected.Credential && current.OAuth == expected.OAuth && current.Subject == expected.Subject && current.Issuer == expected.Issuer && current.HostID == expected.HostID && current.IDToken == expected.IDToken && current.Resource == expected.Resource
+	return current != nil && current.SessionVersion == expected.SessionVersion && current.Credential != nil && expected.Credential != nil && *current.Credential == *expected.Credential && current.OAuth == expected.OAuth && current.Subject == expected.Subject && current.Issuer == expected.Issuer && current.HostID == expected.HostID && current.IDToken == expected.IDToken && current.Resource == expected.Resource
 }
 
 func clearRejectedAccountSession(ctx context.Context, expected *AccountConnection) error {
@@ -250,4 +257,21 @@ func clearRejectedAccountSession(ctx context.Context, expected *AccountConnectio
 		delete(store.Credentials, "openai")
 	}
 	return saveStore(store)
+}
+
+// AccountSessionState is a local snapshot; reading it never refreshes or probes.
+type AccountSessionState struct {
+	SessionVersion          string
+	Enabled                 bool
+	RequiresReauthorization bool
+}
+
+func AccountState(id string) (AccountSessionState, error) {
+	account, err := GetAccount(id)
+	if err != nil {
+		return AccountSessionState{}, err
+	}
+	credential := account.Credential
+	return AccountSessionState{SessionVersion: account.SessionVersion, Enabled: account.Enabled,
+		RequiresReauthorization: !account.CanUsePlan() || credential == nil || credential.AccessToken == "" || (credential.IsExpired() && credential.RefreshToken == "")}, nil
 }

@@ -43,6 +43,10 @@ func TestAccountRefreshKeepsClientOwnershipAndConcurrentUpdates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	initialState, err := AccountState("first")
+	if err != nil || initialState.SessionVersion == "" {
+		t.Fatalf("missing session version: %+v %v", initialState, err)
+	}
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Go(func() {
@@ -65,6 +69,14 @@ func TestAccountRefreshKeepsClientOwnershipAndConcurrentUpdates(t *testing.T) {
 	}
 	close(release)
 	wg.Wait()
+	refreshedState, _ := AccountState("first")
+	if refreshedState.SessionVersion != initialState.SessionVersion {
+		t.Fatal("refresh or rename changed session version")
+	}
+	secondState, _ := AccountState("second")
+	if secondState.Enabled || secondState.RequiresReauthorization {
+		t.Fatalf("disable lost authorization state: %+v", secondState)
+	}
 	if refreshes.Load() != 1 {
 		t.Errorf("refreshes=%d, want 1", refreshes.Load())
 	}
