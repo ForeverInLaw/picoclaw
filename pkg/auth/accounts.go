@@ -165,7 +165,9 @@ func AccountCredential(id string) (*AuthCredential, error) {
 	if !current.Enabled {
 		return nil, fmt.Errorf("account connection %q is disabled", id)
 	}
-	if current.Credential == nil || *current.Credential != *cred {
+	if current.Credential == nil || *current.Credential != *cred || current.OAuth != account.OAuth ||
+		current.Subject != account.Subject || current.Issuer != account.Issuer ||
+		current.HostID != account.HostID || current.IDToken != account.IDToken || current.Resource != account.Resource {
 		return nil, errors.New("account authorization changed during refresh")
 	}
 	current.Credential = refreshed

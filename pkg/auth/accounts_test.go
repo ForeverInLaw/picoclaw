@@ -145,3 +145,37 @@ func TestAccountRefreshSerializesAcrossProcesses(t *testing.T) {
 		t.Fatalf("same session refreshed %d times across processes", calls.Load())
 	}
 }
+
+func TestLateRefreshCannotReplaceChangedRegistration(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	started, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		fmt.Fprint(w, `{"access_token":"late-token","expires_in":3600}`)
+	}))
+	defer server.Close()
+	connection := &AccountConnection{ID: "first", Label: "First", Provider: "openai", Enabled: true, Subject: "original", OAuth: OAuthProviderConfig{Issuer: server.URL, ClientID: "original-client"}, Credential: &AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "old", RefreshToken: "rotating", ExpiresAt: time.Now().Add(-time.Hour)}}
+	if err := SaveAccount(connection); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := AccountCredential("first"); done <- err }()
+	<-started
+	connection.OAuth.ClientID = "replacement-client"
+	connection.Subject = "replacement"
+	if err := SaveAccount(connection); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; err == nil {
+		t.Fatal("old refresh saved under replacement registration")
+	}
+	saved, err := GetAccount("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Credential.AccessToken != "old" || saved.OAuth.ClientID != "replacement-client" {
+		t.Fatal("replacement registration was overwritten")
+	}
+}
