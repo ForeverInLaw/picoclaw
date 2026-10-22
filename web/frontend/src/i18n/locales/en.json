@@ -289,6 +289,26 @@
       "valid": "Configuration is valid. No model request was sent.",
       "success": "Model replied successfully ({{latency}} ms).",
       "canceled": "Model test canceled."
+    },
+    "routing": {
+      "title": "Model order",
+      "description": "Choose a primary model and ordered reserves. Changes apply to the next request; active tasks keep their order.",
+      "edit": "Edit order",
+      "scope": "Applies to",
+      "instance": "Instance default",
+      "inherit": "Use the instance model order",
+      "primary": "Primary model",
+      "choose": "Choose a configured model",
+      "inheritedPrimary": "Use the instance primary model",
+      "modelReserves": "Use the primary model’s configured reserves",
+      "inheritedReserves": "Use inherited reserves",
+      "reserves": "Reserves, in order",
+      "noReserves": "No reserves. A failed primary ends the request.",
+      "reserve": "Reserve {{number}}",
+      "up": "Move reserve up",
+      "down": "Move reserve down",
+      "remove": "Remove reserve",
+      "addReserve": "Add reserve"
     }
   },
   "channels": {

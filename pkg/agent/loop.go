@@ -67,8 +67,9 @@ type AgentLoop struct {
 	turnSeq        atomic.Uint64
 	activeRequests sync.WaitGroup
 
-	reloadFunc func() error
-	runCancel  context.CancelFunc
+	routingSource func() (*config.Config, error)
+	reloadFunc    func() error
+	runCancel     context.CancelFunc
 }
 
 // processOptions configures how a message is processed
@@ -118,12 +119,15 @@ const (
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
 
+// NewAgentLoop accepts an optional saved-routing source at construction so
+// context engines initialize independently of an unavailable primary provider.
 func NewAgentLoop(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
+	routingSources ...func() (*config.Config, error),
 ) *AgentLoop {
-	registry := NewAgentRegistry(cfg, provider)
+	registry := NewAgentRegistry(cfg, provider, len(routingSources) > 0 && routingSources[0] != nil)
 
 	// Set up shared fallback chain
 	cooldown := providers.NewCooldownTracker()
@@ -146,6 +150,9 @@ func NewAgentLoop(
 		fallback:    fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:    newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+	}
+	if len(routingSources) > 0 {
+		al.routingSource = routingSources[0]
 	}
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
@@ -1070,6 +1077,9 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	var registry *AgentRegistry
 	var panicErr error
 	done := make(chan struct{}, 1)
+	al.mu.RLock()
+	deferModelSelection := al.routingSource != nil
+	al.mu.RUnlock()
 
 	go func() {
 		defer func() {
@@ -1081,7 +1091,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 			close(done)
 		}()
 
-		registry = NewAgentRegistry(cfg, provider)
+		registry = NewAgentRegistry(cfg, provider, deferModelSelection)
 		if ctx.Err() != nil {
 			registry.Close()
 			registry = nil
@@ -1710,7 +1720,10 @@ func (al *AgentLoop) runAgentLoop(
 	if err != nil {
 		return "", err
 	}
-	agent = captured
+	agent, err = al.captureRouting(captured)
+	if err != nil {
+		return "", err
+	}
 	if publicationFor(ctx) == nil {
 		ctx = withResponsePublication(ctx)
 	}
@@ -1939,6 +1952,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	)
 
 	cfg := al.GetConfig()
+	if ts.agent.requestRouting != nil {
+		cfg = ts.agent.requestRouting.cfg
+	}
 	messages = al.resolveTurnMedia(turnCtx, ts, messages, maxMediaSize)
 	allowedTools := newToolAllowlist(ts.opts.AllowedTools)
 
@@ -2016,7 +2032,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	if !cfg.IsChannelType(ts.channel, "pico") || len(ts.media) == 0 {
 		activeProvider, activeCandidates, activeModel = al.selectCandidates(ts.agent, ts.userMessage, messages)
 	}
-	resolveCandidateProvider := candidateProviderResolver(al.cfg, ts.agent.Workspace, activeProvider, activeCandidates)
+	resolveCandidateProvider := candidateProviderResolver(cfg, ts.agent.Workspace, activeProvider, activeCandidates)
 
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
@@ -2232,8 +2248,8 @@ turnLoop:
 
 			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (reply *providers.LLMResponse, requestErr error) {
 				model := candidate.Model
-				toolDefsForCall, candidateOpts := prepareCandidateRequest(al.cfg, client, candidate, toolDefsForCall, llmOpts, ts.agent.ThinkingLevel)
-				if err := checkCandidateContext(al.cfg, candidate, client, messagesForCall, toolDefsForCall, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
+				candidateDefs, candidateOpts := prepareCandidateRequest(cfg, client, candidate, toolDefsForCall, llmOpts, ts.agent.ThinkingLevel)
+				if err := checkCandidateContext(cfg, candidate, client, messagesForCall, candidateDefs, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
 					al.emitEvent(EventKindLLMRetry, ts.eventMeta("runTurn", "turn.llm.candidate_skipped"), LLMRetryPayload{Reason: "incompatible", Error: err.Error()})
 					logger.WarnCF("agent", "Skipping incompatible model candidate", map[string]any{"model": candidate.Model, "config_name": candidate.ConfigName, "reason": err.Error()})
 					return nil, &providers.FailoverError{Reason: providers.FailoverIncompatible, Wrapped: err, Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model}
@@ -2297,9 +2313,9 @@ turnLoop:
 						}
 					}
 					if providerCanStreamPhases {
-						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, toolDefsForCall, model, candidateOpts, onUpdate)
+						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, candidateDefs, model, candidateOpts, onUpdate)
 					} else {
-						response, err = streamProvider.ChatStream(ctx, messagesForCall, toolDefsForCall, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
+						response, err = streamProvider.ChatStream(ctx, messagesForCall, candidateDefs, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
 					}
 					if err != nil {
 						al.publishWebReasoning(ctx, ts, reasoningActionID, bus.ProgressFailed, lastSnapshots[providers.ContentPhaseReasoning])
@@ -2324,12 +2340,12 @@ turnLoop:
 					}
 					return response, nil
 				}
-				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, candidateOpts)
+				return client.Chat(ctx, messagesForCall, candidateDefs, model, candidateOpts)
 			}
 			callProvider := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 				return callProviderOnce(ctx, client, candidate)
 			}
-			candidates := activeCandidates
+			candidates := ts.agent.requestRouting.prefer(activeCandidates)
 			if len(candidates) == 0 {
 				candidates = []providers.FallbackCandidate{{Model: llmModel}}
 			} else if len(candidates) == 1 {
@@ -2344,6 +2360,9 @@ turnLoop:
 					if err != nil {
 						return nil, err
 					}
+				}
+				if stateful, owned := client.(providers.StatefulProvider); owned && client != activeProvider {
+					defer stateful.Close()
 				}
 				response, err := callProvider(ctx, client, candidate)
 				lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
@@ -2364,6 +2383,7 @@ turnLoop:
 			if fbErr != nil {
 				return nil, fbErr
 			}
+			ts.agent.requestRouting.served(fbResult.Candidate)
 			return fbResult.Response, nil
 		}
 

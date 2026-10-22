@@ -15,6 +15,7 @@ const (
 type CooldownTracker struct {
 	mu            sync.RWMutex
 	entries       map[string]*cooldownEntry
+	accounts      map[string]*accountHealth
 	failureWindow time.Duration
 	nowFunc       func() time.Time // for testing
 }
@@ -33,6 +34,7 @@ type cooldownEntry struct {
 func NewCooldownTracker() *CooldownTracker {
 	return &CooldownTracker{
 		entries:       make(map[string]*cooldownEntry),
+		accounts:      make(map[string]*accountHealth),
 		failureWindow: defaultFailureWindow,
 		nowFunc:       time.Now,
 	}

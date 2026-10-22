@@ -41,17 +41,27 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 	}
 	account, err := auth.GetAccount(accountID)
 	if err != nil {
-		return nil, fmt.Errorf("loading Codex account connection: %w", err)
+		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is unavailable"}
 	}
 	if account.Credential == nil {
-		return nil, fmt.Errorf("Codex account connection requires authorization")
+		return nil, &CandidateUnavailableError{
+			Reason:  FailoverAuth,
+			Message: "Codex account connection requires authorization",
+		}
 	}
 	if !account.Enabled {
-		return nil, fmt.Errorf("Codex account connection is disabled")
+		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is disabled"}
 	}
 	cred := account.Credential
 	provider := NewCodexProvider(cred.AccessToken, cred.AccountID)
 	provider.contextTokenSource = func(ctx context.Context) (string, string, error) {
+		state, err := auth.AccountStateContext(ctx, accountID)
+		if err != nil || !state.Enabled || state.RequiresReauthorization {
+			return "", "", &CandidateUnavailableError{
+				Reason:  FailoverAuth,
+				Message: "Codex account connection is unavailable",
+			}
+		}
 		current, err := auth.AccountCredentialContext(ctx, accountID)
 		if err != nil {
 			var tokenError *auth.TokenRequestError
@@ -60,7 +70,23 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 				if tokenError.ReauthorizationRequired {
 					status = 401
 				}
-				err = &protocoltypes.HTTPError{StatusCode: status, Code: tokenError.Code, RetryAfter: tokenError.RetryAfter, Wrapped: err}
+				err = &protocoltypes.HTTPError{
+					StatusCode: status,
+					Code:       tokenError.Code,
+					RetryAfter: tokenError.RetryAfter,
+					Wrapped:    err,
+				}
+			} else {
+				live, liveErr := auth.AccountStateContext(ctx, accountID)
+				if ctx.Err() != nil {
+					return "", "", ctx.Err()
+				}
+				if liveErr != nil || !live.Enabled || live.RequiresReauthorization {
+					err = &CandidateUnavailableError{
+						Reason:  FailoverAuth,
+						Message: "Codex account connection is unavailable",
+					}
+				}
 			}
 			return "", "", err
 		}
@@ -69,7 +95,11 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 	if account.Resource != "" {
 		provider.registered = true
 		// Registered ChatGPT accounts use the issued API resource; legacy CLI sessions retain their endpoint.
-		client := openai.NewClient(option.WithBaseURL(account.Resource), option.WithAPIKey(cred.AccessToken), option.WithMaxRetries(0))
+		client := openai.NewClient(
+			option.WithBaseURL(account.Resource),
+			option.WithAPIKey(cred.AccessToken),
+			option.WithMaxRetries(0),
+		)
 		provider.client = &client
 	}
 	return provider, nil

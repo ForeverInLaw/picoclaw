@@ -40,7 +40,7 @@ var (
 	rateLimitPatterns = []errorPattern{
 		rxp(`rate[_ ]limit`),
 		substr("too many requests"),
-		substr("429"),
+		rxp(`\b429\b`),
 		substr("exceeded your current quota"),
 		rxp(`exceeded.*quota`),
 		rxp(`resource has been exhausted`),
@@ -157,6 +157,7 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// Hard quota exhaustion often arrives as HTTP 429; it cannot recover with backoff.
 	if strings.Contains(msg, "insufficient_quota") || strings.Contains(msg, "exceeded your current quota") ||
 		strings.Contains(msg, "billing_hard_limit") ||
+		strings.Contains(msg, "subscription_sharing_usage_limit_exceeded") ||
 		strings.Contains(msg, "quota exhausted") ||
 		strings.Contains(msg, "quota_exceeded") ||
 		strings.Contains(msg, "quota exceeded") ||

@@ -3,8 +3,9 @@
 package config
 
 import (
-	"golang.org/x/sys/unix"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 func lockConfigPlatform(file *os.File) error {

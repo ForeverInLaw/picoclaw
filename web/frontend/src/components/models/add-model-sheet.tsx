@@ -92,8 +92,11 @@ function AddModelForm({
   })
   const save = useMutation({
     mutationFn: async () => {
-      await addModel(configuration)
-      if (setAsDefault) await setDefaultModel(configuration.model_name)
+      const result = await addModel(configuration)
+      if (setAsDefault)
+        await setDefaultModel(
+          result.id ? `model-id:${result.id}` : configuration.model_name,
+        )
     },
     onSuccess: () => {
       onSaved()
@@ -234,7 +237,7 @@ function AddModelForm({
                       </SelectItem>
                       {accounts.data?.accounts.map((account) => (
                         <SelectItem key={account.id} value={account.id}>
-                          {account.label}
+                          {account.label} · {account.id.slice(-8)}
                         </SelectItem>
                       ))}
                     </SelectGroup>

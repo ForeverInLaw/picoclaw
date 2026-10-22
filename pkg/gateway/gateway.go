@@ -103,7 +103,12 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 	}
 
 	msgBus := bus.NewMessageBus()
-	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
+	agentLoop := agent.NewAgentLoop(
+		cfg,
+		msgBus,
+		provider,
+		func() (*config.Config, error) { return config.LoadConfig(configPath) },
+	)
 
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()
@@ -151,6 +156,7 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 
 	go agentLoop.Run(ctx)
 
+	appliedConfig := cfg
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
@@ -169,6 +175,11 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 			shutdownGateway(runningServices, agentLoop, provider, true)
 			return nil
 		case newCfg := <-configReloadChan:
+			if routingOnlyChange(appliedConfig, newCfg) {
+				appliedConfig = newCfg
+				logger.Info("Saved model routing applies to the next request")
+				continue
+			}
 			if !runningServices.reloading.CompareAndSwap(false, true) {
 				logger.Warn("Config reload skipped: another reload is in progress")
 				continue
@@ -176,6 +187,8 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 			err := executeReload(ctx, agentLoop, newCfg, &provider, runningServices, msgBus, allowEmptyStartup)
 			if err != nil {
 				logger.Errorf("Config reload failed: %v", err)
+			} else {
+				appliedConfig = newCfg
 			}
 		case <-manualReloadChan:
 			logger.Info("Manual reload triggered via /reload endpoint")
@@ -194,6 +207,7 @@ func Run(debug bool, configPath string, allowEmptyStartup bool) error {
 			if err != nil {
 				logger.Errorf("Manual reload failed: %v", err)
 			} else {
+				appliedConfig = newCfg
 				logger.Info("Manual reload completed successfully")
 			}
 		}
@@ -227,7 +241,23 @@ func createStartupProvider(
 		return &startupBlockedProvider{reason: reason}, "", nil
 	}
 
-	return providers.CreateProvider(cfg)
+	provider, modelID, err := providers.CreateProvider(cfg)
+	if err == nil {
+		return provider, modelID, nil
+	}
+	// Validate only configured reserves. The first request resolves its full
+	// captured order; bootstrapping never rewrites that order to a reserve.
+	for _, model := range agent.ConfiguredDefaultModels(cfg) {
+		reserve, _, reserveErr := providers.CreateProviderFromConfig(&model)
+		if reserveErr != nil {
+			continue
+		}
+		if owned, ok := reserve.(providers.StatefulProvider); ok {
+			owned.Close()
+		}
+		return &startupBlockedProvider{reason: "configured models are resolved when a request starts"}, "", nil
+	}
+	return nil, "", err
 }
 
 func setupAndStartServices(

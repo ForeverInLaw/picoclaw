@@ -1,99 +1,42 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 
-import { type ModelInfo, getModels, setDefaultModel } from "@/api/models"
+import { type ModelInfo, modelReference } from "@/api/models"
+
+import { modelsQueryOptions, useSetDefaultModel } from "./use-models"
 
 interface UseChatModelsOptions {
   isConnected: boolean
 }
-
 function isLocalModel(model: ModelInfo): boolean {
-  const isLocalHostBase = Boolean(
+  const local = Boolean(
     model.api_base?.includes("localhost") ||
     model.api_base?.includes("127.0.0.1"),
   )
-
-  return (
-    model.auth_method === "local" || (!model.auth_method && isLocalHostBase)
-  )
+  return model.auth_method === "local" || (!model.auth_method && local)
 }
-
 export function useChatModels({ isConnected }: UseChatModelsOptions) {
-  const [modelList, setModelList] = useState<ModelInfo[]>([])
-  const [defaultModelName, setDefaultModelName] = useState("")
-  const setDefaultRequestIdRef = useRef(0)
-
-  const loadModels = useCallback(async () => {
-    try {
-      const data = await getModels()
-      setModelList(data.models)
-      if (data.models.some((m) => m.model_name === data.default_model)) {
-        setDefaultModelName(data.default_model)
-      }
-    } catch {
-      // silently fail
-    }
-  }, [])
-
-  useEffect(() => {
-    const timerId = setTimeout(() => {
-      void loadModels()
-    }, 0)
-
-    return () => clearTimeout(timerId)
-  }, [isConnected, loadModels])
-
-  const handleSetDefault = useCallback(
-    async (modelName: string) => {
-      if (modelName === defaultModelName) return
-      const requestId = ++setDefaultRequestIdRef.current
-
-      try {
-        await setDefaultModel(modelName)
-        const data = await getModels()
-        if (requestId !== setDefaultRequestIdRef.current) {
-          return
-        }
-
-        setModelList(data.models)
-        if (data.models.some((m) => m.model_name === data.default_model)) {
-          setDefaultModelName(data.default_model)
-        }
-      } catch (err) {
-        console.error("Failed to set default model:", err)
-      }
-    },
-    [defaultModelName],
-  )
-
-  const hasConfiguredModels = useMemo(
-    () => modelList.some((m) => m.configured),
-    [modelList],
-  )
-
-  const oauthModels = useMemo(
-    () => modelList.filter((m) => m.configured && m.auth_method === "oauth"),
-    [modelList],
-  )
-
-  const localModels = useMemo(
-    () => modelList.filter((m) => m.configured && isLocalModel(m)),
-    [modelList],
-  )
-
-  const apiKeyModels = useMemo(
-    () =>
-      modelList.filter(
-        (m) => m.configured && m.auth_method !== "oauth" && !isLocalModel(m),
-      ),
-    [modelList],
-  )
-
+  const query = useQuery({
+    ...modelsQueryOptions,
+    refetchInterval: isConnected ? 10000 : false,
+  })
+  const changeDefault = useSetDefaultModel()
+  const models = query.data?.models ?? []
+  const selected = models.find((model) => model.is_default)
   return {
-    defaultModelName,
-    hasConfiguredModels,
-    apiKeyModels,
-    oauthModels,
-    localModels,
-    handleSetDefault,
+    defaultModelName: selected ? modelReference(selected) : "",
+    hasConfiguredModels: models.some((model) => model.configured),
+    apiKeyModels: models.filter(
+      (model) =>
+        model.configured &&
+        model.auth_method !== "oauth" &&
+        !isLocalModel(model),
+    ),
+    oauthModels: models.filter(
+      (model) => model.configured && model.auth_method === "oauth",
+    ),
+    localModels: models.filter(
+      (model) => model.configured && isLocalModel(model),
+    ),
+    handleSetDefault: (reference: string) => changeDefault.mutate(reference),
   }
 }

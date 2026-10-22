@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 
 	"github.com/google/uuid"
+
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -14,13 +16,17 @@ import (
 type routingChoice config.AgentModelConfig
 
 type modelRouting struct {
-	Defaults routingChoice             `json:"defaults"`
+	Defaults *routingChoice            `json:"defaults"`
 	Agents   map[string]*routingChoice `json:"agents"`
 }
 
 func (h *Handler) withConfigMutation(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := config.WithConfigMutationContext(r.Context(), h.configPath, func() error { next(w, r); return nil }); err != nil {
+		if err := config.WithConfigMutationContext(
+			r.Context(),
+			h.configPath,
+			func() error { next(w, r); return nil },
+		); err != nil {
 			http.Error(w, "failed to acquire configuration writer", 500)
 		}
 	}
@@ -32,7 +38,13 @@ func (h *Handler) handleGetModelRouting(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "failed to load configuration", 500)
 		return
 	}
-	result := modelRouting{Defaults: routingChoice{Primary: cfg.Agents.Defaults.GetModelName(), Fallbacks: cfg.Agents.Defaults.ModelFallbacks}, Agents: map[string]*routingChoice{}}
+	result := modelRouting{
+		Defaults: &routingChoice{
+			Primary:   cfg.Agents.Defaults.GetModelName(),
+			Fallbacks: cfg.Agents.Defaults.ModelFallbacks,
+		},
+		Agents: map[string]*routingChoice{},
+	}
 	for _, a := range cfg.Agents.List {
 		if a.Model != nil {
 			choice := routingChoice(*a.Model)
@@ -70,13 +82,13 @@ func (h *Handler) handlePutModelRouting(w http.ResponseWriter, r *http.Request) 
 			if ref == "" && inherited {
 				continue
 			}
-			if _, err := cfg.GetModelConfig(ref); err != nil {
+			if _, lookupErr := cfg.GetModelConfig(ref); lookupErr != nil {
 				return fmt.Errorf("unknown configured model %q", ref)
 			}
 		}
 		return nil
 	}
-	if err = validate(&input.Defaults, false); err != nil {
+	if err = validate(input.Defaults, false); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
@@ -101,9 +113,11 @@ func (h *Handler) handlePutModelRouting(w http.ResponseWriter, r *http.Request) 
 			cfg.Agents.List[index].Model = &choice
 		}
 	}
-	cfg.Agents.Defaults.ModelName = input.Defaults.Primary
-	cfg.Agents.Defaults.Model = ""
-	cfg.Agents.Defaults.ModelFallbacks = input.Defaults.Fallbacks
+	if input.Defaults != nil {
+		cfg.Agents.Defaults.ModelName = input.Defaults.Primary
+		cfg.Agents.Defaults.Model = ""
+		cfg.Agents.Defaults.ModelFallbacks = input.Defaults.Fallbacks
+	}
 	if err = saveValidatedModels(h.configPath, cfg); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -139,8 +153,29 @@ func rejectReferencedModel(w http.ResponseWriter, cfg *config.Config, model conf
 	sort.Strings(refs)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusConflict)
-	_ = json.NewEncoder(w).Encode(map[string]any{"error": "configured model is referenced by routing settings", "references": refs})
+	_ = json.NewEncoder(w).
+		Encode(map[string]any{"error": "configured model is referenced by routing settings", "references": refs})
 	return true
 }
 
 func newModelID() string { return uuid.NewString() }
+
+// Resolve durable model URLs inside the writer guard before invoking legacy
+// indexed handlers. A reordered list cannot redirect the edit or deletion.
+func (h *Handler) modelByID(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := config.LoadConfig(h.configPath)
+		if err != nil {
+			http.Error(w, "failed to load configuration", 500)
+			return
+		}
+		for index, model := range cfg.ConfiguredModels() {
+			if model.ID == r.PathValue("id") {
+				r.SetPathValue("index", strconv.Itoa(index))
+				next(w, r)
+				return
+			}
+		}
+		http.Error(w, "configured model not found", http.StatusNotFound)
+	}
+}

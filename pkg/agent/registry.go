@@ -21,12 +21,14 @@ type AgentRegistry struct {
 func NewAgentRegistry(
 	cfg *config.Config,
 	provider providers.LLMProvider,
+	deferModelSelection ...bool,
 ) *AgentRegistry {
 	registry := &AgentRegistry{
 		agents:   make(map[string]*AgentInstance),
 		resolver: routing.NewRouteResolver(cfg),
 	}
 
+	deferred := len(deferModelSelection) > 0 && deferModelSelection[0]
 	agentConfigs := cfg.Agents.List
 	artifacts := tools.NewArtifactStore(cfg.Tools.MCP.Artifacts, cfg.ArtifactFilter())
 	if len(agentConfigs) == 0 {
@@ -34,14 +36,14 @@ func NewAgentRegistry(
 			ID:      "main",
 			Default: true,
 		}
-		instance := NewAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider, artifacts)
+		instance := newAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider, deferred, artifacts)
 		registry.agents["main"] = instance
 		logger.InfoCF("agent", "Created implicit main agent (no agents.list configured)", nil)
 	} else {
 		for i := range agentConfigs {
 			ac := &agentConfigs[i]
 			id := routing.NormalizeAgentID(ac.ID)
-			instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider, artifacts)
+			instance := newAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider, deferred, artifacts)
 			registry.agents[id] = instance
 			logger.InfoCF("agent", "Registered agent",
 				map[string]any{

@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -36,7 +37,7 @@ func resolveModelCandidates(
 		var candidate providers.FallbackCandidate
 		if mc != nil {
 			candidate = candidateFromConfig(mc)
-		} else if ref := providers.ParseModelRef(raw, defaultProvider); ref != nil {
+		} else if ref := providers.ParseModelRef(raw, defaultProvider); ref != nil && !strings.HasPrefix(raw, config.ModelIDPrefix) {
 			candidate = providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model}
 		}
 		if candidate.Model != "" && !seen[candidate.StableKey()] {
@@ -71,6 +72,8 @@ func candidateFromConfig(mc *config.ModelConfig) providers.FallbackCandidate {
 		Model:      ref.Model,
 		ConfigName: mc.ModelName,
 		ConfigKey:  providers.ModelConfigKey(mc),
+		ConfigID:   mc.ID,
+		AccountID:  mc.AccountID,
 	}
 }
 
@@ -167,6 +170,7 @@ func candidateProviderResolver(
 	candidates []providers.FallbackCandidate,
 ) func(providers.FallbackCandidate) (providers.LLMProvider, error) {
 	clients := make(map[string]providers.LLMProvider)
+	var clientsMu sync.Mutex
 	primaryProvider := ""
 	if len(candidates) > 0 {
 		primaryProvider = candidates[0].Provider
@@ -177,13 +181,15 @@ func candidateProviderResolver(
 	}
 	return func(candidate providers.FallbackCandidate) (providers.LLMProvider, error) {
 		key := candidate.StableKey()
-		if client := clients[key]; client != nil {
-			return client, nil
+		clientsMu.Lock()
+		cached := clients[key]
+		clientsMu.Unlock()
+		if cached != nil {
+			return cached, nil
 		}
 		mc, err := modelConfigForCandidate(cfg, candidate, workspace)
 		if err != nil {
 			if candidate.ConfigKey == "" && candidate.ConfigName == "" && candidate.Provider == primaryProvider {
-				clients[key] = primary
 				return primary, nil
 			}
 			return nil, err
@@ -192,7 +198,34 @@ func candidateProviderResolver(
 		if err != nil {
 			return nil, err
 		}
-		clients[key] = client
+		// Stateful clients created for a candidate belong to its synchronous call.
+		// The complete canonical request carries continuity into the next call.
+		if _, stateful := client.(providers.StatefulProvider); !stateful {
+			clientsMu.Lock()
+			clients[key] = client
+			clientsMu.Unlock()
+		}
 		return client, nil
 	}
+}
+
+// ConfiguredDefaultModels uses the same exact-entry resolution as user requests.
+// Startup readiness may inspect this chain without selecting a replacement default.
+func ConfiguredDefaultModels(cfg *config.Config) []config.ModelConfig {
+	if cfg == nil {
+		return nil
+	}
+	candidates := resolveModelCandidates(
+		cfg,
+		cfg.Agents.Defaults.Provider,
+		cfg.Agents.Defaults.GetModelName(),
+		cfg.Agents.Defaults.ModelFallbacks,
+	)
+	models := make([]config.ModelConfig, 0, len(candidates))
+	for _, candidate := range candidates {
+		if mc, err := modelConfigForCandidate(cfg, candidate, ""); err == nil {
+			models = append(models, *mc)
+		}
+	}
+	return models
 }

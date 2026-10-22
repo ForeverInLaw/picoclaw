@@ -16,12 +16,15 @@ func (c *Config) EnsureModelIDs() {
 	occurrences := make(map[string]int)
 	for i := range c.ModelList {
 		m := &c.ModelList[i]
-		descriptor, _ := json.Marshal([]string{m.ModelName, m.Model, m.APIBase, m.AccountID, m.AuthMethod, m.ConnectMode, m.Workspace})
+		descriptor, _ := json.Marshal(
+			[]string{m.ModelName, m.Model, m.APIBase, m.AccountID, m.AuthMethod, m.ConnectMode, m.Workspace},
+		)
 		key := string(descriptor)
 		occurrence := occurrences[key]
 		occurrences[key]++
 		if m.ID == "" {
-			m.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("picoclaw:model:%s:%d", key, occurrence))).String()
+			m.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("picoclaw:model:%s:%d", key, occurrence))).
+				String()
 		}
 	}
 }
@@ -43,7 +46,10 @@ func (c *Config) ValidateRoutingReferences() error {
 }
 
 func (c *Config) routingReferences() map[string]string {
-	refs := map[string]string{"defaults.primary": c.Agents.Defaults.GetModelName(), "defaults.image_model": c.Agents.Defaults.ImageModel}
+	refs := map[string]string{
+		"defaults.primary":     c.Agents.Defaults.GetModelName(),
+		"defaults.image_model": c.Agents.Defaults.ImageModel,
+	}
 	if c.Agents.Defaults.Routing != nil {
 		refs["defaults.light_model"] = c.Agents.Defaults.Routing.LightModel
 	}
@@ -64,8 +70,8 @@ func (c *Config) routingReferences() map[string]string {
 			add("subagents."+a.ID+".fallbacks", a.Subagents.Model.Fallbacks)
 		}
 	}
-	for _, m := range c.ModelList {
-		add("models."+m.ModelName+".fallbacks", m.Fallbacks)
+	for index, m := range c.ModelList {
+		add(fmt.Sprintf("models[%d].%s.fallbacks", index, m.ModelName), m.Fallbacks)
 	}
 	return refs
 }
@@ -79,4 +85,11 @@ func (c *Config) ModelReferences(model ModelConfig) []string {
 		}
 	}
 	return refs
+}
+
+func derivedKeyModelID(parent, suffix string) string {
+	if parent == "" {
+		return ""
+	}
+	return parent + suffix
 }

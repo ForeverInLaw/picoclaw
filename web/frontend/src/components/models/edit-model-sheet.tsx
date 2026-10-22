@@ -5,7 +5,12 @@ import { useTranslation } from "react-i18next"
 
 import { getCodexAccounts } from "@/api/codex-accounts"
 import type { ModelTestConfiguration } from "@/api/model-probe"
-import { type ModelInfo, setDefaultModel, updateModel } from "@/api/models"
+import {
+  type ModelInfo,
+  modelReference,
+  setDefaultModel,
+  updateModel,
+} from "@/api/models"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
 import {
   AdvancedSection,
@@ -82,9 +87,9 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
   const save = useMutation({
     mutationFn: async () => {
       if (!model || !configuration) return
-      await updateModel(model.index, configuration)
+      await updateModel(model.id, configuration)
       if (setAsDefault && !model.is_default)
-        await setDefaultModel(model.model_name)
+        await setDefaultModel(modelReference(model))
     },
     onSuccess: () => {
       onSaved()
@@ -101,6 +106,7 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
 
   const configuration: ModelTestConfiguration | null = model
     ? {
+        id: model.id,
         model_name: model.model_name,
         model: model.model,
         api_base: form.apiBase,
@@ -172,7 +178,7 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
                     <SelectGroup>
                       {accounts.data?.accounts.map((account) => (
                         <SelectItem key={account.id} value={account.id}>
-                          {account.label}
+                          {account.label} · {account.id.slice(-8)}
                         </SelectItem>
                       ))}
                     </SelectGroup>
