@@ -177,16 +177,6 @@ func lookupModelConfig(cfg *config.Config, modelName string) *config.ModelConfig
 	return modelCfg
 }
 
-func gatewayRestartRequired(configDefaultModel, bootDefaultModel, gatewayStatus string) bool {
-	if gatewayStatus != "running" {
-		return false
-	}
-	if strings.TrimSpace(configDefaultModel) == "" || strings.TrimSpace(bootDefaultModel) == "" {
-		return false
-	}
-	return configDefaultModel != bootDefaultModel
-}
-
 func isCmdProcessAliveLocked(cmd *exec.Cmd) bool {
 	if cmd == nil || cmd.Process == nil {
 		return false
@@ -784,13 +774,8 @@ func (h *Handler) gatewayStatusData() map[string]any {
 		}
 	}
 
-	bootDefaultModel, _ := data["boot_default_model"].(string)
-	gatewayStatus, _ := data["gateway_status"].(string)
-	data["gateway_restart_required"] = gatewayRestartRequired(
-		configDefaultModel,
-		bootDefaultModel,
-		gatewayStatus,
-	)
+	// Saved model routing is captured by the gateway on the next request.
+	data["gateway_restart_required"] = false
 
 	ready, reason, readyErr := h.gatewayStartReady()
 	if readyErr != nil {

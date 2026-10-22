@@ -1294,7 +1294,8 @@ func LoadConfig(path string) (*Config, error) {
 	for i := range cfg.ModelList {
 		m := &cfg.ModelList[i]
 		protocol, _, _ := strings.Cut(m.Model, "/")
-		if m.AccountID == "" && (protocol == "openai" || !strings.Contains(m.Model, "/")) && (m.AuthMethod == "oauth" || m.AuthMethod == "token") {
+		if m.AccountID == "" && (protocol == "openai" || !strings.Contains(m.Model, "/")) &&
+			(m.AuthMethod == "oauth" || m.AuthMethod == "token") {
 			m.AccountID = LegacyOpenAIAccountID
 		}
 	}
@@ -1583,9 +1584,12 @@ func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 // findMatches finds all ModelConfig entries with the given model_name.
 func (c *Config) findMatches(modelName string) []ModelConfig {
 	var matches []ModelConfig
+	byID := strings.HasPrefix(modelName, ModelIDPrefix)
+	id := strings.TrimPrefix(modelName, ModelIDPrefix)
 	for i := range c.ModelList {
-		if c.ModelList[i].ModelName == modelName && !strings.HasPrefix(modelName, ModelIDPrefix) || strings.HasPrefix(modelName, ModelIDPrefix) && c.ModelList[i].ID == strings.TrimPrefix(modelName, ModelIDPrefix) {
-			matches = append(matches, c.ModelList[i])
+		model := c.ModelList[i]
+		if byID && model.ID == id || !byID && model.ModelName == modelName {
+			matches = append(matches, model)
 		}
 	}
 	return matches
@@ -1675,7 +1679,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 
 			// Create a copy for the additional key
 			additionalEntry := ModelConfig{
-				ID:             m.ID + suffix,
+				ID:             derivedKeyModelID(m.ID, suffix),
 				ModelName:      expandedName,
 				Model:          m.Model,
 				APIBase:        m.APIBase,

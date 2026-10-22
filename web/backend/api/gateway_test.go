@@ -477,7 +477,7 @@ func TestGatewayStatusReportsRunningFromHealthProbe(t *testing.T) {
 	}
 }
 
-func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
+func TestGatewayStatusAppliesDefaultModelChangeWithoutRestart(t *testing.T) {
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
@@ -543,8 +543,8 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 	if got := body["config_default_model"]; got != "second-model" {
 		t.Fatalf("config_default_model = %#v, want %q", got, "second-model")
 	}
-	if got := body["gateway_restart_required"]; got != true {
-		t.Fatalf("gateway_restart_required = %#v, want true", got)
+	if got := body["gateway_restart_required"]; got != false {
+		t.Fatalf("gateway_restart_required = %#v, want false", got)
 	}
 }
 

@@ -2239,8 +2239,8 @@ turnLoop:
 
 			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (reply *providers.LLMResponse, requestErr error) {
 				model := candidate.Model
-				toolDefsForCall, candidateOpts := prepareCandidateRequest(cfg, client, candidate, toolDefsForCall, llmOpts, ts.agent.ThinkingLevel)
-				if err := checkCandidateContext(cfg, candidate, client, messagesForCall, toolDefsForCall, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
+				candidateDefs, candidateOpts := prepareCandidateRequest(cfg, client, candidate, toolDefsForCall, llmOpts, ts.agent.ThinkingLevel)
+				if err := checkCandidateContext(cfg, candidate, client, messagesForCall, candidateDefs, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
 					al.emitEvent(EventKindLLMRetry, ts.eventMeta("runTurn", "turn.llm.candidate_skipped"), LLMRetryPayload{Reason: "incompatible", Error: err.Error()})
 					logger.WarnCF("agent", "Skipping incompatible model candidate", map[string]any{"model": candidate.Model, "config_name": candidate.ConfigName, "reason": err.Error()})
 					return nil, &providers.FailoverError{Reason: providers.FailoverIncompatible, Wrapped: err, Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model}
@@ -2304,9 +2304,9 @@ turnLoop:
 						}
 					}
 					if providerCanStreamPhases {
-						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, toolDefsForCall, model, candidateOpts, onUpdate)
+						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, candidateDefs, model, candidateOpts, onUpdate)
 					} else {
-						response, err = streamProvider.ChatStream(ctx, messagesForCall, toolDefsForCall, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
+						response, err = streamProvider.ChatStream(ctx, messagesForCall, candidateDefs, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
 					}
 					if err != nil {
 						al.publishWebReasoning(ctx, ts, reasoningActionID, bus.ProgressFailed, lastSnapshots[providers.ContentPhaseReasoning])
@@ -2331,7 +2331,7 @@ turnLoop:
 					}
 					return response, nil
 				}
-				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, candidateOpts)
+				return client.Chat(ctx, messagesForCall, candidateDefs, model, candidateOpts)
 			}
 			callProvider := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 				return callProviderOnce(ctx, client, candidate)

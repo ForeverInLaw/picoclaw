@@ -85,7 +85,12 @@ func (al *AgentLoop) captureRouting(agent *AgentInstance) (*AgentInstance, error
 		copyAgent.ImageCandidates = nil
 		copyAgent.ImageProvider = nil
 		if defaults.ImageModel != "" {
-			copyAgent.ImageCandidates = resolveModelCandidates(cfg, defaults.Provider, defaults.ImageModel, defaults.ImageModelFallbacks)
+			copyAgent.ImageCandidates = resolveModelCandidates(
+				cfg,
+				defaults.Provider,
+				defaults.ImageModel,
+				defaults.ImageModelFallbacks,
+			)
 		}
 		copyAgent.LightCandidates = nil
 		copyAgent.Router = nil
@@ -99,7 +104,13 @@ func (al *AgentLoop) captureRouting(agent *AgentInstance) (*AgentInstance, error
 	}
 	copyAgent.requestRouting = &requestRouting{cfg: cfg}
 	if source != nil {
-		adapter := &routingContextProvider{routing: copyAgent.requestRouting, chain: al.fallback, candidates: copyAgent.Candidates, agent: &copyAgent, resolve: candidateProviderResolver(cfg, copyAgent.Workspace, nil, copyAgent.Candidates)}
+		adapter := &routingContextProvider{
+			routing:    copyAgent.requestRouting,
+			chain:      al.fallback,
+			candidates: copyAgent.Candidates,
+			agent:      &copyAgent,
+			resolve:    candidateProviderResolver(cfg, copyAgent.Workspace, nil, copyAgent.Candidates),
+		}
 		copyAgent.Provider = adapter
 		copyAgent.ContextProvider = adapter
 		if len(copyAgent.ImageCandidates) > 0 {
@@ -125,20 +136,48 @@ func (p *routingContextProvider) GetDefaultModel() string {
 	return resolvedCandidateModel(p.candidates, p.agent.Model)
 }
 func (*routingContextProvider) ModelConfigKey() string { return "request-routing-adapter" }
-func (p *routingContextProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, _ string, options map[string]any) (*providers.LLMResponse, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	result, err := p.chain.ExecuteRecoveryCandidate(ctx, p.routing.prefer(p.candidates), func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
-		client, err := p.resolve(candidate)
-		if err != nil {
-			return nil, err
-		}
-		definitions, opts := prepareCandidateRequest(p.routing.cfg, client, candidate, tools, options, p.agent.ThinkingLevel)
-		if err := checkCandidateContext(p.routing.cfg, candidate, client, messages, definitions, opts, p.agent.ContextWindow, p.agent.MaxTokens); err != nil {
-			return nil, &providers.IncompatibleCandidateError{Reason: err.Error()}
-		}
-		return client.Chat(ctx, messages, definitions, candidate.Model, opts)
-	}, nil)
+
+func (p *routingContextProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	_ string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
+	result, err := p.chain.ExecuteRecoveryCandidate(
+		ctx,
+		p.routing.prefer(p.candidates),
+		func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
+			p.mu.Lock()
+			client, err := p.resolve(candidate)
+			p.mu.Unlock()
+			if err != nil {
+				return nil, err
+			}
+			definitions, opts := prepareCandidateRequest(
+				p.routing.cfg,
+				client,
+				candidate,
+				tools,
+				options,
+				p.agent.ThinkingLevel,
+			)
+			if err := checkCandidateContext(
+				p.routing.cfg,
+				candidate,
+				client,
+				messages,
+				definitions,
+				opts,
+				0,
+				p.agent.MaxTokens,
+			); err != nil {
+				return nil, &providers.IncompatibleCandidateError{Reason: err.Error()}
+			}
+			return client.Chat(ctx, messages, definitions, candidate.Model, opts)
+		},
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}

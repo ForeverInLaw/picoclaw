@@ -68,13 +68,18 @@ func (ct *CooldownTracker) AccountAvailability(id string) AccountAvailability {
 	return result
 }
 
-func (ct *CooldownTracker) recordAccountFailure(candidate FallbackCandidate, version string, failure *FailoverError) bool {
+func (ct *CooldownTracker) recordAccountFailure(
+	candidate FallbackCandidate,
+	version string,
+	failure *FailoverError,
+) bool {
 	if candidate.AccountID == "" || failure == nil {
 		return false
 	}
 	// A model/policy-specific forbidden response permits fallback but does not
 	// revoke a valid registration for every other model on that connection.
-	if failure.Reason != FailoverBilling && failure.Reason != FailoverRateLimit && !(failure.Reason == FailoverAuth && failure.Status == 401) {
+	if failure.Reason != FailoverBilling && failure.Reason != FailoverRateLimit &&
+		!(failure.Reason == FailoverAuth && failure.Status == 401) {
 		return false
 	}
 	current, err := auth.AccountState(candidate.AccountID)

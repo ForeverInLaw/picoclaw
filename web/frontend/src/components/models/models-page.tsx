@@ -1,14 +1,21 @@
 import { IconLoader2, IconPlus, IconStar } from "@tabler/icons-react"
-import { useCallback, useEffect, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { type ModelInfo, getModels, setDefaultModel } from "@/api/models"
+import { type ModelInfo, modelReference } from "@/api/models"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
+import {
+  modelsQueryOptions,
+  useInvalidateModels,
+  useSetDefaultModel,
+} from "@/hooks/use-models"
 
 import { AddModelSheet } from "./add-model-sheet"
 import { DeleteModelDialog } from "./delete-model-dialog"
 import { EditModelSheet } from "./edit-model-sheet"
+import { ModelRoutingEditor } from "./model-routing-editor"
 import { getProviderKey, getProviderLabel } from "./provider-label"
 import { ProviderSection } from "./provider-section"
 
@@ -44,52 +51,27 @@ interface ProviderGroup {
 
 export function ModelsPage() {
   const { t } = useTranslation()
-  const [models, setModels] = useState<ModelInfo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState("")
+  const query = useQuery(modelsQueryOptions)
+  const changeDefault = useSetDefaultModel()
+  const fetchModels = useInvalidateModels()
+  const loading = query.isPending
+  const fetchError = query.error?.message ?? changeDefault.error?.message
+  const models = [...(query.data?.models ?? [])].sort(
+    (a, b) =>
+      Number(b.is_default) - Number(a.is_default) ||
+      Number(b.configured) - Number(a.configured) ||
+      a.model_name.localeCompare(b.model_name),
+  )
 
   const [editingModel, setEditingModel] = useState<ModelInfo | null>(null)
   const [deletingModel, setDeletingModel] = useState<ModelInfo | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  const [settingDefaultIndex, setSettingDefaultIndex] = useState<number | null>(
-    null,
-  )
-
-  const fetchModels = useCallback(async () => {
-    try {
-      const data = await getModels()
-      const sorted = [...data.models].sort((a, b) => {
-        if (a.is_default && !b.is_default) return -1
-        if (!a.is_default && b.is_default) return 1
-        if (a.configured && !b.configured) return -1
-        if (!a.configured && b.configured) return 1
-        return a.model_name.localeCompare(b.model_name)
-      })
-      setModels(sorted)
-      setFetchError("")
-    } catch (e) {
-      setFetchError(e instanceof Error ? e.message : t("models.loadError"))
-    } finally {
-      setLoading(false)
-    }
-  }, [t])
-
-  useEffect(() => {
-    fetchModels()
-  }, [fetchModels])
-
-  const handleSetDefault = async (model: ModelInfo) => {
-    if (model.is_default) return
-
-    setSettingDefaultIndex(model.index)
-    try {
-      await setDefaultModel(model.model_name)
-      await fetchModels()
-    } catch {
-      // ignore
-    } finally {
-      setSettingDefaultIndex(null)
-    }
+  const settingDefaultIndex = changeDefault.isPending
+    ? (models.find((model) => modelReference(model) === changeDefault.variables)
+        ?.index ?? null)
+    : null
+  const handleSetDefault = (model: ModelInfo) => {
+    if (!model.is_default) changeDefault.mutate(modelReference(model))
   }
 
   const grouped: Record<string, { label: string; models: ModelInfo[] }> = {}
@@ -160,6 +142,8 @@ export function ModelsPage() {
             {t("models.description")}
           </p>
         </div>
+
+        <ModelRoutingEditor models={models} />
 
         {loading && (
           <div className="flex items-center justify-center py-20">

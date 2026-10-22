@@ -189,8 +189,22 @@ func (fc *FallbackChain) execute(
 
 		availability := fc.cooldown.AccountAvailability(candidate.AccountID)
 		if !availability.Available {
-			unavailable := &CandidateUnavailableError{Reason: availability.Reason, RetryAt: availability.NextEligibleAt, Message: "account connection is unavailable"}
-			result.Attempts = append(result.Attempts, FallbackAttempt{Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model, Skipped: true, Reason: unavailable.Reason, Error: unavailable})
+			unavailable := &CandidateUnavailableError{
+				Reason:  availability.Reason,
+				RetryAt: availability.NextEligibleAt,
+				Message: "account connection is unavailable",
+			}
+			result.Attempts = append(
+				result.Attempts,
+				FallbackAttempt{
+					Candidate: candidate,
+					Provider:  candidate.Provider,
+					Model:     candidate.Model,
+					Skipped:   true,
+					Reason:    unavailable.Reason,
+					Error:     unavailable,
+				},
+			)
 			continue
 		}
 

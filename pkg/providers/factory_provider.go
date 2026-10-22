@@ -44,7 +44,10 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is unavailable"}
 	}
 	if account.Credential == nil {
-		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection requires authorization"}
+		return nil, &CandidateUnavailableError{
+			Reason:  FailoverAuth,
+			Message: "Codex account connection requires authorization",
+		}
 	}
 	if !account.Enabled {
 		return nil, &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is disabled"}
@@ -54,7 +57,10 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 	provider.contextTokenSource = func(ctx context.Context) (string, string, error) {
 		state, err := auth.AccountState(accountID)
 		if err != nil || !state.Enabled || state.RequiresReauthorization {
-			return "", "", &CandidateUnavailableError{Reason: FailoverAuth, Message: "Codex account connection is unavailable"}
+			return "", "", &CandidateUnavailableError{
+				Reason:  FailoverAuth,
+				Message: "Codex account connection is unavailable",
+			}
 		}
 		current, err := auth.AccountCredentialContext(ctx, accountID)
 		if err != nil {
@@ -64,7 +70,12 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 				if tokenError.ReauthorizationRequired {
 					status = 401
 				}
-				err = &protocoltypes.HTTPError{StatusCode: status, Code: tokenError.Code, RetryAfter: tokenError.RetryAfter, Wrapped: err}
+				err = &protocoltypes.HTTPError{
+					StatusCode: status,
+					Code:       tokenError.Code,
+					RetryAfter: tokenError.RetryAfter,
+					Wrapped:    err,
+				}
 			}
 			return "", "", err
 		}
@@ -73,7 +84,11 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 	if account.Resource != "" {
 		provider.registered = true
 		// Registered ChatGPT accounts use the issued API resource; legacy CLI sessions retain their endpoint.
-		client := openai.NewClient(option.WithBaseURL(account.Resource), option.WithAPIKey(cred.AccessToken), option.WithMaxRetries(0))
+		client := openai.NewClient(
+			option.WithBaseURL(account.Resource),
+			option.WithAPIKey(cred.AccessToken),
+			option.WithMaxRetries(0),
+		)
 		provider.client = &client
 	}
 	return provider, nil

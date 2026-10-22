@@ -21,6 +21,8 @@ func (h *Handler) registerModelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/models/{index}/test", h.handleTestSavedModel)
 	mux.HandleFunc("POST /api/models/test-inline", h.handleTestInlineModel)
 	mux.HandleFunc("POST /api/models/validate", h.handleValidateModel)
+	mux.HandleFunc("PUT /api/models/by-id/{id}", h.withConfigMutation(h.modelByID(h.handleUpdateModel)))
+	mux.HandleFunc("DELETE /api/models/by-id/{id}", h.withConfigMutation(h.modelByID(h.handleDeleteModel)))
 	mux.HandleFunc("PUT /api/models/{index}", h.withConfigMutation(h.handleUpdateModel))
 	mux.HandleFunc("DELETE /api/models/{index}", h.withConfigMutation(h.handleDeleteModel))
 }
@@ -71,6 +73,9 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 	for i, m := range cfg.ModelList {
 		go func(i int, m config.ModelConfig) {
 			defer wg.Done()
+			if keys := config.MergeAPIKeys(m.APIKey, m.APIKeys); len(keys) > 0 {
+				m.APIKey = keys[0]
+			}
 			configured[i] = isModelConfigured(m)
 		}(i, m)
 	}
@@ -78,6 +83,9 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 
 	models := make([]modelResponse, 0, len(cfg.ModelList))
 	for i, m := range cfg.ModelList {
+		if keys := config.MergeAPIKeys(m.APIKey, m.APIKeys); len(keys) > 0 {
+			m.APIKey = keys[0]
+		}
 		models = append(models, modelResponse{
 			ID:             m.ID,
 			Fallbacks:      m.Fallbacks,
@@ -151,6 +159,7 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
 		"index":  len(cfg.ModelList) - 1,
+		"id":     mc.ID,
 	})
 }
 

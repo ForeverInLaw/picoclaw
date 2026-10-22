@@ -89,7 +89,8 @@ func (fc *FallbackChain) ExecuteRecoveryCandidate(
 				continue
 			}
 			if state.failure != nil {
-				state.excluded = !state.failure.IsTransient() && !(state.failure.Reason == FailoverBilling && state.failure.RetryAfter > 0)
+				state.excluded = !state.failure.IsTransient() &&
+					!(state.failure.Reason == FailoverBilling && state.failure.RetryAfter > 0)
 			}
 			state.next = time.Now().Add(fc.cooldown.CooldownRemaining(attempt.Candidate.StableKey()))
 		}

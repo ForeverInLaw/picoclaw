@@ -40,7 +40,7 @@ var (
 	rateLimitPatterns = []errorPattern{
 		rxp(`rate[_ ]limit`),
 		substr("too many requests"),
-		substr("429"),
+		rxp(`\b429\b`),
 		substr("exceeded your current quota"),
 		rxp(`exceeded.*quota`),
 		rxp(`resource has been exhausted`),
