@@ -111,3 +111,7 @@ eligible account performs it; CI requires no subscription or personal token.
    remains stable. A second account with the same email must remain distinct.
 6. Report pass/fail for callback completion, selected-model inference and refresh,
    with any sanitized status/code. Never share callback URLs, codes or tokens.
+
+Signing out clears the selected credentials (or all credentials for explicit
+CLI logout-all), while retaining the stable host identity and saved account/client
+mappings. Signing out and deleting an account connection are separate actions.
