@@ -915,6 +915,14 @@ type OpenAIProviderConfig struct {
 // LegacyOpenAIAccountID preserves the single-account OAuth configuration.
 const LegacyOpenAIAccountID = "codex-default"
 
+// ModelCapabilities declares model limits that cannot be inferred from an endpoint.
+// Nil booleans preserve the protocol adapter's existing compatibility defaults.
+type ModelCapabilities struct {
+	Images        *bool `json:"images,omitempty"`
+	Tools         *bool `json:"tools,omitempty"`
+	ContextWindow int   `json:"context_window,omitempty"`
+}
+
 type ModelConfig struct {
 	// Required fields
 	ModelName string `json:"model_name"` // User-facing alias for the model
@@ -933,12 +941,13 @@ type ModelConfig struct {
 	ConnectMode string `json:"connect_mode,omitempty"` // Connection mode: stdio, grpc
 	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
 
-	// Optional optimizations
-	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
-	MaxTokensField string         `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
-	RequestTimeout int            `json:"request_timeout,omitempty"`
-	ThinkingLevel  string         `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
-	ExtraBody      map[string]any `json:"extra_body,omitempty"`     // Additional fields to inject into request body
+	// Optional model limits and optimizations
+	Capabilities   *ModelCapabilities `json:"capabilities,omitempty"`
+	RPM            int                `json:"rpm,omitempty"`              // Requests per minute limit
+	MaxTokensField string             `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
+	RequestTimeout int                `json:"request_timeout,omitempty"`
+	ThinkingLevel  string             `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
+	ExtraBody      map[string]any     `json:"extra_body,omitempty"`     // Additional fields to inject into request body
 
 	// from security
 	apiKeys []string
@@ -946,6 +955,9 @@ type ModelConfig struct {
 
 // Validate checks if the ModelConfig has all required fields.
 func (c *ModelConfig) Validate() error {
+	if c.Capabilities != nil && c.Capabilities.ContextWindow < 0 {
+		return fmt.Errorf("capabilities.context_window must not be negative")
+	}
 	if c.ModelName == "" {
 		return fmt.Errorf("model_name is required")
 	}
@@ -1657,6 +1669,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 				Proxy:          m.Proxy,
 				AuthMethod:     m.AuthMethod,
 				AccountID:      m.AccountID,
+				Capabilities:   m.Capabilities,
 				ConnectMode:    m.ConnectMode,
 				Workspace:      m.Workspace,
 				RPM:            m.RPM,
@@ -1678,6 +1691,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 			Proxy:          m.Proxy,
 			AuthMethod:     m.AuthMethod,
 			AccountID:      m.AccountID,
+			Capabilities:   m.Capabilities,
 			ConnectMode:    m.ConnectMode,
 			Workspace:      m.Workspace,
 			RPM:            m.RPM,

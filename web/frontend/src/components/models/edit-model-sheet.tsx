@@ -115,6 +115,7 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
         request_timeout: form.requestTimeout ? Number(form.requestTimeout) : 0,
         thinking_level: form.thinkingLevel,
         extra_body: model.extra_body,
+        capabilities: model.capabilities,
       }
     : null
 

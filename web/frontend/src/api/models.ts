@@ -11,6 +11,7 @@ export interface ModelInfo {
   proxy?: string
   auth_method?: string
   account_id?: string
+  capabilities?: { images?: boolean; tools?: boolean; context_window?: number }
   api_keys?: string[]
   fallbacks?: string[]
   // Advanced fields

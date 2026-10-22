@@ -2143,35 +2143,6 @@ turnLoop:
 		gracefulTerminal, _ := ts.gracefulInterruptRequested()
 		providerToolDefs := ts.agent.Tools.ToProviderDefsFiltered(allowedTools)
 
-		// Native web search support (from HEAD)
-		_, hasWebSearch := ts.agent.Tools.Get("web_search")
-		if !allowedTools.Allows("web_search") {
-			hasWebSearch = false
-		}
-		useNativeSearch := al.cfg.Tools.Web.PreferNative &&
-			al.cfg.Tools.Web.PrimaryProvider == "" &&
-			!(al.cfg.Tools.Web.Parallel.Enabled && len(config.MergeAPIKeys(al.cfg.Tools.Web.Parallel.APIKey, al.cfg.Tools.Web.Parallel.APIKeys)) > 0) &&
-			!(al.cfg.Tools.Web.Exa.Enabled && len(config.MergeAPIKeys(al.cfg.Tools.Web.Exa.APIKey, al.cfg.Tools.Web.Exa.APIKeys)) > 0) &&
-			hasWebSearch &&
-			func() bool {
-				// Check if provider supports native search
-				if ns, ok := activeProvider.(interface{ SupportsNativeSearch() bool }); ok {
-					return ns.SupportsNativeSearch()
-				}
-				return false
-			}()
-
-		if useNativeSearch {
-			// Filter out client-side web_search tool
-			filtered := make([]providers.ToolDefinition, 0, len(providerToolDefs))
-			for _, td := range providerToolDefs {
-				if td.Function.Name != "web_search" {
-					filtered = append(filtered, td)
-				}
-			}
-			providerToolDefs = filtered
-		}
-
 		callMessages := messages
 		if gracefulTerminal {
 			callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -2189,17 +2160,6 @@ turnLoop:
 			"max_tokens":       ts.agent.MaxTokens,
 			"temperature":      ts.agent.Temperature,
 			"prompt_cache_key": ts.agent.ID,
-		}
-		if useNativeSearch {
-			llmOpts["native_search"] = true
-		}
-		if ts.agent.ThinkingLevel != ThinkingOff {
-			if tc, ok := activeProvider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
-				llmOpts["thinking_level"] = string(ts.agent.ThinkingLevel)
-			} else {
-				logger.WarnCF("agent", "thinking_level is set but current provider does not support it, ignoring",
-					map[string]any{"agent_id": ts.agent.ID, "thinking_level": string(ts.agent.ThinkingLevel)})
-			}
 		}
 
 		llmModel := activeModel
@@ -2277,7 +2237,14 @@ turnLoop:
 			al.activeRequests.Add(1)
 			defer al.activeRequests.Done()
 
-			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
+			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (reply *providers.LLMResponse, requestErr error) {
+				model := candidate.Model
+				toolDefsForCall, candidateOpts := prepareCandidateRequest(al.cfg, client, candidate, toolDefsForCall, llmOpts, ts.agent.ThinkingLevel)
+				if err := checkCandidateContext(al.cfg, candidate, client, messagesForCall, toolDefsForCall, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
+					al.emitEvent(EventKindLLMRetry, ts.eventMeta("runTurn", "turn.llm.candidate_skipped"), LLMRetryPayload{Reason: "incompatible", Error: err.Error()})
+					logger.WarnCF("agent", "Skipping incompatible model candidate", map[string]any{"model": candidate.Model, "config_name": candidate.ConfigName, "reason": err.Error()})
+					return nil, &providers.FailoverError{Reason: providers.FailoverIncompatible, Wrapped: err, Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model}
+				}
 				lastResponseModel = model
 				defer func() {
 					if requestErr != nil {
@@ -2336,9 +2303,9 @@ turnLoop:
 						}
 					}
 					if providerCanStreamPhases {
-						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, toolDefsForCall, model, llmOpts, onUpdate)
+						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, toolDefsForCall, model, candidateOpts, onUpdate)
 					} else {
-						response, err = streamProvider.ChatStream(ctx, messagesForCall, toolDefsForCall, model, llmOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
+						response, err = streamProvider.ChatStream(ctx, messagesForCall, toolDefsForCall, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
 					}
 					if err != nil {
 						al.publishWebReasoning(ctx, ts, reasoningActionID, bus.ProgressFailed, lastSnapshots[providers.ContentPhaseReasoning])
@@ -2363,11 +2330,11 @@ turnLoop:
 					}
 					return response, nil
 				}
-				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
+				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, candidateOpts)
 			}
-			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (*providers.LLMResponse, error) {
+			callProvider := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 				for retry := 0; ; retry++ {
-					response, err := callProviderOnce(ctx, client, model)
+					response, err := callProviderOnce(ctx, client, candidate)
 					delay, capacity := capacityRetryDelay(err, retry)
 					if !capacity {
 						return response, err
@@ -2396,7 +2363,7 @@ turnLoop:
 					if err != nil {
 						return nil, err
 					}
-					response, err := callProvider(ctx, client, candidate.Model)
+					response, err := callProvider(ctx, client, candidate)
 					lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
 					return response, err
 				}
@@ -2420,7 +2387,7 @@ turnLoop:
 				}
 				return fbResult.Response, nil
 			}
-			return callProvider(providerCtx, activeProvider, llmModel)
+			return callProvider(providerCtx, activeProvider, providers.FallbackCandidate{Model: llmModel})
 		}
 
 		var response *providers.LLMResponse

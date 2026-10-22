@@ -26,14 +26,15 @@ func (h *Handler) registerModelRoutes(mux *http.ServeMux) {
 // modelResponse is the JSON structure returned for each model in the list.
 // All ModelConfig fields are included so the frontend can display and edit them.
 type modelResponse struct {
-	Index      int    `json:"index"`
-	ModelName  string `json:"model_name"`
-	Model      string `json:"model"`
-	APIBase    string `json:"api_base,omitempty"`
-	APIKey     string `json:"api_key"`
-	Proxy      string `json:"proxy,omitempty"`
-	AuthMethod string `json:"auth_method,omitempty"`
-	AccountID  string `json:"account_id,omitempty"`
+	Index        int                       `json:"index"`
+	ModelName    string                    `json:"model_name"`
+	Model        string                    `json:"model"`
+	APIBase      string                    `json:"api_base,omitempty"`
+	APIKey       string                    `json:"api_key"`
+	Proxy        string                    `json:"proxy,omitempty"`
+	AuthMethod   string                    `json:"auth_method,omitempty"`
+	AccountID    string                    `json:"account_id,omitempty"`
+	Capabilities *config.ModelCapabilities `json:"capabilities,omitempty"`
 	// Advanced fields
 	ConnectMode    string         `json:"connect_mode,omitempty"`
 	Workspace      string         `json:"workspace,omitempty"`
@@ -81,6 +82,7 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			Proxy:          m.Proxy,
 			AuthMethod:     m.AuthMethod,
 			AccountID:      m.AccountID,
+			Capabilities:   m.Capabilities,
 			ConnectMode:    m.ConnectMode,
 			Workspace:      m.Workspace,
 			RPM:            m.RPM,
