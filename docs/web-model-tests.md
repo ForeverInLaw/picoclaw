@@ -7,10 +7,11 @@ action saves changes. Listing models still performs existing local availability
 checks; its configured status does not establish that a model can answer.
 
 The inference test supports OpenAI-compatible HTTP models with an API key or an
-anonymous/local endpoint. It uses the selected configuration directly through the
+anonymous/local endpoint, and OpenAI OAuth models bound to a saved Codex account. It uses the selected configuration directly through the
 existing provider factory. It does not rotate credentials, retry, fall back to
-another model, send chat history, execute tools or attach images. OAuth, CLI and
-native provider protocols are outside this test. A successful test requires a
+another model, send chat history, execute tools or attach images. CLI and other native provider protocols are outside this test. Codex OAuth tests
+refresh only the selected saved connection when needed, and never borrow another
+account. A successful test requires a
 nonempty answer; provider content and credentials are never included in the
 dashboard result.
 
@@ -21,7 +22,7 @@ Providers may charge for the request. A reasoning-heavy model may return no text
 within this small limit; that is reported as no answer, rather than success.
 
 The editor can retain a blank or masked API key only for the selected saved
-entry with the same provider, effective API base, authentication method and
+entry with the same provider, effective API base, authentication method, account connection and
 proxy. Changing that destination requires an explicit replacement key for a
 test. Saving a destination edit with a blank key clears the old credential;
 masked keys are rejected. An unsaved model never borrows a key by alias or model

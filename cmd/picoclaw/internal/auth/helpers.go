@@ -56,30 +56,7 @@ func authLoginOpenAI(useDeviceCode bool) error {
 
 	appCfg, err := internal.LoadConfig()
 	if err == nil {
-		// Update Providers (legacy format)
-		appCfg.Providers.OpenAI.AuthMethod = "oauth"
-
-		// Update or add openai in ModelList
-		foundOpenAI := false
-		for i := range appCfg.ModelList {
-			if isOpenAIModel(appCfg.ModelList[i].Model) {
-				appCfg.ModelList[i].AuthMethod = "oauth"
-				foundOpenAI = true
-				break
-			}
-		}
-
-		// If no openai in ModelList, add it
-		if !foundOpenAI {
-			appCfg.ModelList = append(appCfg.ModelList, config.ModelConfig{
-				ModelName:  "gpt-5.4",
-				Model:      "openai/gpt-5.4",
-				AuthMethod: "oauth",
-			})
-		}
-
-		// Update default model to use OpenAI
-		appCfg.Agents.Defaults.ModelName = "gpt-5.4"
+		appCfg.BindLegacyCodexAccount("oauth")
 
 		if err = config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
 			return fmt.Errorf("could not update config: %w", err)
@@ -90,7 +67,7 @@ func authLoginOpenAI(useDeviceCode bool) error {
 	if cred.AccountID != "" {
 		fmt.Printf("Account: %s\n", cred.AccountID)
 	}
-	fmt.Println("Default model set to: gpt-5.4")
+	fmt.Println("Codex connection saved; select its model to use it.")
 
 	return nil
 }
@@ -306,25 +283,7 @@ func authLoginPasteToken(provider string) error {
 				appCfg.Agents.Defaults.ModelName = defaultAnthropicModel
 			}
 		case "openai":
-			appCfg.Providers.OpenAI.AuthMethod = "token"
-			// Update ModelList
-			found := false
-			for i := range appCfg.ModelList {
-				if isOpenAIModel(appCfg.ModelList[i].Model) {
-					appCfg.ModelList[i].AuthMethod = "token"
-					found = true
-					break
-				}
-			}
-			if !found {
-				appCfg.ModelList = append(appCfg.ModelList, config.ModelConfig{
-					ModelName:  "gpt-5.4",
-					Model:      "openai/gpt-5.4",
-					AuthMethod: "token",
-				})
-			}
-			// Update default model
-			appCfg.Agents.Defaults.ModelName = "gpt-5.4"
+			appCfg.BindLegacyCodexAccount("token")
 		}
 		if err := config.SaveConfig(internal.GetConfigPath(), appCfg); err != nil {
 			return fmt.Errorf("could not update config: %w", err)
@@ -352,9 +311,7 @@ func authLogoutCmd(provider string) error {
 			for i := range appCfg.ModelList {
 				switch provider {
 				case "openai":
-					if isOpenAIModel(appCfg.ModelList[i].Model) {
-						appCfg.ModelList[i].AuthMethod = ""
-					}
+					// Preserve saved connection references for reauthorization.
 				case "anthropic":
 					if isAnthropicModel(appCfg.ModelList[i].Model) {
 						appCfg.ModelList[i].AuthMethod = ""
@@ -390,7 +347,9 @@ func authLogoutCmd(provider string) error {
 	if err == nil {
 		// Clear all AuthMethods in ModelList
 		for i := range appCfg.ModelList {
-			appCfg.ModelList[i].AuthMethod = ""
+			if appCfg.ModelList[i].AccountID == "" {
+				appCfg.ModelList[i].AuthMethod = ""
+			}
 		}
 		// Clear all AuthMethods in Providers (legacy)
 		appCfg.Providers.OpenAI.AuthMethod = ""

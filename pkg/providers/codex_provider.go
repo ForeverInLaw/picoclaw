@@ -14,6 +14,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/sipeed/picoclaw/pkg/auth"
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
@@ -518,30 +519,15 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 }
 
 func createCodexTokenSource() func() (string, string, error) {
+	return createCodexAccountTokenSource(config.LegacyOpenAIAccountID)
+}
+
+func createCodexAccountTokenSource(accountID string) func() (string, string, error) {
 	return func() (string, string, error) {
-		cred, err := auth.GetCredential("openai")
+		cred, err := auth.AccountCredential(accountID)
 		if err != nil {
-			return "", "", fmt.Errorf("loading auth credentials: %w", err)
+			return "", "", fmt.Errorf("loading Codex account credentials: %w", err)
 		}
-		if cred == nil {
-			return "", "", fmt.Errorf("no credentials for openai. Run: picoclaw auth login --provider openai")
-		}
-
-		if cred.AuthMethod == "oauth" && cred.NeedsRefresh() && cred.RefreshToken != "" {
-			oauthCfg := auth.OpenAIOAuthConfig()
-			refreshed, err := auth.RefreshAccessToken(cred, oauthCfg)
-			if err != nil {
-				return "", "", fmt.Errorf("refreshing token: %w", err)
-			}
-			if refreshed.AccountID == "" {
-				refreshed.AccountID = cred.AccountID
-			}
-			if err := auth.SetCredential("openai", refreshed); err != nil {
-				return "", "", fmt.Errorf("saving refreshed token: %w", err)
-			}
-			return refreshed.AccessToken, refreshed.AccountID, nil
-		}
-
 		return cred.AccessToken, cred.AccountID, nil
 	}
 }

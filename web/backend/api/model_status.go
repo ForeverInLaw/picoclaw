@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -25,6 +26,10 @@ func hasModelConfiguration(m config.ModelConfig) bool {
 	apiKey := strings.TrimSpace(m.APIKey)
 
 	if authMethod == "oauth" || authMethod == "token" {
+		if modelProtocol(m.Model) == "openai" && m.AccountID != "" {
+			account, err := auth.GetAccount(m.AccountID)
+			return err == nil && account.Enabled && account.Credential != nil && (account.Credential.AccessToken != "" || account.Credential.RefreshToken != "")
+		}
 		if provider, ok := oauthProviderForModel(m.Model); ok {
 			cred, err := oauthGetCredential(provider)
 			if err != nil || cred == nil {

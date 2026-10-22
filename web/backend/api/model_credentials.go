@@ -26,7 +26,7 @@ func compatibleModelCredentials(edited, saved config.ModelConfig) bool {
 	}
 	return edited.ModelName == saved.ModelName && protocol == savedProtocol &&
 		base(edited, protocol) == base(saved, savedProtocol) && edited.AuthMethod == saved.AuthMethod &&
-		edited.Proxy == saved.Proxy
+		edited.Proxy == saved.Proxy && edited.AccountID == saved.AccountID
 }
 
 func retainModelCredential(edited *config.ModelConfig, saved config.ModelConfig) error {
@@ -37,6 +37,9 @@ func retainModelCredential(edited *config.ModelConfig, saved config.ModelConfig)
 		} else if edited.APIKey != "" {
 			return errors.New("Enter a new API key when changing the selected model's provider, endpoint or proxy.")
 		}
+	}
+	if edited.APIKeys == nil && compatible {
+		edited.APIKeys = saved.APIKeys
 	}
 	for _, key := range edited.APIKeys {
 		if modelCredentialPlaceholder(key) {

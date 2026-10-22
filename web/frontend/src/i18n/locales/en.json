@@ -163,6 +163,16 @@
       "url": "Verification URL",
       "polling": "Polling login status...",
       "open": "Open Verification Page"
+    },
+    "accounts": {
+      "loading": "Loading Codex accounts…",
+      "empty": "No Codex accounts connected.",
+      "authenticated": "Authorized",
+      "reauthorization_required": "Sign in again",
+      "disabled": "Disabled",
+      "models": "Models",
+      "connection": "Codex account",
+      "select": "Select an account"
     }
   },
   "models": {
