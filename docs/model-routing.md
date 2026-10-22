@@ -80,6 +80,10 @@ rewriting the instance default. Unknown configured IDs and unknown agent IDs are
 rejected. Existing indexed model endpoints remain available for compatibility.
 Model and configuration writes share a cross-process mutation guard with account
 deletion, preventing a concurrent save from introducing a dangling connection.
+CLI authentication finishes network sign-in before taking that guard; saving the
+credentials and binding their configured entry then happens in one transaction.
+CLI sign-out and other authentication configuration writes use the same guard,
+so their saved snapshot cannot overwrite a concurrent administrator edit.
 
 ## Failure behavior
 
