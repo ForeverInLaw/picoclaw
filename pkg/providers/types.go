@@ -64,6 +64,12 @@ type ThinkingCapable interface {
 	SupportsThinking() bool
 }
 
+// ImageInputCapable reports whether an adapter actually transmits image media.
+// Model-specific restrictions are configured separately in ModelCapabilities.
+type ImageInputCapable interface {
+	SupportsImageInput() bool
+}
+
 // NativeSearchCapable is an optional interface for providers that support
 // built-in web search during LLM inference (e.g. OpenAI web_search_preview,
 // xAI Grok search). When the active provider implements this interface and

@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"maps"
+	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -64,6 +65,7 @@ func prepareCandidateRequest(
 func checkCandidateContext(
 	cfg *config.Config,
 	candidate providers.FallbackCandidate,
+	client providers.LLMProvider,
 	messages []providers.Message,
 	definitions []providers.ToolDefinition,
 	options map[string]any,
@@ -73,7 +75,15 @@ func checkCandidateContext(
 	if mc, err := modelConfigForCandidate(cfg, candidate, ""); err == nil {
 		limits = mc.Capabilities
 	}
-	images := messageHasRichMediaInput(messages)
+	images := false
+	for _, message := range messages {
+		for _, media := range message.Media {
+			images = images || strings.HasPrefix(media, "data:image/")
+		}
+	}
+	if capable, ok := client.(providers.ImageInputCapable); images && ok && !capable.SupportsImageInput() {
+		return &providers.IncompatibleCandidateError{Reason: "provider adapter cannot transmit image input"}
+	}
 	// These adapters build text-only prompts and cannot transmit image payloads.
 	switch candidate.Provider {
 	case "claude-cli", "claudecli", "codex-cli", "codexcli", "github-copilot", "copilot", "antigravity":

@@ -58,6 +58,7 @@ func TestFailoverRestoresClientSearchForCandidateWithoutNativeSearch(t *testing.
 func TestFailoverSkipsIncompatibleCandidatesWithoutDroppingActiveContext(t *testing.T) {
 	for _, scenario := range []struct{ name, capabilities, reason string }{
 		{"images", `{"images":false}`, "image"},
+		{"historical-images", `{"images":false}`, "image"},
 		{"tools", `{"tools":false}`, "tool"},
 		{"context", `{"context_window":1}`, "context"},
 	} {
@@ -92,6 +93,13 @@ func TestFailoverSkipsIncompatibleCandidatesWithoutDroppingActiveContext(t *test
 			defer al.UnsubscribeEvents(events.ID)
 			msg := directIngressMessage("ACTIVE_EVIDENCE: describe image")
 			msg.Media = []string{"data:image/png;base64,aW1hZ2U="}
+			if scenario.name == "historical-images" {
+				al.registry.GetDefaultAgent().Provider = &recordingProvider{}
+				_, err := al.processMessage(t.Context(), msg)
+				require.NoError(t, err)
+				al.registry.GetDefaultAgent().Provider = &nativeSearchFailureProvider{}
+				msg.Content, msg.Media = "Describe the earlier image", nil
+			}
 			answer, err := al.processMessage(t.Context(), msg)
 			require.NoError(t, err)
 			require.Equal(t, "compatible answer", answer)
@@ -239,4 +247,39 @@ func TestFailoverRetainsConversationResetAndInlineIsolation(t *testing.T) {
 			require.Equal(t, expected, answer)
 		})
 	}
+}
+
+type textOnlyImageProvider struct{ calls int }
+
+func (*textOnlyImageProvider) GetDefaultModel() string  { return "primary" }
+func (*textOnlyImageProvider) SupportsImageInput() bool { return false }
+func (p *textOnlyImageProvider) Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error) {
+	p.calls++
+	return &providers.LLMResponse{Content: "image was silently omitted"}, nil
+}
+
+func TestFailoverSkipsAdapterThatCannotTransmitImageInput(t *testing.T) {
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages json.RawMessage `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		require.Contains(t, string(request.Messages), "data:image/png;base64,aW1hZ2U=")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"image preserved"},"finish_reason":"stop"}]}`)
+	}))
+	defer backup.Close()
+	al, _ := configuredProviderLoop(t, []config.ModelConfig{
+		{ModelName: "primary", Model: "openai/primary", APIBase: backup.URL},
+		{ModelName: "backup", Model: "openai/backup", APIBase: backup.URL},
+	}, []string{"backup"})
+	primary := &textOnlyImageProvider{}
+	al.registry.GetDefaultAgent().Provider = primary
+	msg := directIngressMessage("Describe image")
+	msg.Media = []string{"data:image/png;base64,aW1hZ2U="}
+	answer, err := al.processMessage(t.Context(), msg)
+	require.NoError(t, err)
+	require.Equal(t, "image preserved", answer)
+	require.Zero(t, primary.calls)
 }

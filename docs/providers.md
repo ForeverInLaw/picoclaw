@@ -489,7 +489,8 @@ Declare known limits on each `model_list` entry when mixing model families:
 or recorded tool calls/results. `context_window` includes estimated input and
 reserved output tokens; a smaller reserve is skipped without truncating history.
 The existing ContextManager and compaction settings still manage Active context.
-Text-only CLI, Copilot, and Antigravity adapters are skipped for image requests.
+Text-only CLI, Copilot, Antigravity, and the legacy Codex Responses adapter are
+skipped for image requests, including images retained from earlier turns.
 
 Omitted capabilities preserve existing adapter behavior and the agent's configured
 context window. Picoclaw does not infer a model's actual limits or entitlement

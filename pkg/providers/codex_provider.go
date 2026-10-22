@@ -235,6 +235,9 @@ func (p *CodexProvider) chat(
 	return parseCodexResponse(resp), nil
 }
 
+// SupportsImageInput remains false until the Responses adapter serializes Media.
+func (p *CodexProvider) SupportsImageInput() bool { return false }
+
 func (p *CodexProvider) GetDefaultModel() string {
 	return codexDefaultModel
 }

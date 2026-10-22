@@ -2240,7 +2240,7 @@ turnLoop:
 			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (reply *providers.LLMResponse, requestErr error) {
 				model := candidate.Model
 				toolDefsForCall, candidateOpts := prepareCandidateRequest(al.cfg, client, candidate, toolDefsForCall, llmOpts, ts.agent.ThinkingLevel)
-				if err := checkCandidateContext(al.cfg, candidate, messagesForCall, toolDefsForCall, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
+				if err := checkCandidateContext(al.cfg, candidate, client, messagesForCall, toolDefsForCall, candidateOpts, ts.agent.ContextWindow, ts.agent.MaxTokens); err != nil {
 					al.emitEvent(EventKindLLMRetry, ts.eventMeta("runTurn", "turn.llm.candidate_skipped"), LLMRetryPayload{Reason: "incompatible", Error: err.Error()})
 					logger.WarnCF("agent", "Skipping incompatible model candidate", map[string]any{"model": candidate.Model, "config_name": candidate.ConfigName, "reason": err.Error()})
 					return nil, &providers.FailoverError{Reason: providers.FailoverIncompatible, Wrapped: err, Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model}
