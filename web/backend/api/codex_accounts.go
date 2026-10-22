@@ -39,7 +39,14 @@ func (h *Handler) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]accountResponse, 0, len(accounts))
 	for _, account := range accounts {
-		item := accountResponse{ID: account.ID, Label: account.Label, Provider: account.Provider, Enabled: account.Enabled, Status: "reauthorization_required", Models: []string{}}
+		item := accountResponse{
+			ID:       account.ID,
+			Label:    account.Label,
+			Provider: account.Provider,
+			Enabled:  account.Enabled,
+			Status:   "reauthorization_required",
+			Models:   []string{},
+		}
 		item.LastProbe = account.LastProbe
 		if !account.LastSuccessAt.IsZero() {
 			item.LastSuccessAt = &account.LastSuccessAt
@@ -78,7 +85,10 @@ func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&patch); err != nil || (patch.Label == nil && patch.Enabled == nil) {
+	if err := decoder.Decode(
+		&patch,
+	); err != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		(patch.Label == nil && patch.Enabled == nil) {
 		modelTestError(w, http.StatusBadRequest, "Provide a label or enabled state.")
 		return
 	}
@@ -107,11 +117,23 @@ func (h *Handler) handleTestAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(request.Model) == "" || len(request.Model) > 200 || strings.ContainsAny(request.Model, "/ \t\n\r") {
+	if err := decoder.Decode(
+		&request,
+	); err != nil || decoder.Decode(&struct{}{}) != io.EOF || strings.TrimSpace(request.Model) == "" || len(request.Model) > 200 ||
+		strings.ContainsAny(request.Model, "/ \t\n\r") {
 		modelTestError(w, 400, "Enter the exact OpenAI model identifier.")
 		return
 	}
-	h.runModelInference(w, r, config.ModelConfig{ModelName: "Account test", Model: "openai/" + request.Model, AuthMethod: "oauth", AccountID: r.PathValue("id")})
+	h.runModelInference(
+		w,
+		r,
+		config.ModelConfig{
+			ModelName:  "Account test",
+			Model:      "openai/" + request.Model,
+			AuthMethod: "oauth",
+			AccountID:  r.PathValue("id"),
+		},
+	)
 }
 
 // Delete shares the configuration writer guard with every model binding save.
@@ -144,7 +166,8 @@ func (h *Handler) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if len(references) > 0 {
 		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": "in_use", "message": "Replace this account in the listed models before deleting it.", "models": references})
+		_ = json.NewEncoder(w).
+			Encode(map[string]any{"status": "in_use", "message": "Replace this account in the listed models before deleting it.", "models": references})
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})

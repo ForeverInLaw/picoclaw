@@ -22,13 +22,13 @@ import (
 
 type OAuthProviderConfig struct {
 	Resource     string `json:"resource,omitempty"` // Registered ChatGPT API resource; empty for legacy flows.
-	Issuer       string
-	ClientID     string
-	ClientSecret string // Required for Google OAuth (confidential client)
-	TokenURL     string // Override token endpoint (Google uses a different URL than issuer)
-	Scopes       string
-	Originator   string
-	Port         int
+	Issuer       string `json:"Issuer,omitempty"`
+	ClientID     string `json:"ClientID,omitempty"`
+	ClientSecret string `json:"ClientSecret,omitempty"` // Required for Google OAuth (confidential client)
+	TokenURL     string `json:"TokenURL,omitempty"`     // Override token endpoint (Google uses a different URL than issuer)
+	Scopes       string `json:"Scopes,omitempty"`
+	Originator   string `json:"Originator,omitempty"`
+	Port         int    `json:"Port,omitempty"`
 }
 
 func OpenAIOAuthConfig() OAuthProviderConfig {
@@ -389,7 +389,11 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 	return RefreshAccessTokenContext(context.Background(), cred, cfg)
 }
 
-func RefreshAccessTokenContext(ctx context.Context, cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
+func RefreshAccessTokenContext(
+	ctx context.Context,
+	cred *AuthCredential,
+	cfg OAuthProviderConfig,
+) (*AuthCredential, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if cred.RefreshToken == "" {

@@ -4,11 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
@@ -69,7 +70,10 @@ func loadStore() (*AuthStore, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &AuthStore{Credentials: make(map[string]*AuthCredential), Accounts: make(map[string]*AccountConnection)}, nil
+			return &AuthStore{
+				Credentials: make(map[string]*AuthCredential),
+				Accounts:    make(map[string]*AccountConnection),
+			}, nil
 		}
 		return nil, err
 	}
@@ -84,12 +88,20 @@ func loadStore() (*AuthStore, error) {
 	if store.Accounts == nil {
 		store.Accounts = make(map[string]*AccountConnection)
 	}
-	if cred := store.Credentials["openai"]; cred != nil && (cred.AccessToken != "" || cred.RefreshToken != "") && store.Accounts[config.LegacyOpenAIAccountID] == nil {
+	if cred := store.Credentials["openai"]; cred != nil && (cred.AccessToken != "" || cred.RefreshToken != "") &&
+		store.Accounts[config.LegacyOpenAIAccountID] == nil {
 		label := cred.Email
 		if label == "" {
 			label = "Existing Codex account"
 		}
-		store.Accounts[config.LegacyOpenAIAccountID] = &AccountConnection{ID: config.LegacyOpenAIAccountID, Label: label, Provider: "openai", Enabled: true, Credential: cred, OAuth: OpenAIOAuthConfig()}
+		store.Accounts[config.LegacyOpenAIAccountID] = &AccountConnection{
+			ID:         config.LegacyOpenAIAccountID,
+			Label:      label,
+			Provider:   "openai",
+			Enabled:    true,
+			Credential: cred,
+			OAuth:      OpenAIOAuthConfig(),
+		}
 		if err := saveStore(&store); err != nil {
 			return nil, err
 		}
@@ -97,7 +109,12 @@ func loadStore() (*AuthStore, error) {
 	for _, account := range store.Accounts {
 		if account.SessionVersion == "" {
 			// Legacy records need a stable revision before their first mutation/refresh.
-			account.SessionVersion = fmt.Sprintf("legacy-%x", sha256.Sum256([]byte(account.ID+"\x00"+account.Issuer+"\x00"+account.Subject+"\x00"+account.OAuth.ClientID)))
+			account.SessionVersion = fmt.Sprintf(
+				"legacy-%x",
+				sha256.Sum256(
+					[]byte(account.ID+"\x00"+account.Issuer+"\x00"+account.Subject+"\x00"+account.OAuth.ClientID),
+				),
+			)
 		}
 	}
 	return &store, nil
@@ -149,7 +166,13 @@ func SetCredential(provider string, cred *AuthCredential) error {
 	if provider == "openai" {
 		account := store.Accounts[config.LegacyOpenAIAccountID]
 		if account == nil {
-			account = &AccountConnection{ID: config.LegacyOpenAIAccountID, Label: "Existing Codex account", Provider: "openai", Enabled: true, OAuth: OpenAIOAuthConfig()}
+			account = &AccountConnection{
+				ID:       config.LegacyOpenAIAccountID,
+				Label:    "Existing Codex account",
+				Provider: "openai",
+				Enabled:  true,
+				OAuth:    OpenAIOAuthConfig(),
+			}
 			store.Accounts[account.ID] = account
 		}
 		account.SessionVersion = uuid.NewString()

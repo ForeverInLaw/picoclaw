@@ -29,7 +29,9 @@ func TestAccountRefreshKeepsClientOwnershipAndConcurrentUpdates(t *testing.T) {
 		}
 		<-release
 		_ = r.ParseForm()
-		if r.Form.Get("client_id") != "issued-first" || r.Form.Get("refresh_token") != "rotate-first" || r.Form.Get("resource") != "https://api.openai.com/v1" || r.Form.Get("scope") != "" {
+		if r.Form.Get("client_id") != "issued-first" || r.Form.Get("refresh_token") != "rotate-first" ||
+			r.Form.Get("resource") != "https://api.openai.com/v1" ||
+			r.Form.Get("scope") != "" {
 			t.Errorf("wrong refresh ownership: %v", r.Form)
 		}
 		fmt.Fprint(w, `{"access_token":"fresh-first","refresh_token":"rotated-first","expires_in":3600}`)
@@ -82,7 +84,8 @@ func TestAccountRefreshKeepsClientOwnershipAndConcurrentUpdates(t *testing.T) {
 	}
 	first, _ := GetAccount("first")
 	second, _ := GetAccount("second")
-	if first.Label != "Renamed during refresh" || second.Label != "Independent update" || second.Credential.AccessToken != "second-secret" {
+	if first.Label != "Renamed during refresh" || second.Label != "Independent update" ||
+		second.Credential.AccessToken != "second-secret" {
 		t.Fatalf("concurrent account update lost")
 	}
 }
@@ -96,7 +99,22 @@ func TestLateAccountRefreshCannotRecreateDeletedConnection(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"late-secret","expires_in":3600}`)
 	}))
 	defer server.Close()
-	if err := SaveAccount(&AccountConnection{ID: "first", Label: "First", Provider: "openai", Enabled: true, OAuth: OAuthProviderConfig{Issuer: server.URL, ClientID: "first"}, Credential: &AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "expired", RefreshToken: "rotating", ExpiresAt: time.Now().Add(-time.Hour)}}); err != nil {
+	if err := SaveAccount(
+		&AccountConnection{
+			ID:       "first",
+			Label:    "First",
+			Provider: "openai",
+			Enabled:  true,
+			OAuth:    OAuthProviderConfig{Issuer: server.URL, ClientID: "first"},
+			Credential: &AuthCredential{
+				Provider:     "openai",
+				AuthMethod:   "oauth",
+				AccessToken:  "expired",
+				RefreshToken: "rotating",
+				ExpiresAt:    time.Now().Add(-time.Hour),
+			},
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -131,10 +149,28 @@ func TestAccountRefreshSerializesAcrossProcesses(t *testing.T) {
 		calls.Add(1)
 		// Let all processes contend for the same rotating session before replying.
 		time.Sleep(100 * time.Millisecond)
-		fmt.Fprint(w, `{"access_token":"fresh-process-token","refresh_token":"rotated-process-token","expires_in":3600}`)
+		fmt.Fprint(
+			w,
+			`{"access_token":"fresh-process-token","refresh_token":"rotated-process-token","expires_in":3600}`,
+		)
 	}))
 	defer server.Close()
-	if err := SaveAccount(&AccountConnection{ID: "shared", Label: "Shared", Provider: "openai", Enabled: true, OAuth: OAuthProviderConfig{Issuer: server.URL, ClientID: "issued-shared"}, Credential: &AuthCredential{AccessToken: "expired", RefreshToken: "rotate-once", Provider: "openai", AuthMethod: "oauth", ExpiresAt: time.Now().Add(-time.Hour)}}); err != nil {
+	if err := SaveAccount(
+		&AccountConnection{
+			ID:       "shared",
+			Label:    "Shared",
+			Provider: "openai",
+			Enabled:  true,
+			OAuth:    OAuthProviderConfig{Issuer: server.URL, ClientID: "issued-shared"},
+			Credential: &AuthCredential{
+				AccessToken:  "expired",
+				RefreshToken: "rotate-once",
+				Provider:     "openai",
+				AuthMethod:   "oauth",
+				ExpiresAt:    time.Now().Add(-time.Hour),
+			},
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	executable, err := os.Executable()
@@ -171,7 +207,21 @@ func TestLateRefreshCannotReplaceChangedRegistration(t *testing.T) {
 		fmt.Fprint(w, `{"access_token":"late-token","expires_in":3600}`)
 	}))
 	defer server.Close()
-	connection := &AccountConnection{ID: "first", Label: "First", Provider: "openai", Enabled: true, Subject: "original", OAuth: OAuthProviderConfig{Issuer: server.URL, ClientID: "original-client"}, Credential: &AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "old", RefreshToken: "rotating", ExpiresAt: time.Now().Add(-time.Hour)}}
+	connection := &AccountConnection{
+		ID:       "first",
+		Label:    "First",
+		Provider: "openai",
+		Enabled:  true,
+		Subject:  "original",
+		OAuth:    OAuthProviderConfig{Issuer: server.URL, ClientID: "original-client"},
+		Credential: &AuthCredential{
+			Provider:     "openai",
+			AuthMethod:   "oauth",
+			AccessToken:  "old",
+			RefreshToken: "rotating",
+			ExpiresAt:    time.Now().Add(-time.Hour),
+		},
+	}
 	if err := SaveAccount(connection); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +264,24 @@ func TestAccountRefreshErrorsRetainRecoveryMetadataAndPreserveOtherAccounts(t *t
 					fmt.Fprint(w, scenario.body)
 				}))
 				defer server.Close()
-				account := &AccountConnection{ID: "first", Label: "First", Provider: "openai", Enabled: true, OAuth: OAuthProviderConfig{Issuer: server.URL, ClientID: "issued-first", TokenURL: server.URL + "/token"}, Credential: &AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "old-token", RefreshToken: "private", ExpiresAt: time.Now().Add(-time.Hour)}}
+				account := &AccountConnection{
+					ID:       "first",
+					Label:    "First",
+					Provider: "openai",
+					Enabled:  true,
+					OAuth: OAuthProviderConfig{
+						Issuer:   server.URL,
+						ClientID: "issued-first",
+						TokenURL: server.URL + "/token",
+					},
+					Credential: &AuthCredential{
+						Provider:     "openai",
+						AuthMethod:   "oauth",
+						AccessToken:  "old-token",
+						RefreshToken: "private",
+						ExpiresAt:    time.Now().Add(-time.Hour),
+					},
+				}
 				if registered {
 					account.Resource = OpenAIRegistrationResource
 					account.Scopes = OpenAIPlanScope
@@ -223,12 +290,23 @@ func TestAccountRefreshErrorsRetainRecoveryMetadataAndPreserveOtherAccounts(t *t
 				if err := SaveAccount(account); err != nil {
 					t.Fatal(err)
 				}
-				if err := SaveAccount(&AccountConnection{ID: "other", Label: "Other", Provider: "openai", Enabled: true, Credential: &AuthCredential{AccessToken: "untouched"}}); err != nil {
+				if err := SaveAccount(
+					&AccountConnection{
+						ID:         "other",
+						Label:      "Other",
+						Provider:   "openai",
+						Enabled:    true,
+						Credential: &AuthCredential{AccessToken: "untouched"},
+					},
+				); err != nil {
 					t.Fatal(err)
 				}
 				_, err := AccountCredentialContext(t.Context(), "first")
 				var failure *TokenRequestError
-				if !errors.As(err, &failure) || failure.StatusCode != scenario.status || failure.Code != scenario.code || failure.RetryAfter != 37*time.Second || failure.ReauthorizationRequired != scenario.reauthorize {
+				if !errors.As(err, &failure) || failure.StatusCode != scenario.status ||
+					failure.Code != scenario.code ||
+					failure.RetryAfter != 37*time.Second ||
+					failure.ReauthorizationRequired != scenario.reauthorize {
 					t.Fatalf("refresh recovery metadata lost: %v", err)
 				}
 				if strings.Contains(err.Error(), "PRIVATE_REFRESH_TOKEN") {
@@ -236,7 +314,8 @@ func TestAccountRefreshErrorsRetainRecoveryMetadataAndPreserveOtherAccounts(t *t
 				}
 				saved, _ := GetAccount("first")
 				other, _ := GetAccount("other")
-				if (saved.Credential == nil) != scenario.reauthorize || saved.OAuth.ClientID != "issued-first" || other.Credential.AccessToken != "untouched" {
+				if (saved.Credential == nil) != scenario.reauthorize || saved.OAuth.ClientID != "issued-first" ||
+					other.Credential.AccessToken != "untouched" {
 					t.Fatal("refresh lost registration or another account")
 				}
 			})
@@ -254,7 +333,22 @@ func TestAccountContextCancellationStopsRefreshAndLockWait(t *testing.T) {
 		close(disconnected)
 	}))
 	defer server.Close()
-	if err := SaveAccount(&AccountConnection{ID: "first", Label: "First", Provider: "openai", Enabled: true, OAuth: OAuthProviderConfig{Issuer: server.URL, ClientID: "first"}, Credential: &AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "old", RefreshToken: "rotating", ExpiresAt: time.Now().Add(-time.Hour)}}); err != nil {
+	if err := SaveAccount(
+		&AccountConnection{
+			ID:       "first",
+			Label:    "First",
+			Provider: "openai",
+			Enabled:  true,
+			OAuth:    OAuthProviderConfig{Issuer: server.URL, ClientID: "first"},
+			Credential: &AuthCredential{
+				Provider:     "openai",
+				AuthMethod:   "oauth",
+				AccessToken:  "old",
+				RefreshToken: "rotating",
+				ExpiresAt:    time.Now().Add(-time.Hour),
+			},
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())

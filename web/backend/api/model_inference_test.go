@@ -134,11 +134,19 @@ func TestModelInferenceReportsSanitizedFailuresWithoutRetry(t *testing.T) {
 	}
 }
 
-func TestSavedMultiKeyAndFileCredentialsUseOnlySelectedRuntimeEntry(t *testing.T) {
+func TestSavedMultiKeyAndFileCredentialsUseOnlyConfiguredPrimaryKey(t *testing.T) {
 	var calls atomic.Int32
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.Header.Get("Authorization") != "Bearer second-file-secret" {
+		var request struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		expected := "Bearer first-secret"
+		if request.Model == "file-model" {
+			expected = "Bearer second-file-secret"
+		}
+		if r.Header.Get("Authorization") != expected {
 			t.Error("probe rotated or borrowed another key")
 		}
 		w.Write([]byte(`{"choices":[{"message":{"content":"OK"}}]}`))
@@ -153,6 +161,7 @@ func TestSavedMultiKeyAndFileCredentialsUseOnlySelectedRuntimeEntry(t *testing.T
 				APIBase:   endpoint.URL + "/v1",
 				APIKeys:   []string{"first-secret", "file://key.txt"},
 			},
+			{ModelName: "file", Model: "openai/file-model", APIBase: endpoint.URL + "/v1", APIKey: "file://key.txt"},
 		},
 	)
 	if err := os.WriteFile(
@@ -162,11 +171,14 @@ func TestSavedMultiKeyAndFileCredentialsUseOnlySelectedRuntimeEntry(t *testing.T
 	); err != nil {
 		t.Fatal(err)
 	}
-	// Multi-key expansion puts the second key at runtime index zero.
+	// Configured indices stay stable despite multi-key runtime expansion.
 	if w := dashboardRequest(h, "POST", "/api/models/0/test", "", cookie); w.Code != 200 {
 		t.Fatalf("multi-key selected probe: %d %s", w.Code, w.Body.String())
 	}
-	if calls.Load() != 1 {
+	if w := dashboardRequest(h, "POST", "/api/models/1/test", "", cookie); w.Code != 200 {
+		t.Fatalf("configured file probe=%d %s", w.Code, w.Body.String())
+	}
+	if calls.Load() != 2 {
 		t.Fatalf("operations=%d", calls.Load())
 	}
 }

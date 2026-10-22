@@ -55,37 +55,65 @@ func InstanceHostIDContext(ctx context.Context) (string, error) {
 
 // ExchangeRegisteredAccount uses the issued public-client ID, then verifies the
 // signed ID token before any credentials become visible to model routing.
-func ExchangeRegisteredAccount(ctx context.Context, cfg OAuthProviderConfig, code, verifier, redirect, nonce, hostID string, previous *AccountConnection) (*AccountConnection, error) {
+func ExchangeRegisteredAccount(
+	ctx context.Context,
+	cfg OAuthProviderConfig,
+	code, verifier, redirect, nonce, hostID string,
+	previous *AccountConnection,
+) (*AccountConnection, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: 15 * time.Second}
 	ctx = oidc.ClientContext(ctx, client)
-	token, err := requestRegisteredToken(ctx, cfg, url.Values{"grant_type": {"authorization_code"}, "client_id": {cfg.ClientID}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {redirect}, "resource": {cfg.Resource}})
+	token, err := requestRegisteredToken(
+		ctx,
+		cfg,
+		url.Values{
+			"grant_type":    {"authorization_code"},
+			"client_id":     {cfg.ClientID},
+			"code":          {code},
+			"code_verifier": {verifier},
+			"redirect_uri":  {redirect},
+			"resource":      {cfg.Resource},
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
 	return registeredTokenAccount(ctx, cfg, token, nonce, hostID, previous)
 }
 
-func registeredTokenAccount(ctx context.Context, cfg OAuthProviderConfig, token *registeredToken, nonce, hostID string, previous *AccountConnection) (*AccountConnection, error) {
+func registeredTokenAccount(
+	ctx context.Context,
+	cfg OAuthProviderConfig,
+	token *registeredToken,
+	nonce, hostID string,
+	previous *AccountConnection,
+) (*AccountConnection, error) {
 	rawIDToken := token.IDToken
 	if rawIDToken == "" && previous != nil && nonce == "" {
-		copy := *previous
-		copy.Credential = registeredCredential(token, previous.Credential.Email)
+		refreshed := *previous
+		refreshed.Credential = registeredCredential(token, previous.Credential.Email)
 		if token.Scope != "" {
-			copy.Scopes = token.Scope
+			refreshed.Scopes = token.Scope
 		}
-		return &copy, nil
+		return &refreshed, nil
 	}
+	boundary := &oidcHTTPBoundary{ctx: ctx, transport: http.DefaultTransport}
+	ctx = oidc.ClientContext(ctx, &http.Client{Timeout: 15 * time.Second, Transport: boundary})
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
-		return nil, errors.New("OpenAI identity verification unavailable; start a fresh sign-in")
+		return nil, boundary.verificationError("OpenAI identity verification unavailable; start a fresh sign-in")
 	}
 	verified, err := provider.VerifierContext(ctx, &oidc.Config{ClientID: cfg.ClientID}).Verify(ctx, rawIDToken)
-	if err != nil || verified.Subject == "" || (nonce != "" && verified.Nonce != nonce) {
+	if err != nil {
+		return nil, boundary.verificationError("OpenAI identity verification failed")
+	}
+	if verified.Subject == "" || (nonce != "" && verified.Nonce != nonce) {
 		return nil, errors.New("OpenAI identity verification failed")
 	}
-	if previous != nil && (verified.Subject != previous.Subject || verified.Issuer != previous.Issuer || cfg.ClientID != previous.OAuth.ClientID) {
+	if previous != nil &&
+		(verified.Subject != previous.Subject || verified.Issuer != previous.Issuer || cfg.ClientID != previous.OAuth.ClientID) {
 		return nil, errors.New("OpenAI sign-in does not match the selected account registration")
 	}
 	var claims struct {
@@ -95,7 +123,20 @@ func registeredTokenAccount(ctx context.Context, cfg OAuthProviderConfig, token 
 		return nil, errors.New("OpenAI identity claims are invalid")
 	}
 	scopes := token.Scope
-	account := &AccountConnection{ID: uuid.NewString(), Label: claims.Email, Provider: "openai", Enabled: true, Subject: verified.Subject, Issuer: verified.Issuer, HostID: hostID, IDToken: rawIDToken, Resource: cfg.Resource, Scopes: scopes, OAuth: cfg, Credential: registeredCredential(token, claims.Email)}
+	account := &AccountConnection{
+		ID:         uuid.NewString(),
+		Label:      claims.Email,
+		Provider:   "openai",
+		Enabled:    true,
+		Subject:    verified.Subject,
+		Issuer:     verified.Issuer,
+		HostID:     hostID,
+		IDToken:    rawIDToken,
+		Resource:   cfg.Resource,
+		Scopes:     scopes,
+		OAuth:      cfg,
+		Credential: registeredCredential(token, claims.Email),
+	}
 	if previous != nil {
 		account.ID = previous.ID
 		account.Label = previous.Label
@@ -111,7 +152,14 @@ func registeredTokenAccount(ctx context.Context, cfg OAuthProviderConfig, token 
 }
 
 func registeredCredential(token *registeredToken, email string) *AuthCredential {
-	return &AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: token.AccessToken, RefreshToken: token.RefreshToken, ExpiresAt: time.Now().Add(time.Duration(token.ExpiresIn) * time.Second), Email: email}
+	return &AuthCredential{
+		Provider:     "openai",
+		AuthMethod:   "oauth",
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		ExpiresAt:    time.Now().Add(time.Duration(token.ExpiresIn) * time.Second),
+		Email:        email,
+	}
 }
 
 func (a *AccountConnection) CanUsePlan() bool {
@@ -131,7 +179,16 @@ func refreshRegisteredAccount(ctx context.Context, account *AccountConnection) (
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	ctx = oidc.ClientContext(ctx, &http.Client{Timeout: 15 * time.Second})
-	token, err := requestRegisteredToken(ctx, cfg, url.Values{"grant_type": {"refresh_token"}, "client_id": {cfg.ClientID}, "refresh_token": {account.Credential.RefreshToken}, "resource": {cfg.Resource}})
+	token, err := requestRegisteredToken(
+		ctx,
+		cfg,
+		url.Values{
+			"grant_type":    {"refresh_token"},
+			"client_id":     {cfg.ClientID},
+			"refresh_token": {account.Credential.RefreshToken},
+			"resource":      {cfg.Resource},
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +226,9 @@ func requestRegisteredToken(ctx context.Context, cfg OAuthProviderConfig, form u
 		return nil, tokenEndpointError(response)
 	}
 	var token registeredToken
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&token); err != nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") || token.ExpiresIn <= 0 {
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).
+		Decode(&token); err != nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") ||
+		token.ExpiresIn <= 0 {
 		return nil, errors.New("OpenAI token response is invalid")
 	}
 	return &token, nil
@@ -181,7 +240,10 @@ func SaveRegisteredAccount(account, previous *AccountConnection) (*AccountConnec
 	return SaveRegisteredAccountContext(context.Background(), account, previous)
 }
 
-func SaveRegisteredAccountContext(ctx context.Context, account, previous *AccountConnection) (*AccountConnection, error) {
+func SaveRegisteredAccountContext(
+	ctx context.Context,
+	account, previous *AccountConnection,
+) (*AccountConnection, error) {
 	unlock, err := lockStoreContext(ctx)
 	if err != nil {
 		return nil, err
@@ -193,7 +255,9 @@ func SaveRegisteredAccountContext(ctx context.Context, account, previous *Accoun
 	}
 	if previous != nil {
 		current := store.Accounts[previous.ID]
-		if current == nil || current.Subject != previous.Subject || current.Issuer != previous.Issuer || current.OAuth.ClientID != previous.OAuth.ClientID || current.SessionVersion != previous.SessionVersion {
+		if current == nil || current.Subject != previous.Subject || current.Issuer != previous.Issuer ||
+			current.OAuth.ClientID != previous.OAuth.ClientID ||
+			current.SessionVersion != previous.SessionVersion {
 			return nil, errors.New("selected account registration changed")
 		}
 		account.Label = current.Label

@@ -5,10 +5,11 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -150,7 +151,10 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 		return nil, err
 	}
 	defer mu.Unlock()
-	refreshFile, err := lockAuthFileContext(ctx, fmt.Sprintf("%s.refresh-%x.lock", authFilePath(), sha256.Sum256([]byte(id))))
+	refreshFile, err := lockAuthFileContext(
+		ctx,
+		fmt.Sprintf("%s.refresh-%x.lock", authFilePath(), sha256.Sum256([]byte(id))),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +241,16 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 }
 
 func sameAccountSession(current, expected *AccountConnection) bool {
-	return current != nil && current.SessionVersion == expected.SessionVersion && current.Credential != nil && expected.Credential != nil && *current.Credential == *expected.Credential && current.OAuth == expected.OAuth && current.Subject == expected.Subject && current.Issuer == expected.Issuer && current.HostID == expected.HostID && current.IDToken == expected.IDToken && current.Resource == expected.Resource
+	return current != nil && current.SessionVersion == expected.SessionVersion && current.Credential != nil &&
+		expected.Credential != nil &&
+		*current.Credential == *expected.Credential &&
+		current.OAuth == expected.OAuth &&
+		current.Subject == expected.Subject &&
+		current.Issuer == expected.Issuer &&
+		current.HostID == expected.HostID &&
+		current.IDToken == expected.IDToken &&
+		current.Resource == expected.Resource &&
+		current.Scopes == expected.Scopes
 }
 
 func clearRejectedAccountSession(ctx context.Context, expected *AccountConnection) error {
@@ -275,8 +288,12 @@ func AccountState(id string) (AccountSessionState, error) {
 		return AccountSessionState{}, err
 	}
 	credential := account.Credential
-	return AccountSessionState{SessionVersion: account.SessionVersion, Enabled: account.Enabled,
-		RequiresReauthorization: !account.CanUsePlan() || credential == nil || credential.AccessToken == "" || (credential.IsExpired() && credential.RefreshToken == "")}, nil
+	return AccountSessionState{
+		SessionVersion: account.SessionVersion,
+		Enabled:        account.Enabled,
+		RequiresReauthorization: !account.CanUsePlan() || credential == nil || credential.AccessToken == "" ||
+			(credential.IsExpired() && credential.RefreshToken == ""),
+	}, nil
 }
 
 // AccountProbe contains only bounded operational metadata, never provider text.

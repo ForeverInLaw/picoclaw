@@ -18,7 +18,13 @@ import (
 func TestCodexLegacyConnectionMigratesWithoutChangingAPIKeyModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
-	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"credentials":{"openai":{"access_token":"legacy-secret","refresh_token":"refresh-secret","account_id":"workspace-1","provider":"openai","auth_method":"oauth","email":"owner@example.com"}}}`), 0600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(home, "auth.json"),
+		[]byte(
+			`{"credentials":{"openai":{"access_token":"legacy-secret","refresh_token":"refresh-secret","account_id":"workspace-1","provider":"openai","auth_method":"oauth","email":"owner@example.com"}}}`,
+		),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	h, cookie, configPath := modelInferenceDashboard(t, []config.ModelConfig{
@@ -68,14 +74,18 @@ func TestCodexLegacyConnectionMigratesWithoutChangingAPIKeyModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ModelList[1].APIKey != "api-secret" || cfg.ModelList[1].APIBase != "https://example.com/v1" || cfg.ModelList[1].AuthMethod != "" {
+	if cfg.ModelList[1].APIKey != "api-secret" || cfg.ModelList[1].APIBase != "https://example.com/v1" ||
+		cfg.ModelList[1].AuthMethod != "" {
 		t.Fatalf("API configuration changed: %+v", cfg.ModelList[1])
 	}
 }
 
 func TestCodexMissingCredentialsDoesNotInventConnection(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	h, cookie, _ := modelInferenceDashboard(t, []config.ModelConfig{{ModelName: "subscription", Model: "openai/gpt-5.4", AuthMethod: "oauth"}})
+	h, cookie, _ := modelInferenceDashboard(
+		t,
+		[]config.ModelConfig{{ModelName: "subscription", Model: "openai/gpt-5.4", AuthMethod: "oauth"}},
+	)
 	r := httptest.NewRequest("GET", "/api/oauth/accounts", nil)
 	r.AddCookie(cookie)
 	w := httptest.NewRecorder()
@@ -87,34 +97,77 @@ func TestCodexMissingCredentialsDoesNotInventConnection(t *testing.T) {
 
 func TestCodexSelectedModelUsesItsBoundConnection(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	if err := os.WriteFile(filepath.Join(os.Getenv(config.EnvHome), "auth.json"), []byte(`{"accounts":{"first":{"id":"first","label":"First","provider":"openai","enabled":true,"credential":{"provider":"openai","auth_method":"oauth","access_token":"first-secret","account_id":"workspace-first"}},"second":{"id":"second","label":"Second","provider":"openai","enabled":true,"credential":{"provider":"openai","auth_method":"oauth","access_token":"second-secret","account_id":"workspace-second"}}}}`), 0600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(os.Getenv(config.EnvHome), "auth.json"),
+		[]byte(
+			`{"accounts":{"first":{"id":"first","label":"First","provider":"openai","enabled":true,"credential":{"provider":"openai","auth_method":"oauth","access_token":"first-secret","account_id":"workspace-first"}},"second":{"id":"second","label":"Second","provider":"openai","enabled":true,"credential":{"provider":"openai","auth_method":"oauth","access_token":"second-secret","account_id":"workspace-second"}}}}`,
+		),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	var calls int
 	oldTransport := http.DefaultTransport
 	http.DefaultTransport = accountRecordingTransport{handler: func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.Header.Get("Authorization") != "Bearer second-secret" || r.Header.Get("Chatgpt-Account-Id") != "workspace-second" {
-			t.Errorf("wrong selected identity: %s / %s", r.Header.Get("Authorization"), r.Header.Get("Chatgpt-Account-Id"))
+		if r.Header.Get("Authorization") != "Bearer second-secret" ||
+			r.Header.Get("Chatgpt-Account-Id") != "workspace-second" {
+			t.Errorf(
+				"wrong selected identity: %s / %s",
+				r.Header.Get("Authorization"),
+				r.Header.Get("Chatgpt-Account-Id"),
+			)
 		}
 		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), `"model":"gpt-5.4"`) {
+		if !strings.Contains(string(body), `"model":"custom-model-preview"`) {
 			t.Errorf("wrong model: %s", body)
 		}
-		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}}\n\n")), Request: r}, nil
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(
+				strings.NewReader(
+					"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}}\n\n",
+				),
+			),
+			Request: r,
+		}, nil
 	}}
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
 	var selected config.ModelConfig
-	if err := json.Unmarshal([]byte(`{"model_name":"selected","model":"openai/gpt-5.4","auth_method":"oauth","account_id":"second"}`), &selected); err != nil {
+	if err := json.Unmarshal(
+		[]byte(
+			`{"model_name":"selected","model":"openai/custom-model-preview","auth_method":"oauth","account_id":"second"}`,
+		),
+		&selected,
+	); err != nil {
 		t.Fatal(err)
 	}
-	h, cookie, _ := modelInferenceDashboard(t, []config.ModelConfig{selected})
+	h, cookie, path := modelInferenceDashboard(t, []config.ModelConfig{selected})
 	r := httptest.NewRequest("POST", "/api/models/0/test", nil)
 	r.AddCookie(cookie)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 200 || calls != 1 {
 		t.Fatalf("selected probe: %d %s, calls=%d", w.Code, w.Body.String(), calls)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = dashboardRequest(h, "POST", "/api/models/by-id/"+cfg.ModelList[0].ID+"/test", "", cookie)
+	if w.Code != 200 || calls != 2 {
+		t.Fatalf("stable selected probe=%d %s calls%d", w.Code, w.Body.String(), calls)
+	}
+	w = dashboardRequest(
+		h,
+		"POST",
+		"/api/models/test-inline",
+		`{"id":"moved-entry","model_index":0,"model_name":"selected","model":"openai/custom-model-preview","auth_method":"oauth","account_id":"second"}`,
+		cookie,
+	)
+	if w.Code != 409 || calls != 2 {
+		t.Fatal("stale edit probe selected another model")
 	}
 }
 
@@ -128,8 +181,22 @@ func (t accountRecordingTransport) RoundTrip(r *http.Request) (*http.Response, e
 
 func TestCodexLoginKeepsAPIKeyModelsAndDefault(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	h, cookie, path := modelInferenceDashboard(t, []config.ModelConfig{{ModelName: "paid-api", Model: "openai/gpt-5.4", APIKey: "keep-secret", APIBase: "https://custom.example/v1"}})
-	r := httptest.NewRequest("POST", "/api/oauth/login", strings.NewReader(`{"provider":"openai","method":"token","token":"codex-secret"}`))
+	h, cookie, path := modelInferenceDashboard(
+		t,
+		[]config.ModelConfig{
+			{
+				ModelName: "paid-api",
+				Model:     "openai/gpt-5.4",
+				APIKey:    "keep-secret",
+				APIBase:   "https://custom.example/v1",
+			},
+		},
+	)
+	r := httptest.NewRequest(
+		"POST",
+		"/api/oauth/login",
+		strings.NewReader(`{"provider":"openai","method":"token","token":"codex-secret"}`),
+	)
 	r.AddCookie(cookie)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -140,7 +207,8 @@ func TestCodexLoginKeepsAPIKeyModelsAndDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ModelList[0].APIKey != "keep-secret" || cfg.ModelList[0].AuthMethod != "" || cfg.ModelList[0].APIBase != "https://custom.example/v1" {
+	if cfg.ModelList[0].APIKey != "keep-secret" || cfg.ModelList[0].AuthMethod != "" ||
+		cfg.ModelList[0].APIBase != "https://custom.example/v1" {
 		t.Fatalf("login changed API-key configuration: %+v", cfg.ModelList[0])
 	}
 }
@@ -148,11 +216,20 @@ func TestCodexLoginKeepsAPIKeyModelsAndDefault(t *testing.T) {
 func TestModelRenamePreservesBindingAndUneditedSettings(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	var selected config.ModelConfig
-	if err := json.Unmarshal([]byte(`{"model_name":"original","model":"openai/gpt-5.4","api_key":"saved-key","api_base":"https://custom.example/v1","fallbacks":["backup"],"request_timeout":97,"extra_body":{"frequency_penalty":0.3}}`), &selected); err != nil {
+	if err := json.Unmarshal(
+		[]byte(
+			`{"model_name":"original","model":"openai/gpt-5.4","api_key":"saved-key","api_base":"https://custom.example/v1","fallbacks":["backup"],"request_timeout":97,"extra_body":{"frequency_penalty":0.3}}`,
+		),
+		&selected,
+	); err != nil {
 		t.Fatal(err)
 	}
 	h, cookie, path := modelInferenceDashboard(t, []config.ModelConfig{selected})
-	r := httptest.NewRequest("PUT", "/api/models/0", strings.NewReader(`{"model_name":"renamed","model":"openai/gpt-5.4"}`))
+	r := httptest.NewRequest(
+		"PUT",
+		"/api/models/0",
+		strings.NewReader(`{"model_name":"renamed","model":"openai/gpt-5.4"}`),
+	)
 	r.AddCookie(cookie)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -164,18 +241,39 @@ func TestModelRenamePreservesBindingAndUneditedSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := saved.ModelList[0]
-	if model.ModelName != "renamed" || model.APIKey != "saved-key" || model.APIBase != "https://custom.example/v1" || model.RequestTimeout != 97 || len(model.Fallbacks) != 1 || model.Fallbacks[0] != "backup" || model.ExtraBody["frequency_penalty"] != 0.3 {
+	if model.ModelName != "renamed" || model.APIKey != "saved-key" || model.APIBase != "https://custom.example/v1" ||
+		model.RequestTimeout != 97 ||
+		len(model.Fallbacks) != 1 ||
+		model.Fallbacks[0] != "backup" ||
+		model.ExtraBody["frequency_penalty"] != 0.3 {
 		t.Fatalf("rename lost model settings: %+v", model)
 	}
 }
 
 func TestCodexAccountPatchPreservesReferencesAndIndependentFields(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	if err := auth.SaveAccount(&auth.AccountConnection{ID: "first", Label: "Same email", Provider: "openai", Enabled: true, Credential: &auth.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "first-secret"}}); err != nil {
+	if err := auth.SaveAccount(
+		&auth.AccountConnection{
+			ID:         "first",
+			Label:      "Same email",
+			Provider:   "openai",
+			Enabled:    true,
+			Credential: &auth.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "first-secret"},
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
-	h, cookie, path := modelInferenceDashboard(t, []config.ModelConfig{{ModelName: "selected", Model: "openai/gpt-5.4", AuthMethod: "oauth", AccountID: "first"}})
-	if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/first", `{"label":"Renamed"}`, nil); w.Code != http.StatusUnauthorized {
+	h, cookie, path := modelInferenceDashboard(
+		t,
+		[]config.ModelConfig{{ModelName: "selected", Model: "openai/gpt-5.4", AuthMethod: "oauth", AccountID: "first"}},
+	)
+	if w := dashboardRequest(
+		h,
+		"PATCH",
+		"/api/oauth/accounts/first",
+		`{"label":"Renamed"}`,
+		nil,
+	); w.Code != http.StatusUnauthorized {
 		t.Fatalf("unprotected patch=%d", w.Code)
 	}
 	for _, body := range []string{`{"enabled":false}`, `{"label":"Renamed"}`} {
@@ -198,7 +296,7 @@ func TestCodexAccountPatchPreservesReferencesAndIndependentFields(t *testing.T) 
 	if cfg.ModelList[0].AccountID != "first" {
 		t.Fatal("rename changed stable model reference")
 	}
-	for _, body := range []string{`{"label":"  "}`, `{"enabled":true,"label":""}`, `{"access_token":"replace"}`} {
+	for _, body := range []string{`{"label":"  "}`, `{"enabled":true,"label":""}`, `{"access_token":"replace"}`, `{"enabled":true}{"enabled":false}`} {
 		if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/first", body, cookie); w.Code != 400 {
 			t.Fatalf("invalid patch accepted=%d %s", w.Code, w.Body.String())
 		}
@@ -212,7 +310,20 @@ func TestCodexAccountPatchPreservesReferencesAndIndependentFields(t *testing.T) 
 func TestCodexExplicitAccountProbeRecordsOnlySelectedIdentity(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	for _, id := range []string{"first", "second"} {
-		if err := auth.SaveAccount(&auth.AccountConnection{ID: id, Label: "Same email", Provider: "openai", Enabled: true, Credential: &auth.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: id + "-secret", AccountID: "workspace-" + id}}); err != nil {
+		if err := auth.SaveAccount(
+			&auth.AccountConnection{
+				ID:       id,
+				Label:    "Same email",
+				Provider: "openai",
+				Enabled:  true,
+				Credential: &auth.AuthCredential{
+					Provider:    "openai",
+					AuthMethod:  "oauth",
+					AccessToken: id + "-secret",
+					AccountID:   "workspace-" + id,
+				},
+			},
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -220,7 +331,8 @@ func TestCodexExplicitAccountProbeRecordsOnlySelectedIdentity(t *testing.T) {
 	original := http.DefaultTransport
 	http.DefaultTransport = accountRecordingTransport{handler: func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.Header.Get("Authorization") != "Bearer second-secret" || r.Header.Get("Chatgpt-Account-Id") != "workspace-second" {
+		if r.Header.Get("Authorization") != "Bearer second-secret" ||
+			r.Header.Get("Chatgpt-Account-Id") != "workspace-second" {
 			t.Error("probe changed selected identity")
 		}
 		body, _ := io.ReadAll(r.Body)
@@ -231,7 +343,12 @@ func TestCodexExplicitAccountProbeRecordsOnlySelectedIdentity(t *testing.T) {
 		if fail {
 			status, content = 503, `{"error":{"code":"unavailable","message":"second-secret"}}`
 		}
-		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(content)), Request: r}, nil
+		return &http.Response{
+			StatusCode: status,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(content)),
+			Request:    r,
+		}, nil
 	}}
 	t.Cleanup(func() { http.DefaultTransport = original })
 	h, cookie, _ := modelInferenceDashboard(t, nil)
@@ -249,35 +366,71 @@ func TestCodexExplicitAccountProbeRecordsOnlySelectedIdentity(t *testing.T) {
 	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, nil); w.Code != 401 {
 		t.Fatal("probe unprotected")
 	}
-	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, cookie); w.Code != 200 {
+	if w := dashboardRequest(
+		h,
+		"POST",
+		"/api/oauth/accounts/second/test",
+		`{"model":"gpt-5.4"}`,
+		cookie,
+	); w.Code != 200 {
 		t.Fatalf("probe=%d %s", w.Code, w.Body.String())
 	}
 	successful := list()
-	if calls != 1 || !strings.Contains(successful, `"last_success_at":`) || !strings.Contains(successful, `"model":"gpt-5.4"`) || strings.Contains(successful, "secret") {
+	if calls != 1 || !strings.Contains(successful, `"last_success_at":`) ||
+		!strings.Contains(successful, `"model":"gpt-5.4"`) ||
+		strings.Contains(successful, "secret") {
 		t.Fatalf("missing/sensitive successful probe: %s calls%d", successful, calls)
 	}
 	fail = true
-	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, cookie); w.Code != 502 || strings.Contains(w.Body.String(), "secret") {
+	if w := dashboardRequest(
+		h,
+		"POST",
+		"/api/oauth/accounts/second/test",
+		`{"model":"gpt-5.4"}`,
+		cookie,
+	); w.Code != 502 ||
+		strings.Contains(w.Body.String(), "secret") {
 		t.Fatalf("failure=%d %s", w.Code, w.Body.String())
 	}
 	failed := list()
-	if calls != 2 || !strings.Contains(failed, `"status":"temporarily_unavailable"`) || !strings.Contains(failed, `"last_success_at":`) {
+	if calls != 2 || !strings.Contains(failed, `"status":"temporarily_unavailable"`) ||
+		!strings.Contains(failed, `"last_success_at":`) {
 		t.Fatalf("failed probe lost previous success or retried: %s calls%d", failed, calls)
 	}
 	if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/second", `{"enabled":false}`, cookie); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
-	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, cookie); w.Code != 400 || calls != 2 {
+	if w := dashboardRequest(
+		h,
+		"POST",
+		"/api/oauth/accounts/second/test",
+		`{"model":"gpt-5.4"}`,
+		cookie,
+	); w.Code != 400 ||
+		calls != 2 {
 		t.Fatalf("disabled account sent request: %d calls%d", w.Code, calls)
 	}
 }
 
 func TestCodexAccountDeleteNamesReferencesAndRejectsLateBindings(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	if err := auth.SaveAccount(&auth.AccountConnection{ID: "selected", Label: "Selected", Provider: "openai", Enabled: true, Credential: &auth.AuthCredential{AccessToken: "keep-secret"}}); err != nil {
+	if err := auth.SaveAccount(
+		&auth.AccountConnection{
+			ID:         "selected",
+			Label:      "Selected",
+			Provider:   "openai",
+			Enabled:    true,
+			Credential: &auth.AuthCredential{AccessToken: "keep-secret"},
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
-	h, cookie, _ := modelInferenceDashboard(t, []config.ModelConfig{{ModelName: "Work model", Model: "openai/gpt-5.4", AuthMethod: "oauth", AccountID: "selected"}})
+	h, cookie, _ := modelInferenceDashboard(
+		t,
+		[]config.ModelConfig{
+			{ModelName: "Work model", Model: "openai/gpt-5.4", AuthMethod: "oauth", AccountID: "selected"},
+		},
+	)
 	if w := dashboardRequest(h, "DELETE", "/api/oauth/accounts/selected", "", nil); w.Code != 401 {
 		t.Fatal("delete unprotected")
 	}
@@ -297,7 +450,13 @@ func TestCodexAccountDeleteNamesReferencesAndRejectsLateBindings(t *testing.T) {
 	if _, err := auth.GetAccount("selected"); !errors.Is(err, auth.ErrAccountNotFound) {
 		t.Fatal("account remained after deletion")
 	}
-	if w := dashboardRequest(h, "POST", "/api/models", `{"model_name":"Late binding","model":"openai/gpt-5.4","auth_method":"oauth","account_id":"selected"}`, cookie); w.Code == 200 {
+	if w := dashboardRequest(
+		h,
+		"POST",
+		"/api/models",
+		`{"model_name":"Late binding","model":"openai/gpt-5.4","auth_method":"oauth","account_id":"selected"}`,
+		cookie,
+	); w.Code == 200 {
 		t.Fatal("new model bound to deleted connection")
 	}
 }
