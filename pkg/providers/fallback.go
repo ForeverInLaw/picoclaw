@@ -187,7 +187,10 @@ func (fc *FallbackChain) execute(
 			return nil, ctx.Err()
 		}
 
-		availability := fc.cooldown.AccountAvailability(candidate.AccountID)
+		availability, availabilityErr := fc.cooldown.AccountAvailabilityContext(ctx, candidate.AccountID)
+		if availabilityErr != nil {
+			return nil, availabilityErr
+		}
 		if !availability.Available {
 			unavailable := &CandidateUnavailableError{
 				Reason:  availability.Reason,
@@ -302,7 +305,7 @@ func (fc *FallbackChain) execute(
 		}
 
 		// Retriable error: mark failure and continue to next candidate.
-		if !fc.cooldown.recordAccountFailure(candidate, availability.SessionVersion, failErr) {
+		if !fc.cooldown.recordAccountFailure(ctx, candidate, availability.SessionVersion, failErr) {
 			fc.cooldown.RecordFailure(cooldownKey, failErr)
 		}
 		result.Attempts = append(result.Attempts, FallbackAttempt{

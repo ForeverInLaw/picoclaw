@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/auth"
@@ -26,15 +27,23 @@ type AccountAvailability struct {
 }
 
 func (ct *CooldownTracker) AccountAvailability(id string) AccountAvailability {
+	availability, _ := ct.AccountAvailabilityContext(context.Background(), id)
+	return availability
+}
+
+func (ct *CooldownTracker) AccountAvailabilityContext(ctx context.Context, id string) (AccountAvailability, error) {
 	result := AccountAvailability{AccountID: id, Available: true}
 	if id == "" {
-		return result
+		return result, nil
 	}
-	state, err := auth.AccountState(id)
+	state, err := auth.AccountStateContext(ctx, id)
 	if err != nil {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
 		result.Available = false
 		result.Reason = FailoverAuth
-		return result
+		return result, nil
 	}
 	result.SessionVersion = state.SessionVersion
 	ct.mu.Lock()
@@ -47,7 +56,7 @@ func (ct *CooldownTracker) AccountAvailability(id string) AccountAvailability {
 	if !state.Enabled || state.RequiresReauthorization || health != nil && health.reauthorization {
 		result.Available = false
 		result.Reason = FailoverAuth
-		return result
+		return result, nil
 	}
 	now := ct.nowFunc()
 	if health != nil && health.quota {
@@ -55,7 +64,7 @@ func (ct *CooldownTracker) AccountAvailability(id string) AccountAvailability {
 			result.Available = false
 			result.Reason = FailoverBilling
 			result.NextEligibleAt = health.quotaReset
-			return result
+			return result, nil
 		}
 		health.quota = false
 		health.quotaReset = time.Time{}
@@ -65,10 +74,11 @@ func (ct *CooldownTracker) AccountAvailability(id string) AccountAvailability {
 		result.Reason = FailoverRateLimit
 		result.NextEligibleAt = health.rateLimitUntil
 	}
-	return result
+	return result, nil
 }
 
 func (ct *CooldownTracker) recordAccountFailure(
+	ctx context.Context,
 	candidate FallbackCandidate,
 	version string,
 	failure *FailoverError,
@@ -82,7 +92,7 @@ func (ct *CooldownTracker) recordAccountFailure(
 		!(failure.Reason == FailoverAuth && failure.Status == 401) {
 		return false
 	}
-	current, err := auth.AccountState(candidate.AccountID)
+	current, err := auth.AccountStateContext(ctx, candidate.AccountID)
 	if err != nil || current.SessionVersion != version {
 		return true
 	}

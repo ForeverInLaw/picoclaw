@@ -124,7 +124,6 @@ func (al *AgentLoop) captureRouting(agent *AgentInstance) (*AgentInstance, error
 // foreground inference. The adapter retains the request's model configuration
 // when a background summary outlives its originating request.
 type routingContextProvider struct {
-	mu         sync.Mutex
 	routing    *requestRouting
 	chain      *providers.FallbackChain
 	agent      *AgentInstance
@@ -148,11 +147,12 @@ func (p *routingContextProvider) Chat(
 		ctx,
 		p.routing.prefer(p.candidates),
 		func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
-			p.mu.Lock()
 			client, err := p.resolve(candidate)
-			p.mu.Unlock()
 			if err != nil {
 				return nil, err
+			}
+			if stateful, owned := client.(providers.StatefulProvider); owned {
+				defer stateful.Close()
 			}
 			definitions, opts := prepareCandidateRequest(
 				p.routing.cfg,

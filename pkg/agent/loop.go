@@ -2352,6 +2352,9 @@ turnLoop:
 						return nil, err
 					}
 				}
+				if stateful, owned := client.(providers.StatefulProvider); owned && client != activeProvider {
+					defer stateful.Close()
+				}
 				response, err := callProvider(ctx, client, candidate)
 				lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
 				return response, err

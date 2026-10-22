@@ -55,7 +55,7 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 	cred := account.Credential
 	provider := NewCodexProvider(cred.AccessToken, cred.AccountID)
 	provider.contextTokenSource = func(ctx context.Context) (string, string, error) {
-		state, err := auth.AccountState(accountID)
+		state, err := auth.AccountStateContext(ctx, accountID)
 		if err != nil || !state.Enabled || state.RequiresReauthorization {
 			return "", "", &CandidateUnavailableError{
 				Reason:  FailoverAuth,
