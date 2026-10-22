@@ -173,7 +173,27 @@
       "models": "Models",
       "connection": "Codex account",
       "select": "Select an account",
-      "plan_permission_required": "ChatGPT plan permission required"
+      "plan_permission_required": "ChatGPT plan permission required",
+      "name": "Account name",
+      "reconnect": "Reconnect",
+      "disable": "Disable",
+      "enable": "Enable",
+      "delete": "Delete account",
+      "deleteTitle": "Delete {{name}}?",
+      "deleteHint": "This removes the saved connection and credentials. Replace its references in Models before deleting it.",
+      "lastSuccess": "Last successful test",
+      "neverChecked": "Not tested",
+      "lastProbe": "Last test",
+      "testModel": "Exact OpenAI model identifier",
+      "testHint": "Sends one short request through this account. May incur usage. No reserve account or model is used.",
+      "test": "Test account",
+      "testing": "Testing…",
+      "probe": {
+        "success": "Answered successfully",
+        "failed": "Test failed",
+        "temporarily_unavailable": "Temporarily unavailable",
+        "reauthorization_required": "Sign in again"
+      }
     },
     "manual": {
       "continueWithChatGPT": "Continue with ChatGPT",

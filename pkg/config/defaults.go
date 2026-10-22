@@ -23,7 +23,7 @@ func DefaultConfig() *Config {
 	}
 	workspacePath := filepath.Join(homePath, "workspace")
 
-	return &Config{
+	cfg := &Config{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
 				LogLevel:                  "fatal",
@@ -651,4 +651,6 @@ func DefaultConfig() *Config {
 			GoVersion: GoVersion,
 		},
 	}
+	cfg.EnsureModelIDs()
+	return cfg
 }

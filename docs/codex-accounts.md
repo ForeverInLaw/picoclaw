@@ -1,7 +1,10 @@
 # Codex account connections
 
 Codex OAuth connections belong to the Picoclaw instance. Open **Credentials** to
-see each saved connection's label, authorization state and configured models.
+see each saved connection's label, stable connection ID, authorization state and
+configured models. The ID distinguishes registrations with the same email or
+name. **Last successful test** and **Last test** show actual explicit probe
+outcomes independently of whether authorization is present.
 Open a Codex model in **Models** and select its account before saving. Viewing
 these settings never sends an inference request. **Test model** sends one short
 request through exactly that model and connection; it does not use a fallback.
@@ -115,3 +118,35 @@ eligible account performs it; CI requires no subscription or personal token.
 Signing out clears the selected credentials (or all credentials for explicit
 CLI logout-all), while retaining the stable host identity and saved account/client
 mappings. Signing out and deleting an account connection are separate actions.
+
+## Manage an individual connection
+
+**Credentials** provides rename, reconnect, enable/disable, delete and **Test
+account** actions for each saved connection. Enter the exact OpenAI model slug
+for a test; it sends one short request through that connection only. Both this
+action and the saved-model test record only timestamp, model, status and latency,
+with the last successful timestamp retained after a later failed test. Provider
+answers and raw errors are not saved. Opening settings never probes inference.
+
+Renaming preserves model references. Reconnect uses the selected registration's
+issued client and verified issuer/subject, retaining its current name and enabled
+state. The legacy connection follows the migration guidance above. Disabling
+blocks the next outbound call, including the next inference step inside an
+already running task; an already sent call can finish. Re-enabling retains the
+saved authorization and previous test history.
+
+Delete returns the names of configured models that still reference the account;
+replace their account selection in **Models** first. Disabling remains available
+while referenced. Deletion and model binding saves share a cross-process writer
+guard, so a concurrent model edit cannot leave a reference to a deleted account.
+A late refresh, reconnect or test result cannot recreate a deleted connection.
+
+| Protected endpoint | Action |
+| --- | --- |
+| `PATCH /api/oauth/accounts/{id}` | Update only supplied `label` and/or `enabled` fields atomically |
+| `POST /api/oauth/accounts/{id}/test` | Probe exact connection with `{ "model": "<OpenAI slug>" }` |
+| `DELETE /api/oauth/accounts/{id}` | Remove unused connection; `409` lists blocking model names |
+
+Tests use authenticated dashboard sessions, temporary stores and fake
+OAuth/inference endpoints. Run `go test ./pkg/auth ./web/backend/api` and
+`pnpm --dir web/frontend test:models`; no personal tokens or paid calls are needed.

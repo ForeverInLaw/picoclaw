@@ -28,6 +28,7 @@ const (
 )
 
 type CodexProvider struct {
+	exactModel         bool
 	registered         bool
 	contextTokenSource func(context.Context) (string, string, error)
 	client             *openai.Client
@@ -37,6 +38,9 @@ type CodexProvider struct {
 }
 
 const defaultCodexInstructions = "You are Codex, a coding assistant."
+
+// SetExactModel prevents legacy compatibility substitution for explicit probes.
+func (p *CodexProvider) SetExactModel(exact bool) { p.exactModel = exact }
 
 func NewCodexProvider(token, accountID string) *CodexProvider {
 	opts := []option.RequestOption{
@@ -108,7 +112,7 @@ func (p *CodexProvider) chat(
 	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	accountID := p.accountID
 	resolvedModel, fallbackReason := model, ""
-	if !p.registered {
+	if !p.registered && !p.exactModel {
 		resolvedModel, fallbackReason = resolveCodexModel(model)
 	}
 	if fallbackReason != "" {
@@ -168,7 +172,15 @@ func (p *CodexProvider) chat(
 			}
 		}
 		if len(functions) > 0 {
-			namespaced = append(namespaced, map[string]any{"type": "namespace", "name": "picoclaw", "description": "Picoclaw local tools", "tools": functions})
+			namespaced = append(
+				namespaced,
+				map[string]any{
+					"type":        "namespace",
+					"name":        "picoclaw",
+					"description": "Picoclaw local tools",
+					"tools":       functions,
+				},
+			)
 		}
 		if len(namespaced) > 0 {
 			opts = append(opts, option.WithJSONSet("tools", namespaced))
@@ -230,7 +242,11 @@ func (p *CodexProvider) chat(
 		}
 		if evt.Type == "response.failed" {
 			if status, ok := codexResponseErrorStatus(string(evt.Response.Error.Code)); ok {
-				failure := &protocoltypes.HTTPError{StatusCode: status, Code: string(evt.Response.Error.Code), Wrapped: fmt.Errorf("Codex response failed (%s)", evt.Response.Error.Code)}
+				failure := &protocoltypes.HTTPError{
+					StatusCode: status,
+					Code:       string(evt.Response.Error.Code),
+					Wrapped:    fmt.Errorf("Codex response failed (%s)", evt.Response.Error.Code),
+				}
 				if transportResponse != nil {
 					failure.RetryAfter = common.RetryAfter(transportResponse.Header, time.Now())
 				}
@@ -283,7 +299,11 @@ func (p *CodexProvider) chat(
 			if _, ok := codexResponseErrorStatus(apiErr.Code); ok {
 				code = apiErr.Code
 			}
-			failure := &protocoltypes.HTTPError{StatusCode: apiErr.StatusCode, Code: code, Wrapped: fmt.Errorf("ChatGPT model request failed (HTTP %d)", apiErr.StatusCode)}
+			failure := &protocoltypes.HTTPError{
+				StatusCode: apiErr.StatusCode,
+				Code:       code,
+				Wrapped:    fmt.Errorf("ChatGPT model request failed (HTTP %d)", apiErr.StatusCode),
+			}
 			if apiErr.Response != nil {
 				failure.RetryAfter = common.RetryAfter(apiErr.Response.Header, time.Now())
 			}
@@ -620,7 +640,10 @@ func codexResponseErrorStatus(code string) (int, bool) {
 		return 503, true
 	case "subscription_sharing_invalid_user":
 		return 401, true
-	case "subscription_sharing_user_not_eligible", "subscription_sharing_route_not_supported", "chatpass_v2_scope_not_authorized", "chatpass_v2_invalid_authorization_context":
+	case "subscription_sharing_user_not_eligible",
+		"subscription_sharing_route_not_supported",
+		"chatpass_v2_scope_not_authorized",
+		"chatpass_v2_invalid_authorization_context":
 		return 403, true
 	case "subscription_sharing_unsupported_capability", "invalid_prompt", "invalid_request":
 		return 400, true
