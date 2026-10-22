@@ -130,6 +130,7 @@ type oauthFlowResponse struct {
 func (h *Handler) registerOAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/oauth/accounts", h.handleListAccounts)
 	mux.HandleFunc("PATCH /api/oauth/accounts/{id}", h.handlePatchAccount)
+	mux.HandleFunc("DELETE /api/oauth/accounts/{id}", h.handleDeleteAccount)
 	mux.HandleFunc("POST /api/oauth/accounts/{id}/test", h.handleTestAccount)
 	mux.HandleFunc("POST /api/oauth/flows/{id}/complete", h.handleCompleteCodexAccount)
 	mux.HandleFunc("GET /api/oauth/providers", h.handleListOAuthProviders)

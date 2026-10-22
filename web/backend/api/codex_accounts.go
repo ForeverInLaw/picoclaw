@@ -113,3 +113,39 @@ func (h *Handler) handleTestAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	h.runModelInference(w, r, config.ModelConfig{ModelName: "Account test", Model: "openai/" + request.Model, AuthMethod: "oauth", AccountID: r.PathValue("id")})
 }
+
+// Delete shares the configuration writer guard with every model binding save.
+// The order is config guard -> auth store, matching model mutation validation.
+func (h *Handler) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	var references []string
+	err := config.WithConfigMutationContext(r.Context(), h.configPath, func() error {
+		cfg, err := config.LoadConfig(h.configPath)
+		if err != nil {
+			return err
+		}
+		for _, model := range cfg.ModelList {
+			if model.AccountID == r.PathValue("id") {
+				references = append(references, model.ModelName)
+			}
+		}
+		if len(references) > 0 {
+			return nil
+		}
+		return auth.DeleteAccount(r.PathValue("id"))
+	})
+	if err != nil {
+		if errors.Is(err, auth.ErrAccountNotFound) {
+			modelTestError(w, 404, "Account connection no longer exists.")
+		} else {
+			modelTestError(w, 500, "Could not delete account connection.")
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if len(references) > 0 {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "in_use", "message": "Replace this account in the listed models before deleting it.", "models": references})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}

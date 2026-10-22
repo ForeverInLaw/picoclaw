@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -268,5 +269,35 @@ func TestCodexExplicitAccountProbeRecordsOnlySelectedIdentity(t *testing.T) {
 	}
 	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, cookie); w.Code != 400 || calls != 2 {
 		t.Fatalf("disabled account sent request: %d calls%d", w.Code, calls)
+	}
+}
+
+func TestCodexAccountDeleteNamesReferencesAndRejectsLateBindings(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	if err := auth.SaveAccount(&auth.AccountConnection{ID: "selected", Label: "Selected", Provider: "openai", Enabled: true, Credential: &auth.AuthCredential{AccessToken: "keep-secret"}}); err != nil {
+		t.Fatal(err)
+	}
+	h, cookie, _ := modelInferenceDashboard(t, []config.ModelConfig{{ModelName: "Work model", Model: "openai/gpt-5.4", AuthMethod: "oauth", AccountID: "selected"}})
+	if w := dashboardRequest(h, "DELETE", "/api/oauth/accounts/selected", "", nil); w.Code != 401 {
+		t.Fatal("delete unprotected")
+	}
+	w := dashboardRequest(h, "DELETE", "/api/oauth/accounts/selected", "", cookie)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), `"models":["Work model"]`) {
+		t.Fatalf("delete ignored refs: %d %s", w.Code, w.Body.String())
+	}
+	if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/selected", `{"enabled":false}`, cookie); w.Code != 200 {
+		t.Fatal("referenced account cannot disable")
+	}
+	if w := dashboardRequest(h, "DELETE", "/api/models/0", "", cookie); w.Code != 200 {
+		t.Fatalf("unbind model=%d %s", w.Code, w.Body.String())
+	}
+	if w := dashboardRequest(h, "DELETE", "/api/oauth/accounts/selected", "", cookie); w.Code != 200 {
+		t.Fatalf("unused delete=%d %s", w.Code, w.Body.String())
+	}
+	if _, err := auth.GetAccount("selected"); !errors.Is(err, auth.ErrAccountNotFound) {
+		t.Fatal("account remained after deletion")
+	}
+	if w := dashboardRequest(h, "POST", "/api/models", `{"model_name":"Late binding","model":"openai/gpt-5.4","auth_method":"oauth","account_id":"selected"}`, cookie); w.Code == 200 {
+		t.Fatal("new model bound to deleted connection")
 	}
 }
