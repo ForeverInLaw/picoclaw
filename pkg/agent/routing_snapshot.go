@@ -174,7 +174,13 @@ func (p *routingContextProvider) Chat(
 			); err != nil {
 				return nil, &providers.IncompatibleCandidateError{Reason: err.Error()}
 			}
-			return client.Chat(ctx, messages, definitions, candidate.Model, opts)
+			return providers.RunModelAttempt(
+				ctx,
+				candidateInactivityTimeout(p.routing.cfg, candidate, p.agent.Workspace),
+				func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+					return client.Chat(attemptCtx, messages, definitions, candidate.Model, opts)
+				},
+			)
 		},
 		nil,
 	)

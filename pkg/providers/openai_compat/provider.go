@@ -320,12 +320,14 @@ func parseStreamingResponse(ctx context.Context, body io.Reader, onUpdate func(c
 		}
 
 		for _, choice := range chunk.Choices {
-			progress := choice.Delta.Content != "" || choice.Delta.ReasoningContent != "" || choice.Delta.Reasoning != ""
+			progress := choice.Delta.Content != "" || choice.Delta.ReasoningContent != "" ||
+				choice.Delta.Reasoning != ""
 			for _, detail := range choice.Delta.ReasoningDetails {
 				progress = progress || detail.Text != ""
 			}
 			for _, call := range choice.Delta.ToolCalls {
-				progress = progress || call.ID != "" || (call.Function != nil && (call.Function.Name != "" || call.Function.Arguments != ""))
+				progress = progress || call.ID != "" ||
+					(call.Function != nil && (call.Function.Name != "" || call.Function.Arguments != ""))
 			}
 			if progress {
 				protocoltypes.ReportModelProgress(ctx)

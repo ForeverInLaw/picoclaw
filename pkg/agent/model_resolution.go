@@ -232,7 +232,11 @@ func ConfiguredDefaultModels(cfg *config.Config) []config.ModelConfig {
 }
 
 // candidateInactivityTimeout reads only the request's captured model settings.
-func candidateInactivityTimeout(cfg *config.Config, candidate providers.FallbackCandidate, workspace string) time.Duration {
+func candidateInactivityTimeout(
+	cfg *config.Config,
+	candidate providers.FallbackCandidate,
+	workspace string,
+) time.Duration {
 	mc, err := modelConfigForCandidate(cfg, candidate, workspace)
 	if err != nil {
 		return config.DefaultModelInactivityTimeout

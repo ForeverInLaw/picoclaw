@@ -12,6 +12,18 @@ import (
 
 const DefaultInactivityTimeout = config.DefaultModelInactivityTimeout
 
+type inactivityDeliveryKey struct{}
+
+// WithoutModelInactivity excludes synchronous preview delivery from model wait
+// time. Only decoded provider events reset the underlying progress clock.
+func WithoutModelInactivity(ctx context.Context, delivery func()) {
+	if pause, ok := ctx.Value(inactivityDeliveryKey{}).(func() func()); ok {
+		resume := pause()
+		defer resume()
+	}
+	delivery()
+}
+
 // InactivityTimeoutError ends only the stalled attempt, leaving its request live.
 type InactivityTimeoutError struct{ Timeout time.Duration }
 
@@ -22,7 +34,11 @@ func (*InactivityTimeoutError) Unwrap() error { return context.DeadlineExceeded 
 
 // RunModelAttempt bounds one synchronous provider call. Callers keep local tool
 // execution, retry waits, and delivery outside this scope. Providers must honor ctx.
-func RunModelAttempt(ctx context.Context, limit time.Duration, call func(context.Context) (*LLMResponse, error)) (*LLMResponse, error) {
+func RunModelAttempt(
+	ctx context.Context,
+	limit time.Duration,
+	call func(context.Context) (*LLMResponse, error),
+) (*LLMResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -33,16 +49,45 @@ func RunModelAttempt(ctx context.Context, limit time.Duration, call func(context
 	attempt, cancel := context.WithCancelCause(ctx)
 	var mu sync.Mutex
 	lastProgress := time.Now()
+	var pausedAt time.Time
+	pauses := 0
 	wake := make(chan struct{}, 1)
 	attempt = protocoltypes.WithModelProgress(attempt, func() {
 		mu.Lock()
 		if attempt.Err() == nil {
 			lastProgress = time.Now()
+			if pauses > 0 {
+				pausedAt = lastProgress
+			}
 		}
 		mu.Unlock()
 		select {
 		case wake <- struct{}{}:
 		default:
+		}
+	})
+	attempt = context.WithValue(attempt, inactivityDeliveryKey{}, func() func() {
+		mu.Lock()
+		if pauses == 0 {
+			pausedAt = time.Now()
+		}
+		pauses++
+		mu.Unlock()
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+		return func() {
+			mu.Lock()
+			pauses--
+			if pauses == 0 {
+				lastProgress = lastProgress.Add(time.Since(pausedAt))
+			}
+			mu.Unlock()
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
 		}
 	})
 	done, stopped := make(chan struct{}), make(chan struct{})
@@ -61,6 +106,9 @@ func RunModelAttempt(ctx context.Context, limit time.Duration, call func(context
 			}
 			mu.Lock()
 			remaining := limit - time.Since(lastProgress)
+			if pauses > 0 {
+				remaining = limit
+			}
 			if remaining <= 0 {
 				cancel(failure)
 				mu.Unlock()

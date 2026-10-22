@@ -107,7 +107,10 @@ role markers and usage bookkeeping do not. A stalled attempt is canceled and its
 stream closed before the next compatible reserve starts. The user's request
 remains live. Completed tool results stay in the conversation, and local tool
 execution does not use this timer. Retry pauses and context-compaction queue waits
-also sit outside individual model attempts.
+also sit outside individual model attempts. Synchronous preview delivery is
+excluded without resetting the clock for model progress. Streaming adapters
+require their terminal event or finish reason; a clean early EOF cannot publish
+a partial answer or dispatch an unfinished tool call.
 
 `request_timeout` remains a separate total transport deadline where supported.
 Non-streaming adapters have no exposed intermediate generation events, so their

@@ -2315,11 +2315,15 @@ turnLoop:
 					}
 					if providerCanStreamPhases {
 						response, err = providers.RunModelAttempt(ctx, attemptLimit, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
-							return phasedProvider.ChatStreamContent(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, onUpdate)
+							return phasedProvider.ChatStreamContent(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, func(update providers.StreamContent) {
+								providers.WithoutModelInactivity(attemptCtx, func() { onUpdate(update) })
+							})
 						})
 					} else {
 						response, err = providers.RunModelAttempt(ctx, attemptLimit, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
-							return streamProvider.ChatStream(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
+							return streamProvider.ChatStream(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, func(content string) {
+								providers.WithoutModelInactivity(attemptCtx, func() { onUpdate(providers.StreamContent{Content: content}) })
+							})
 						})
 					}
 					if err != nil {
@@ -3767,10 +3771,9 @@ func (al *AgentLoop) retryLLMCall(
 		al.activeRequests.Add(1)
 		resp, err = func() (*providers.LLMResponse, error) {
 			defer al.activeRequests.Done()
-			return agent.Provider.Chat(
-				ctx,
+			return chatContextModel(
+				ctx, agent.Provider, contextInactivityTimeout(agent),
 				[]providers.Message{{Role: "user", Content: prompt}},
-				nil,
 				agent.Model,
 				map[string]any{
 					"max_tokens":       agent.MaxTokens,

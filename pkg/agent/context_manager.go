@@ -42,6 +42,7 @@ type ContextSnapshot struct {
 	Options              map[string]any
 	CanonicalFingerprint string
 	ReadError            error
+	InactivityTimeout    time.Duration
 }
 
 type ContextAssembly struct {
@@ -51,10 +52,11 @@ type ContextAssembly struct {
 
 func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 	snapshot := ContextSnapshot{
-		SessionKey: key,
-		ScopeKey:   key,
-		Provider:   agent.ContextProvider,
-		Model:      resolvedCandidateModel(agent.Candidates, agent.Model),
+		SessionKey:        key,
+		InactivityTimeout: contextInactivityTimeout(agent),
+		ScopeKey:          key,
+		Provider:          agent.ContextProvider,
+		Model:             resolvedCandidateModel(agent.Candidates, agent.Model),
 		Options: map[string]any{
 			"temperature":      agent.Temperature,
 			"max_tokens":       agent.MaxTokens,
@@ -326,10 +328,9 @@ func (m *seahorseContextManager) complete(
 		return "", fmt.Errorf("compaction has no configured output limit")
 	}
 	requestOptions["max_tokens"] = min(options.MaxTokens, maxTokens)
-	response, err := runtime.Provider.Chat(
-		ctx,
+	response, err := chatContextModel(
+		ctx, runtime.Provider, runtime.InactivityTimeout,
 		[]providers.Message{{Role: "user", Content: prompt}},
-		nil,
 		runtime.Model,
 		requestOptions,
 	)
