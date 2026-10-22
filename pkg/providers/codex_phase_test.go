@@ -2,7 +2,9 @@ package providers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -137,5 +139,26 @@ data: {"type":"response.completed","response":{"id":"r","status":"completed","ou
 	}
 	if fmt.Sprint(previews) != "[B AB ABC ABCD]" || response.Content != "ABCD" {
 		t.Fatalf("phase snapshots=%q final=%q", previews, response.Content)
+	}
+}
+
+func TestCodexRejectsStreamsWithoutCompletedResponse(t *testing.T) {
+	for _, ending := range []string{"eof", "incomplete", "failed"} {
+		t.Run(ending, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"delta\":\"Partial answer\"}\n\n")
+				if ending != "eof" {
+					fmt.Fprintf(w, "data: {\"type\":\"response.%s\",\"response\":{\"id\":\"r1\",\"status\":\"%s\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Partial answer\"}]}]}}\n\n", ending, ending)
+				}
+			}))
+			defer server.Close()
+			provider := NewCodexProvider("fixture-token", "")
+			provider.client = createOpenAITestClient(server.URL, "fixture-token", "")
+			response, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "hello"}}, nil, "gpt-5.3-codex", nil)
+			if !errors.Is(err, io.ErrUnexpectedEOF) || response != nil {
+				t.Fatalf("unfinished stream returned response=%+v error=%v", response, err)
+			}
+		})
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 
@@ -219,7 +220,7 @@ func (p *CodexProvider) chat(
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
 		return nil, fmt.Errorf("codex API call: %w", err)
 	}
-	if resp == nil {
+	if resp == nil || resp.Status != "completed" {
 		fields := map[string]any{
 			"requested_model":    model,
 			"resolved_model":     resolvedModel,
@@ -228,7 +229,7 @@ func (p *CodexProvider) chat(
 			"account_id_present": accountID != "",
 		}
 		logger.ErrorCF("provider.codex", "Codex stream ended without completed response event", fields)
-		return nil, fmt.Errorf("codex API call: stream ended without completed response")
+		return nil, fmt.Errorf("codex API call: stream ended without completed response: %w", io.ErrUnexpectedEOF)
 	}
 
 	return parseCodexResponse(resp), nil

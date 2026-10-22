@@ -77,14 +77,15 @@ type NativeSearchCapable interface {
 type FailoverReason string
 
 const (
-	FailoverAuth       FailoverReason = "auth"
-	FailoverRateLimit  FailoverReason = "rate_limit"
-	FailoverBilling    FailoverReason = "billing"
-	FailoverTimeout    FailoverReason = "timeout"
-	FailoverFormat     FailoverReason = "format"
-	FailoverOverloaded FailoverReason = "overloaded"
-	FailoverUnknown    FailoverReason = "unknown"
-	FailoverNetwork    FailoverReason = "network"
+	FailoverAuth         FailoverReason = "auth"
+	FailoverIncompatible FailoverReason = "incompatible"
+	FailoverRateLimit    FailoverReason = "rate_limit"
+	FailoverBilling      FailoverReason = "billing"
+	FailoverTimeout      FailoverReason = "timeout"
+	FailoverFormat       FailoverReason = "format"
+	FailoverOverloaded   FailoverReason = "overloaded"
+	FailoverUnknown      FailoverReason = "unknown"
+	FailoverNetwork      FailoverReason = "network"
 )
 
 // FailoverError wraps an LLM provider error with classification metadata.
@@ -144,3 +145,9 @@ func (e *FailoverError) IsTransient() bool {
 	return e.Reason == FailoverTimeout || e.Reason == FailoverNetwork || e.Reason == FailoverRateLimit ||
 		e.Reason == FailoverOverloaded
 }
+
+// IncompatibleCandidateError excludes a candidate from this operation without
+// declaring its credentials or endpoint unhealthy.
+type IncompatibleCandidateError struct{ Reason string }
+
+func (e *IncompatibleCandidateError) Error() string { return "incompatible candidate: " + e.Reason }
