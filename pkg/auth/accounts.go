@@ -37,7 +37,11 @@ type AccountConnection struct {
 }
 
 func GetAccount(id string) (*AccountConnection, error) {
-	store, err := LoadStore()
+	return GetAccountContext(context.Background(), id)
+}
+
+func GetAccountContext(ctx context.Context, id string) (*AccountConnection, error) {
+	store, err := LoadStoreContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -217,9 +221,6 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 	if current == nil {
 		return nil, ErrAccountNotFound
 	}
-	if !current.Enabled {
-		return nil, fmt.Errorf("account connection %q is disabled", id)
-	}
 	if !sameAccountSession(current, account) {
 		return nil, errors.New("account authorization changed during refresh")
 	}
@@ -231,8 +232,13 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 	if id == config.LegacyOpenAIAccountID {
 		store.Credentials["openai"] = refreshed
 	}
+	// Rotation may invalidate the old refresh token even after an administrator
+	// disables the connection. Save the new session under CAS, then block its use.
 	if err := saveStore(store); err != nil {
 		return nil, err
+	}
+	if !current.Enabled {
+		return nil, fmt.Errorf("account connection %q is disabled", id)
 	}
 	if !current.CanUsePlan() {
 		return nil, &TokenRequestError{StatusCode: 403, Code: "consent_required", ReauthorizationRequired: true}
@@ -283,7 +289,11 @@ type AccountSessionState struct {
 }
 
 func AccountState(id string) (AccountSessionState, error) {
-	account, err := GetAccount(id)
+	return AccountStateContext(context.Background(), id)
+}
+
+func AccountStateContext(ctx context.Context, id string) (AccountSessionState, error) {
+	account, err := GetAccountContext(ctx, id)
 	if err != nil {
 		return AccountSessionState{}, err
 	}

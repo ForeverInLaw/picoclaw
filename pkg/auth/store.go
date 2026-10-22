@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -56,8 +57,10 @@ func authFilePath() string {
 	return filepath.Join(home, ".picoclaw", "auth.json")
 }
 
-func LoadStore() (*AuthStore, error) {
-	unlock, err := lockStore()
+func LoadStore() (*AuthStore, error) { return LoadStoreContext(context.Background()) }
+
+func LoadStoreContext(ctx context.Context) (*AuthStore, error) {
+	unlock, err := lockStoreContext(ctx)
 	if err != nil {
 		return nil, err
 	}
