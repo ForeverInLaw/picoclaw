@@ -2264,7 +2264,6 @@ turnLoop:
 
 		modelAttempts := 0
 		retryAnnounced := false
-		var lastProviderError error
 		var lastCandidateFailure *providers.FailoverError
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
 			providerCtx, providerCancel := context.WithCancel(bus.WithStreamReplyTo(turnCtx, ts.opts.ReplyToMessageID))
@@ -2279,15 +2278,10 @@ turnLoop:
 
 			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
 				lastResponseModel = model
-				defer func() {
-					if requestErr != nil {
-						lastProviderError = requestErr
-					}
-				}()
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if modelAttempts >= modelMaxAttempts {
+				if modelAttempts >= max(modelMaxAttempts, len(activeCandidates)) {
 					return nil, errModelAttemptBudget
 				}
 				modelAttempts++
@@ -2366,6 +2360,9 @@ turnLoop:
 				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
 			}
 			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (*providers.LLMResponse, error) {
+				if len(activeCandidates) > 1 && al.fallback != nil {
+					return callProviderOnce(ctx, client, model)
+				}
 				for retry := 0; ; retry++ {
 					response, err := callProviderOnce(ctx, client, model)
 					delay, capacity := capacityRetryDelay(err, retry)
@@ -2388,10 +2385,6 @@ turnLoop:
 			if len(activeCandidates) > 1 && al.fallback != nil {
 				retryCurrentCandidate := lastCandidateFailure != nil && lastCandidateFailure.IsTransient()
 				runCandidate := func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
-					if !retryCurrentCandidate && modelAttempts > 0 && modelAttempts < modelMaxAttempts && lastProviderError != nil {
-						retryAnnounced = true
-						al.reportModelRetry(ctx, ts, modelAttempts, "fallback", lastProviderError, 0)
-					}
 					client, err := resolveCandidateProvider(candidate)
 					if err != nil {
 						return nil, err

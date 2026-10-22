@@ -450,3 +450,36 @@ func TestEmptyAnswerRecoverySharesTransientAttemptBudget(t *testing.T) {
 		}
 	})
 }
+
+func Test503TriesEveryConfiguredBackupBeforeWaiting(t *testing.T) {
+	for _, chat := range []string{"42", "inline:chosen"} {
+		t.Run(chat, func(t *testing.T) {
+			withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
+				unavailable := &protocoltypes.HTTPError{StatusCode: 503, Code: "capacity_unavailable", RetryAfter: time.Minute, Wrapped: errors.New("capacity unavailable")}
+				p := &retryScriptProvider{failures: []error{unavailable, unavailable, unavailable, unavailable}}
+				al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker())
+				a := al.registry.GetDefaultAgent()
+				a.Provider = p
+				a.Candidates = nil
+				for _, model := range []string{"primary", "backup-1", "backup-2", "backup-3", "backup-4"} {
+					a.Candidates = append(a.Candidates, providers.FallbackCandidate{Provider: "openai", Model: model})
+				}
+				start := time.Now()
+				got, err := al.processMessage(t.Context(), bus.InboundMessage{Channel: "telegram", ChatID: chat, SenderID: "telegram:42", Content: "hello"})
+				if err != nil || !strings.HasSuffix(got, "recovered") || strings.Join(p.models, ",") != "primary,backup-1,backup-2,backup-3,backup-4" || time.Since(start) != 0 {
+					t.Fatalf("answer=%q err=%v models=%v elapsed=%v", got, err, p.models, time.Since(start))
+				}
+				for {
+					select {
+					case status := <-mb.OutboundChan():
+						if status.Progress != nil && status.Progress.Kind == bus.ProgressRetry {
+							t.Fatalf("successful first-pass failover should be silent: %+v", status)
+						}
+					default:
+						return
+					}
+				}
+			})
+		})
+	}
+}
