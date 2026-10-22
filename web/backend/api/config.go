@@ -14,8 +14,8 @@ import (
 // registerConfigRoutes binds configuration management endpoints to the ServeMux.
 func (h *Handler) registerConfigRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", h.handleGetConfig)
-	mux.HandleFunc("PUT /api/config", h.handleUpdateConfig)
-	mux.HandleFunc("PATCH /api/config", h.handlePatchConfig)
+	mux.HandleFunc("PUT /api/config", h.withConfigMutation(h.handleUpdateConfig))
+	mux.HandleFunc("PATCH /api/config", h.withConfigMutation(h.handlePatchConfig))
 }
 
 // handleGetConfig returns the complete system configuration.
@@ -76,7 +76,7 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.SaveConfig(h.configPath, &cfg); err != nil {
+	if err := saveValidatedModels(h.configPath, &cfg); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -200,7 +200,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.SaveConfig(h.configPath, &newCfg); err != nil {
+	if err := saveValidatedModels(h.configPath, &newCfg); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
 	}
