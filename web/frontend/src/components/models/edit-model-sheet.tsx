@@ -1,7 +1,9 @@
 import { IconLoader2 } from "@tabler/icons-react"
-import { useEffect, useState } from "react"
+import { useMutation, useQuery } from "@tanstack/react-query"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import { getCodexAccounts } from "@/api/codex-accounts"
 import type { ModelTestConfiguration } from "@/api/model-probe"
 import { type ModelInfo, setDefaultModel, updateModel } from "@/api/models"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
@@ -13,6 +15,14 @@ import {
 } from "@/components/shared-form"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Sheet,
   SheetContent,
@@ -29,6 +39,7 @@ interface EditForm {
   apiBase: string
   proxy: string
   authMethod: string
+  accountID: string
   connectMode: string
   workspace: string
   rpm: string
@@ -44,49 +55,45 @@ interface EditModelSheetProps {
   onSaved: () => void
 }
 
-export function EditModelSheet({
-  model,
-  open,
-  onClose,
-  onSaved,
-}: EditModelSheetProps) {
-  const { t } = useTranslation()
-  const [form, setForm] = useState<EditForm>({
-    apiKey: "",
-    apiBase: "",
-    proxy: "",
-    authMethod: "",
-    connectMode: "",
-    workspace: "",
-    rpm: "",
-    maxTokensField: "",
-    requestTimeout: "",
-    thinkingLevel: "",
-  })
-  const [saving, setSaving] = useState(false)
-  const [setAsDefault, setSetAsDefault] = useState(false)
-  const [error, setError] = useState("")
+export function EditModelSheet(props: EditModelSheetProps) {
+  return <EditModelForm key={props.model?.index ?? "closed"} {...props} />
+}
 
-  useEffect(() => {
-    if (model) {
-      setForm({
-        apiKey: "",
-        apiBase: model.api_base ?? "",
-        proxy: model.proxy ?? "",
-        authMethod: model.auth_method ?? "",
-        connectMode: model.connect_mode ?? "",
-        workspace: model.workspace ?? "",
-        rpm: model.rpm ? String(model.rpm) : "",
-        maxTokensField: model.max_tokens_field ?? "",
-        requestTimeout: model.request_timeout
-          ? String(model.request_timeout)
-          : "",
-        thinkingLevel: model.thinking_level ?? "",
-      })
-      setSetAsDefault(model.is_default)
-      setError("")
-    }
-  }, [model])
+function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
+  const { t } = useTranslation()
+  const [form, setForm] = useState<EditForm>(() => ({
+    apiKey: "",
+    apiBase: model?.api_base ?? "",
+    proxy: model?.proxy ?? "",
+    authMethod: model?.auth_method ?? "",
+    accountID: model?.account_id ?? "",
+    connectMode: model?.connect_mode ?? "",
+    workspace: model?.workspace ?? "",
+    rpm: model?.rpm ? String(model.rpm) : "",
+    maxTokensField: model?.max_tokens_field ?? "",
+    requestTimeout: model?.request_timeout ? String(model.request_timeout) : "",
+    thinkingLevel: model?.thinking_level ?? "",
+  }))
+  const accounts = useQuery({
+    queryKey: ["codex-accounts"],
+    queryFn: getCodexAccounts,
+    enabled: open,
+  })
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!model || !configuration) return
+      await updateModel(model.index, configuration)
+      if (setAsDefault && !model.is_default)
+        await setDefaultModel(model.model_name)
+    },
+    onSuccess: () => {
+      onSaved()
+      onClose()
+    },
+  })
+  const saving = save.isPending
+  const [setAsDefault, setSetAsDefault] = useState(model?.is_default ?? false)
+  const [error, setError] = useState("")
 
   const setField =
     (key: keyof EditForm) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -96,41 +103,30 @@ export function EditModelSheet({
     ? {
         model_name: model.model_name,
         model: model.model,
-        api_base: form.apiBase || undefined,
+        api_base: form.apiBase,
         api_key: form.apiKey || undefined,
-        proxy: form.proxy || undefined,
-        auth_method: form.authMethod || undefined,
-        connect_mode: form.connectMode || undefined,
-        workspace: form.workspace || undefined,
-        rpm: form.rpm ? Number(form.rpm) : undefined,
-        max_tokens_field: form.maxTokensField || undefined,
-        request_timeout: form.requestTimeout
-          ? Number(form.requestTimeout)
-          : undefined,
-        thinking_level: form.thinkingLevel || undefined,
+        proxy: form.proxy,
+        auth_method: form.authMethod,
+        account_id: form.accountID,
+        connect_mode: form.connectMode,
+        workspace: form.workspace,
+        rpm: form.rpm ? Number(form.rpm) : 0,
+        max_tokens_field: form.maxTokensField,
+        request_timeout: form.requestTimeout ? Number(form.requestTimeout) : 0,
+        thinking_level: form.thinkingLevel,
         extra_body: model.extra_body,
       }
     : null
 
-  const handleSave = async () => {
-    if (!model || !configuration) return
-    setSaving(true)
+  const handleSave = () => {
     setError("")
-    try {
-      await updateModel(model.index, configuration)
-      if (setAsDefault && !model.is_default) {
-        await setDefaultModel(model.model_name)
-      }
-      onSaved()
-      onClose()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t("models.edit.saveError"))
-    } finally {
-      setSaving(false)
-    }
+    save.mutate(undefined, { onError: (e) => setError(e.message) })
   }
 
-  const isOAuth = model?.auth_method === "oauth"
+  const isOAuth = form.authMethod === "oauth" || form.authMethod === "token"
+  const isCodex =
+    isOAuth &&
+    (model?.model.startsWith("openai/") || !model?.model.includes("/"))
   const apiKeyPlaceholder = model?.configured
     ? maskedSecretPlaceholder(
         model.api_key,
@@ -155,6 +151,35 @@ export function EditModelSheet({
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-5 px-6 py-5">
+            {isCodex && (
+              <Field label={t("credentials.accounts.connection")}>
+                <Select
+                  value={form.accountID}
+                  onValueChange={(value) =>
+                    setForm((current) => ({ ...current, accountID: value }))
+                  }
+                >
+                  <SelectTrigger
+                    aria-label={t("credentials.accounts.connection")}
+                    className="w-full"
+                  >
+                    <SelectValue
+                      placeholder={t("credentials.accounts.select")}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {accounts.data?.accounts.map((account) => (
+                        <SelectItem key={account.id} value={account.id}>
+                          {account.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {accounts.error && <p role="alert">{accounts.error.message}</p>}
+              </Field>
+            )}
             {!isOAuth && (
               <Field
                 label={t("models.field.apiKey")}

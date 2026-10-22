@@ -11,6 +11,7 @@ import type { OAuthProviderStatus } from "@/api/oauth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
+import { CodexAccounts } from "./codex-accounts"
 import { CredentialCard } from "./credential-card"
 
 interface OpenAICredentialCardProps {
@@ -56,13 +57,7 @@ export function OpenAICredentialCard({
       description={t("credentials.providers.openai.description")}
       status={status?.status ?? "not_logged_in"}
       authMethod={status?.auth_method}
-      details={
-        status?.account_id ? (
-          <p>
-            {t("credentials.labels.account")}: {status.account_id}
-          </p>
-        ) : null
-      }
+      details={<CodexAccounts />}
       actions={
         <div className="border-muted flex h-[120px] flex-col rounded-lg border p-3">
           <div className="flex h-full flex-col gap-3">

@@ -9,6 +9,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 	anthropicmessages "github.com/sipeed/picoclaw/pkg/providers/anthropic_messages"
 	"github.com/sipeed/picoclaw/pkg/providers/azure"
@@ -27,15 +31,29 @@ func createClaudeAuthProvider() (LLMProvider, error) {
 }
 
 // createCodexAuthProvider creates a Codex provider using OAuth credentials from auth store.
-func createCodexAuthProvider() (LLMProvider, error) {
-	cred, err := getCredential("openai")
+func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
+	accountID := config.LegacyOpenAIAccountID
+	if len(accountIDs) > 0 && accountIDs[0] != "" {
+		accountID = accountIDs[0]
+	}
+	account, err := auth.GetAccount(accountID)
 	if err != nil {
-		return nil, fmt.Errorf("loading auth credentials: %w", err)
+		return nil, fmt.Errorf("loading Codex account connection: %w", err)
 	}
-	if cred == nil {
-		return nil, fmt.Errorf("no credentials for openai. Run: picoclaw auth login --provider openai")
+	if account.Credential == nil {
+		return nil, fmt.Errorf("Codex account connection requires authorization")
 	}
-	return NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexTokenSource()), nil
+	if !account.Enabled {
+		return nil, fmt.Errorf("Codex account connection is disabled")
+	}
+	cred := account.Credential
+	provider := NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexAccountTokenSource(accountID))
+	if account.Resource != "" {
+		// Registered ChatGPT accounts use the issued API resource; legacy CLI sessions retain their endpoint.
+		client := openai.NewClient(option.WithBaseURL(account.Resource), option.WithAPIKey(cred.AccessToken), option.WithMaxRetries(0))
+		provider.client = &client
+	}
+	return provider, nil
 }
 
 // ExtractProtocol extracts the protocol prefix and model identifier from a model string.
@@ -73,7 +91,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	case "openai":
 		// OpenAI with OAuth/token auth (Codex-style)
 		if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
-			provider, err := createCodexAuthProvider()
+			provider, err := createCodexAuthProvider(cfg.AccountID)
 			if err != nil {
 				return nil, "", err
 			}

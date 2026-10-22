@@ -912,6 +912,9 @@ type OpenAIProviderConfig struct {
 // codex-cli, github-copilot, and named OpenAI-compatible protocols such as
 // groq, deepseek, modelscope, and novita.
 // Default protocol is "openai" if no prefix is specified.
+// LegacyOpenAIAccountID preserves the single-account OAuth configuration.
+const LegacyOpenAIAccountID = "codex-default"
+
 type ModelConfig struct {
 	// Required fields
 	ModelName string `json:"model_name"` // User-facing alias for the model
@@ -925,6 +928,7 @@ type ModelConfig struct {
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
 
 	// Special providers (CLI-based, OAuth, etc.)
+	AccountID   string `json:"account_id,omitempty"`   // Saved OAuth connection reference, distinct from provider workspace identity.
 	AuthMethod  string `json:"auth_method,omitempty"`  // Authentication method: oauth, token
 	ConnectMode string `json:"connect_mode,omitempty"` // Connection mode: stdio, grpc
 	Workspace   string `json:"workspace,omitempty"`    // Workspace path for CLI-based providers
@@ -1269,6 +1273,15 @@ func LoadConfig(path string) (*Config, error) {
 	// always take precedence.
 	if cfg.HasProvidersConfig() {
 		InheritProviderCredentials(cfg.ModelList, cfg.Providers)
+	}
+
+	// Old OAuth models keep the original connection; API-key models stay independent.
+	for i := range cfg.ModelList {
+		m := &cfg.ModelList[i]
+		protocol, _, _ := strings.Cut(m.Model, "/")
+		if m.AccountID == "" && (protocol == "openai" || !strings.Contains(m.Model, "/")) && (m.AuthMethod == "oauth" || m.AuthMethod == "token") {
+			m.AccountID = LegacyOpenAIAccountID
+		}
 	}
 
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
@@ -1643,6 +1656,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 				APIKey:         keys[i],
 				Proxy:          m.Proxy,
 				AuthMethod:     m.AuthMethod,
+				AccountID:      m.AccountID,
 				ConnectMode:    m.ConnectMode,
 				Workspace:      m.Workspace,
 				RPM:            m.RPM,
@@ -1663,6 +1677,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 			APIKey:         keys[0],
 			Proxy:          m.Proxy,
 			AuthMethod:     m.AuthMethod,
+			AccountID:      m.AccountID,
 			ConnectMode:    m.ConnectMode,
 			Workspace:      m.Workspace,
 			RPM:            m.RPM,

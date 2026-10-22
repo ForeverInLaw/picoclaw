@@ -118,6 +118,7 @@ type oauthFlowResponse struct {
 
 // registerOAuthRoutes binds OAuth login/logout endpoints to the ServeMux.
 func (h *Handler) registerOAuthRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/oauth/accounts", h.handleListAccounts)
 	mux.HandleFunc("GET /api/oauth/providers", h.handleListOAuthProviders)
 	mux.HandleFunc("POST /api/oauth/login", h.handleOAuthLogin)
 	mux.HandleFunc("GET /api/oauth/flows/{id}", h.handleGetOAuthFlow)
@@ -744,6 +745,17 @@ func (h *Handler) syncProviderAuthMethod(provider, authMethod string) error {
 		return err
 	}
 
+	if provider == oauthProviderOpenAI {
+		if authMethod == "" {
+			cfg.Providers.OpenAI.AuthMethod = ""
+		}
+		// OAuth authorizes its saved connection, never every OpenAI API-key model.
+		// Keep disconnected model references so reauthorization restores their identity.
+		if authMethod != "" {
+			cfg.BindLegacyCodexAccount(authMethod)
+		}
+		return oauthSaveConfig(h.configPath, cfg)
+	}
 	switch provider {
 	case oauthProviderOpenAI:
 		cfg.Providers.OpenAI.AuthMethod = authMethod

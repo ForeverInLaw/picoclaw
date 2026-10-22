@@ -33,6 +33,7 @@ type modelResponse struct {
 	APIKey     string `json:"api_key"`
 	Proxy      string `json:"proxy,omitempty"`
 	AuthMethod string `json:"auth_method,omitempty"`
+	AccountID  string `json:"account_id,omitempty"`
 	// Advanced fields
 	ConnectMode    string         `json:"connect_mode,omitempty"`
 	Workspace      string         `json:"workspace,omitempty"`
@@ -79,6 +80,7 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			APIKey:         maskAPIKey(m.APIKey),
 			Proxy:          m.Proxy,
 			AuthMethod:     m.AuthMethod,
+			AccountID:      m.AccountID,
 			ConnectMode:    m.ConnectMode,
 			Workspace:      m.Workspace,
 			RPM:            m.RPM,
@@ -181,12 +183,23 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = retainModelCredential(&mc, cfg.ModelList[idx]); err != nil {
+	// Apply only supplied settings to the selected entry. Preserve advanced fields
+	// that this editor does not expose, while validating any credential destination edit.
+	saved := cfg.ModelList[idx]
+	mc = saved
+	mc.APIKey = ""
+	mc.APIKeys = nil
+	if err := json.Unmarshal(body, &mc); err != nil {
+		http.Error(w, "Invalid model configuration", http.StatusBadRequest)
+		return
+	}
+	saved.ModelName = mc.ModelName // Renaming the selected saved entry keeps its credential destination.
+	if err = retainModelCredential(&mc, saved); err != nil {
 		modelTestError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if mc.ExtraBody == nil {
-		mc.ExtraBody = cfg.ModelList[idx].ExtraBody
+	if mc.AccountID == "" && mc.AuthMethod == cfg.ModelList[idx].AuthMethod && mc.Model == cfg.ModelList[idx].Model {
+		mc.AccountID = cfg.ModelList[idx].AccountID
 	}
 
 	cfg.ModelList[idx] = mc

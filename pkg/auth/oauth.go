@@ -21,6 +21,7 @@ import (
 )
 
 type OAuthProviderConfig struct {
+	Resource     string `json:"resource,omitempty"` // Registered ChatGPT API resource; empty for legacy flows.
 	Issuer       string
 	ClientID     string
 	ClientSecret string // Required for Google OAuth (confidential client)
@@ -398,6 +399,10 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 	if cfg.ClientSecret != "" {
 		data.Set("client_secret", cfg.ClientSecret)
 	}
+	if cfg.Resource != "" {
+		data.Set("resource", cfg.Resource)
+		data.Del("scope")
+	}
 
 	tokenURL := cfg.Issuer + "/oauth/token"
 	if cfg.TokenURL != "" {
@@ -415,7 +420,7 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		return nil, fmt.Errorf("reading token refresh response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed: %s", string(body))
+		return nil, fmt.Errorf("token refresh failed (HTTP %d)", resp.StatusCode)
 	}
 
 	refreshed, err := parseTokenResponse(body, cred.Provider)
@@ -487,6 +492,10 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 	}
 	if cfg.ClientSecret != "" {
 		data.Set("client_secret", cfg.ClientSecret)
+	}
+	if cfg.Resource != "" {
+		data.Set("resource", cfg.Resource)
+		data.Del("scope")
 	}
 
 	tokenURL := cfg.Issuer + "/oauth/token"

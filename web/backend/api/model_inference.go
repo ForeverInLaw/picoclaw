@@ -124,7 +124,7 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		)
 		return
 	}
-	if mc.AuthMethod == "oauth" || mc.AuthMethod == "token" {
+	if (mc.AuthMethod == "oauth" || mc.AuthMethod == "token") && protocol != "openai" {
 		modelTestError(
 			w,
 			http.StatusBadRequest,
@@ -137,7 +137,7 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		modelTestError(w, http.StatusBadRequest, "Check the selected provider, model identifier, API base and API key.")
 		return
 	}
-	if _, ok := provider.(*providers.HTTPProvider); !ok {
+	if _, ok := provider.(*providers.HTTPProvider); !ok && protocol != "openai" {
 		modelTestError(w, http.StatusBadRequest, "This test requires an OpenAI-compatible HTTP provider.")
 		return
 	}
