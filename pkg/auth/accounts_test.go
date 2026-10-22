@@ -2,11 +2,15 @@ package auth
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -177,5 +181,99 @@ func TestLateRefreshCannotReplaceChangedRegistration(t *testing.T) {
 	}
 	if saved.Credential.AccessToken != "old" || saved.OAuth.ClientID != "replacement-client" {
 		t.Fatal("replacement registration was overwritten")
+	}
+}
+
+func TestAccountRefreshErrorsRetainRecoveryMetadataAndPreserveOtherAccounts(t *testing.T) {
+	for _, registered := range []bool{false, true} {
+		for _, scenario := range []struct {
+			status      int
+			body, code  string
+			reauthorize bool
+		}{
+			{400, `{"error":"invalid_grant","error_description":"PRIVATE_REFRESH_TOKEN"}`, "invalid_grant", true},
+			{503, `{"error":"temporarily_unavailable","error_description":"PRIVATE_REFRESH_TOKEN"}`, "temporarily_unavailable", false},
+		} {
+			t.Run(fmt.Sprintf("registered=%v/status=%d", registered, scenario.status), func(t *testing.T) {
+				t.Setenv(config.EnvHome, t.TempDir())
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Retry-After", "37")
+					w.WriteHeader(scenario.status)
+					fmt.Fprint(w, scenario.body)
+				}))
+				defer server.Close()
+				account := &AccountConnection{ID: "first", Label: "First", Provider: "openai", Enabled: true, OAuth: OAuthProviderConfig{Issuer: server.URL, ClientID: "issued-first", TokenURL: server.URL + "/token"}, Credential: &AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "old-token", RefreshToken: "private", ExpiresAt: time.Now().Add(-time.Hour)}}
+				if registered {
+					account.Resource = OpenAIRegistrationResource
+					account.Scopes = OpenAIPlanScope
+					account.OAuth.Resource = account.Resource
+				}
+				if err := SaveAccount(account); err != nil {
+					t.Fatal(err)
+				}
+				if err := SaveAccount(&AccountConnection{ID: "other", Label: "Other", Provider: "openai", Enabled: true, Credential: &AuthCredential{AccessToken: "untouched"}}); err != nil {
+					t.Fatal(err)
+				}
+				_, err := AccountCredentialContext(t.Context(), "first")
+				var failure *TokenRequestError
+				if !errors.As(err, &failure) || failure.StatusCode != scenario.status || failure.Code != scenario.code || failure.RetryAfter != 37*time.Second || failure.ReauthorizationRequired != scenario.reauthorize {
+					t.Fatalf("refresh recovery metadata lost: %v", err)
+				}
+				if strings.Contains(err.Error(), "PRIVATE_REFRESH_TOKEN") {
+					t.Fatal("refresh diagnostic leaked token body")
+				}
+				saved, _ := GetAccount("first")
+				other, _ := GetAccount("other")
+				if (saved.Credential == nil) != scenario.reauthorize || saved.OAuth.ClientID != "issued-first" || other.Credential.AccessToken != "untouched" {
+					t.Fatal("refresh lost registration or another account")
+				}
+			})
+		}
+	}
+}
+
+func TestAccountContextCancellationStopsRefreshAndLockWait(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	started, disconnected := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(started)
+		<-r.Context().Done()
+		close(disconnected)
+	}))
+	defer server.Close()
+	if err := SaveAccount(&AccountConnection{ID: "first", Label: "First", Provider: "openai", Enabled: true, OAuth: OAuthProviderConfig{Issuer: server.URL, ClientID: "first"}, Credential: &AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "old", RefreshToken: "rotating", ExpiresAt: time.Now().Add(-time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	first := make(chan error, 1)
+	go func() { _, err := AccountCredentialContext(ctx, "first"); first <- err }()
+	<-started
+	waiting, stopWaiting := context.WithCancel(t.Context())
+	second := make(chan error, 1)
+	go func() { _, err := AccountCredentialContext(waiting, "first"); second <- err }()
+	stopWaiting()
+	select {
+	case err := <-second:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("lock cancellation=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled request hung on account lock")
+	}
+	cancel()
+	select {
+	case err := <-first:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("refresh cancellation=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled refresh stayed active")
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(time.Second):
+		t.Fatal("refresh HTTP call did not disconnect")
 	}
 }

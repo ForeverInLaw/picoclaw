@@ -151,11 +151,8 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 	if account == nil {
 		return nil, ErrAccountNotFound
 	}
-	if err != nil {
-		return nil, err
-	}
 	if !account.CanUsePlan() {
-		return nil, errors.New("ChatGPT plan permission is not enabled for this account")
+		return nil, &TokenRequestError{StatusCode: 403, Code: "consent_required", ReauthorizationRequired: true}
 	}
 	if !account.Enabled {
 		return nil, fmt.Errorf("account connection %q is disabled", id)
@@ -178,6 +175,12 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 		refreshed, err = RefreshAccessTokenContext(ctx, cred, account.OAuth)
 	}
 	if err != nil {
+		var tokenError *TokenRequestError
+		if errors.As(err, &tokenError) && tokenError.ReauthorizationRequired {
+			if markErr := clearRejectedAccountSession(ctx, account); markErr != nil {
+				return nil, markErr
+			}
+		}
 		return nil, err
 	}
 	unlock, err := lockStoreContext(ctx)
@@ -196,9 +199,7 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 	if !current.Enabled {
 		return nil, fmt.Errorf("account connection %q is disabled", id)
 	}
-	if current.Credential == nil || *current.Credential != *cred || current.OAuth != account.OAuth ||
-		current.Subject != account.Subject || current.Issuer != account.Issuer ||
-		current.HostID != account.HostID || current.IDToken != account.IDToken || current.Resource != account.Resource {
+	if !sameAccountSession(current, account) {
 		return nil, errors.New("account authorization changed during refresh")
 	}
 	current.Credential = refreshed
@@ -213,7 +214,33 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 		return nil, err
 	}
 	if !current.CanUsePlan() {
-		return nil, errors.New("ChatGPT plan permission is not enabled for this account")
+		return nil, &TokenRequestError{StatusCode: 403, Code: "consent_required", ReauthorizationRequired: true}
 	}
 	return refreshed, nil
+}
+
+func sameAccountSession(current, expected *AccountConnection) bool {
+	return current != nil && current.Credential != nil && expected.Credential != nil && *current.Credential == *expected.Credential && current.OAuth == expected.OAuth && current.Subject == expected.Subject && current.Issuer == expected.Issuer && current.HostID == expected.HostID && current.IDToken == expected.IDToken && current.Resource == expected.Resource
+}
+
+func clearRejectedAccountSession(ctx context.Context, expected *AccountConnection) error {
+	unlock, err := lockStoreContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	store, err := loadStore()
+	if err != nil {
+		return err
+	}
+	current := store.Accounts[expected.ID]
+	if !sameAccountSession(current, expected) {
+		return errors.New("account authorization changed during refresh")
+	}
+	current.Credential = nil
+	current.IDToken = ""
+	if current.ID == config.LegacyOpenAIAccountID {
+		delete(store.Credentials, "openai")
+	}
+	return saveStore(store)
 }

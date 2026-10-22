@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -16,6 +18,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 const (
@@ -176,10 +180,13 @@ func (p *CodexProvider) chat(
 		}
 	}
 
+	var transportResponse *http.Response
+	opts = append(opts, option.WithResponseInto(&transportResponse))
 	stream := p.client.Responses.NewStreaming(ctx, params, opts...)
 	defer stream.Close()
 
 	var resp *responses.Response
+	var terminalError error
 	type contentPosition struct{ output, content int64 }
 	partials := make(map[contentPosition]*strings.Builder)
 	phases := make(map[int64]ContentPhase)
@@ -221,6 +228,15 @@ func (p *CodexProvider) chat(
 				onUpdate(StreamContent{Content: snapshot.String(), Phase: phase})
 			}
 		}
+		if evt.Type == "response.failed" {
+			if status, ok := codexResponseErrorStatus(string(evt.Response.Error.Code)); ok {
+				failure := &protocoltypes.HTTPError{StatusCode: status, Code: string(evt.Response.Error.Code), Wrapped: fmt.Errorf("Codex response failed (%s)", evt.Response.Error.Code)}
+				if transportResponse != nil {
+					failure.RetryAfter = common.RetryAfter(transportResponse.Header, time.Now())
+				}
+				terminalError = failure
+			}
+		}
 		if evt.Type == "response.completed" || evt.Type == "response.failed" || evt.Type == "response.incomplete" {
 			evtResp := evt.Response
 			if evtResp.ID != "" {
@@ -228,6 +244,9 @@ func (p *CodexProvider) chat(
 				resp = &evtRespCopy
 			}
 		}
+	}
+	if terminalError != nil {
+		return nil, terminalError
 	}
 	err := stream.Err()
 	if err != nil {
@@ -243,8 +262,12 @@ func (p *CodexProvider) chat(
 		if errors.As(err, &apiErr) {
 			fields["status_code"] = apiErr.StatusCode
 			fields["api_type"] = apiErr.Type
-			fields["api_code"] = apiErr.Code
-			fields["api_param"] = apiErr.Param
+			if _, known := codexResponseErrorStatus(apiErr.Code); known || !p.registered {
+				fields["api_code"] = apiErr.Code
+			}
+			if !p.registered {
+				fields["api_param"] = apiErr.Param
+			}
 			fields["api_message"] = "provider request failed"
 			if apiErr.StatusCode == 400 {
 				fields["hint"] = "verify account id header and model compatibility for codex backend"
@@ -254,6 +277,17 @@ func (p *CodexProvider) chat(
 			}
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
+		if p.registered && apiErr != nil {
+			code := ""
+			if _, ok := codexResponseErrorStatus(apiErr.Code); ok {
+				code = apiErr.Code
+			}
+			failure := &protocoltypes.HTTPError{StatusCode: apiErr.StatusCode, Code: code, Wrapped: fmt.Errorf("ChatGPT model request failed (HTTP %d)", apiErr.StatusCode)}
+			if apiErr.Response != nil {
+				failure.RetryAfter = common.RetryAfter(apiErr.Response.Header, time.Now())
+			}
+			return nil, failure
+		}
 		return nil, fmt.Errorf("codex API call: %w", err)
 	}
 	if resp == nil || resp.Status != "completed" {
@@ -574,4 +608,23 @@ func codexMessagePhase(item responses.ResponseOutputItemUnion) ContentPhase {
 	}
 	_ = json.Unmarshal([]byte(item.RawJSON()), &value)
 	return value.Phase
+}
+
+// Codes are a fixed provider contract; free-form error messages never enter diagnostics.
+func codexResponseErrorStatus(code string) (int, bool) {
+	switch code {
+	case "subscription_sharing_usage_limit_exceeded", "rate_limit_exceeded":
+		return 429, true
+	case "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable":
+		return 503, true
+	case "subscription_sharing_invalid_user":
+		return 401, true
+	case "subscription_sharing_user_not_eligible", "subscription_sharing_route_not_supported", "chatpass_v2_scope_not_authorized", "chatpass_v2_invalid_authorization_context":
+		return 403, true
+	case "subscription_sharing_unsupported_capability", "invalid_prompt", "invalid_request":
+		return 400, true
+	case "server_error":
+		return 500, true
+	}
+	return 0, false
 }

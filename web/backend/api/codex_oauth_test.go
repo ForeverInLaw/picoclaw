@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,20 +17,29 @@ import (
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
+	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
+	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/web/backend/middleware"
 )
 
 type openAIRegistrationFixture struct {
-	t         *testing.T
-	mu        sync.Mutex
-	key       *rsa.PrivateKey
-	nonce     string
-	subject   string
-	client    string
-	scope     string
-	exchanges int
-	inference int
+	t            *testing.T
+	mu           sync.Mutex
+	key          *rsa.PrivateKey
+	nonce        string
+	subject      string
+	client       string
+	scope        string
+	overrides    map[string]any
+	badSignature bool
+	toolFlow     bool
+	model        string
+	exchanges    int
+	inference    int
 }
 
 func fakeOpenAIRegistration(t *testing.T) *openAIRegistrationFixture {
@@ -37,7 +48,7 @@ func fakeOpenAIRegistration(t *testing.T) *openAIRegistrationFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &openAIRegistrationFixture{t: t, key: key, subject: "subject-one", client: "oaiapp_one", scope: "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"}
+	fixture := &openAIRegistrationFixture{t: t, key: key, subject: "subject-one", client: "oaiapp_one", scope: "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct", model: "gpt-6.1-sol"}
 	original := http.DefaultTransport
 	http.DefaultTransport = accountRecordingTransport{handler: fixture.serve}
 	t.Cleanup(func() { http.DefaultTransport = original })
@@ -62,11 +73,19 @@ func (f *openAIRegistrationFixture) serve(r *http.Request) (*http.Response, erro
 		if r.Form.Get("client_id") != f.client || r.Form.Get("resource") != "https://api.openai.com/v1" || r.Form.Get("redirect_uri") != "http://127.0.0.1:1455/auth/callback" || r.Form.Get("code_verifier") == "" {
 			f.t.Errorf("invalid exchange fields: client=%s resource=%s redirect=%s", r.Form.Get("client_id"), r.Form.Get("resource"), r.Form.Get("redirect_uri"))
 		}
-		signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: f.key, KeyID: "fixture-key"}}, nil)
+		signingKey := f.key
+		if f.badSignature {
+			signingKey, _ = rsa.GenerateKey(rand.Reader, 2048)
+		}
+		signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: signingKey, KeyID: "fixture-key"}}, nil)
 		if err != nil {
 			return nil, err
 		}
-		claims, _ := json.Marshal(map[string]any{"iss": "https://auth.openai.com", "aud": f.client, "sub": f.subject, "nonce": f.nonce, "exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(), "email": "same@example.com"})
+		identity := map[string]any{"iss": "https://auth.openai.com", "aud": f.client, "sub": f.subject, "nonce": f.nonce, "exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(), "email": "same@example.com"}
+		for key, value := range f.overrides {
+			identity[key] = value
+		}
+		claims, _ := json.Marshal(identity)
 		signature, err := signer.Sign(claims)
 		if err != nil {
 			return nil, err
@@ -84,12 +103,41 @@ func (f *openAIRegistrationFixture) serve(r *http.Request) (*http.Response, erro
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["model"] != "gpt-6.1-sol" || body["store"] != false || body["stream"] != true {
+		if body["model"] != f.model || body["store"] != false || body["stream"] != true {
 			f.t.Errorf("wrong registered request options: %v", body)
+		}
+		if rawTools, ok := body["tools"].([]any); ok {
+			for _, raw := range rawTools {
+				tool, _ := raw.(map[string]any)
+				if tool["type"] == "function" {
+					f.t.Error("public route received unsupported top-level function")
+				}
+			}
 		}
 		for _, field := range []string{"max_output_tokens", "temperature", "top_p", "previous_response_id"} {
 			if _, ok := body[field]; ok {
 				f.t.Errorf("unsupported field %s", field)
+			}
+		}
+		if f.toolFlow {
+			namespace := false
+			if requestTools, ok := body["tools"].([]any); ok {
+				for _, raw := range requestTools {
+					tool, _ := raw.(map[string]any)
+					namespace = namespace || tool["type"] == "namespace"
+				}
+			}
+			if !namespace {
+				f.t.Error("ordinary account request lost namespaced local tools")
+			}
+			if f.inference == 2 {
+				result := response(200, `data: {"type":"response.completed","response":{"id":"tool-request","status":"completed","output":[{"type":"function_call","call_id":"record-1","name":"record_connection","namespace":"picoclaw","arguments":"{}"}]}}`+"\n\n")
+				result.Header.Set("Content-Type", "text/event-stream")
+				return result, nil
+			}
+			history, _ := json.Marshal(body["input"])
+			if !strings.Contains(string(history), "ACCOUNT_TOOL_RESULT") || !strings.Contains(string(history), `"namespace":"picoclaw"`) {
+				f.t.Error("tool continuation lost namespaced call or completed result")
 			}
 		}
 		result := response(200, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"registered-response\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}}\n\n")
@@ -172,6 +220,25 @@ func TestCodexManualCallbackConnectsDistinctAccountsAndSelectedInference(t *test
 	}
 	if cfg.ModelList[0].APIKey != "untouched-key" || cfg.ModelList[0].AuthMethod != "" {
 		t.Fatal("registration changed unrelated model")
+	}
+	cfg.Agents.Defaults.ModelName = "selected"
+	cfg.Agents.Defaults.Model = "selected"
+	cfg.Agents.Defaults.ContextManager = "legacy"
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageBus := bus.NewMessageBus()
+	defer messageBus.Close()
+	loop := agent.NewAgentLoop(cfg, messageBus, provider)
+	defer loop.Close()
+	recordTool := &accountRecordingTool{}
+	loop.RegisterTool(recordTool)
+	f.toolFlow = true
+	answer, err := loop.ProcessDirect(t.Context(), "Reply with OK.", "registered-account-request")
+	if err != nil || answer != "OK" || f.inference != 3 || recordTool.calls != 1 {
+		t.Fatalf("ordinary selected-account request=%q error=%v calls=%d", answer, err, f.inference)
 	}
 }
 
@@ -340,5 +407,136 @@ func TestCodexMissingPlanGrantRetainsSignInWithoutInference(t *testing.T) {
 	listing := dashboardRequest(h, "GET", "/api/oauth/accounts", "", cookie)
 	if !strings.Contains(listing.Body.String(), "plan_permission_required") {
 		t.Fatalf("missing plan permission hidden: %s", listing.Body.String())
+	}
+}
+
+func TestCodexRegisteredStreamFailuresKeepRecoveryMetadata(t *testing.T) {
+	for _, scenario := range []struct {
+		code   string
+		status int
+		reason providers.FailoverReason
+	}{
+		{"subscription_sharing_usage_limit_exceeded", 429, providers.FailoverRateLimit},
+		{"subscription_sharing_usage_unavailable", 503, providers.FailoverTimeout},
+		{"subscription_sharing_invalid_user", 401, providers.FailoverAuth},
+	} {
+		t.Run(scenario.code, func(t *testing.T) {
+			t.Setenv(config.EnvHome, t.TempDir())
+			f := fakeOpenAIRegistration(t)
+			h, cookie, _ := modelInferenceDashboard(t, nil)
+			id, callback := beginManualCodex(t, h, cookie, f, "")
+			w := completeManualCodex(h, cookie, id, callback)
+			if w.Code != 200 {
+				t.Fatalf("connect=%d", w.Code)
+			}
+			var complete struct {
+				AccountID string `json:"account_id"`
+			}
+			_ = json.Unmarshal(w.Body.Bytes(), &complete)
+			inner := http.DefaultTransport
+			http.DefaultTransport = accountRecordingTransport{handler: func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path != "/v1/responses" {
+					return inner.RoundTrip(r)
+				}
+				body := `data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"PARTIAL_SECRET"}` + "\n\n" + `data: {"type":"response.failed","response":{"id":"failure","status":"failed","error":{"code":"` + scenario.code + `","message":"NEVER_EXPOSE_PROVIDER_BODY"}}}` + "\n\n"
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+			}}
+			model := config.ModelConfig{ModelName: "selected", Model: "openai/gpt-6.1-sol", AuthMethod: "oauth", AccountID: complete.AccountID}
+			provider, modelID, err := providers.CreateProviderFromConfig(&model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := provider.Chat(t.Context(), []providers.Message{{Role: "user", Content: "hello"}}, nil, modelID, nil)
+			var failure *protocoltypes.HTTPError
+			if response != nil || !errors.As(err, &failure) || failure.StatusCode != scenario.status || failure.Code != scenario.code {
+				t.Fatalf("failure metadata lost: %+v %v", response, err)
+			}
+			if strings.Contains(err.Error(), "PARTIAL_SECRET") || strings.Contains(err.Error(), "NEVER_EXPOSE") {
+				t.Fatalf("failed stream leaked content: %v", err)
+			}
+		})
+	}
+}
+
+func TestCodexManualCallbackVerifiesSignedIdentityClaims(t *testing.T) {
+	for _, scenario := range []struct {
+		name         string
+		claims       map[string]any
+		badSignature bool
+	}{
+		{name: "audience", claims: map[string]any{"aud": "another-client"}},
+		{name: "issuer", claims: map[string]any{"iss": "https://foreign.example"}},
+		{name: "expired", claims: map[string]any{"exp": time.Now().Add(-time.Minute).Unix()}},
+		{name: "missing-subject", claims: map[string]any{"sub": ""}},
+		{name: "signature", badSignature: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Setenv(config.EnvHome, t.TempDir())
+			f := fakeOpenAIRegistration(t)
+			h, cookie, _ := modelInferenceDashboard(t, nil)
+			id, callback := beginManualCodex(t, h, cookie, f, "")
+			f.overrides = scenario.claims
+			f.badSignature = scenario.badSignature
+			if w := completeManualCodex(h, cookie, id, callback); w.Code != 400 {
+				t.Fatalf("invalid signed identity accepted=%d", w.Code)
+			}
+			w := dashboardRequest(h, "GET", "/api/oauth/accounts", "", cookie)
+			if !strings.Contains(w.Body.String(), `"accounts":[]`) {
+				t.Fatalf("invalid identity persisted account=%s", w.Body.String())
+			}
+		})
+	}
+}
+
+func TestCodexManualProviderDenialDoesNotExchangeOrExposeDescription(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	f := fakeOpenAIRegistration(t)
+	h, cookie, _ := modelInferenceDashboard(t, nil)
+	id, callback := beginManualCodex(t, h, cookie, f, "")
+	parsed, _ := url.Parse(callback)
+	query := parsed.Query()
+	query.Del("code")
+	query.Set("error", "access_denied")
+	query.Set("error_description", "PRIVATE_PROVIDER_DETAIL")
+	parsed.RawQuery = query.Encode()
+	w := completeManualCodex(h, cookie, id, parsed.String())
+	if w.Code != 400 || f.exchanges != 0 || strings.Contains(w.Body.String(), "PRIVATE_PROVIDER_DETAIL") {
+		t.Fatalf("provider denial=%d %s exchanges=%d", w.Code, w.Body.String(), f.exchanges)
+	}
+	if w := completeManualCodex(h, cookie, id, callback); w.Code != 409 {
+		t.Fatalf("denied flow replay=%d", w.Code)
+	}
+}
+
+type accountRecordingTool struct{ calls int }
+
+func (t *accountRecordingTool) Name() string        { return "record_connection" }
+func (t *accountRecordingTool) Description() string { return "Record the selected account request" }
+func (t *accountRecordingTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (t *accountRecordingTool) Execute(ctx context.Context, arguments map[string]any) *tools.ToolResult {
+	t.calls++
+	return tools.SilentResult("ACCOUNT_TOOL_RESULT")
+}
+
+func TestCodexRegisteredModelSlugIsNotSubstituted(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	f := fakeOpenAIRegistration(t)
+	f.model = "custom-model-preview"
+	h, cookie, _ := modelInferenceDashboard(t, nil)
+	id, callback := beginManualCodex(t, h, cookie, f, "")
+	w := completeManualCodex(h, cookie, id, callback)
+	if w.Code != 200 {
+		t.Fatalf("connect=%d", w.Code)
+	}
+	var complete struct {
+		AccountID string `json:"account_id"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &complete)
+	payload, _ := json.Marshal(map[string]string{"model_name": "exact", "model": "openai/custom-model-preview", "auth_method": "oauth", "account_id": complete.AccountID})
+	w = dashboardRequest(h, "POST", "/api/models/test-inline", string(payload), cookie)
+	if w.Code != 200 || f.inference != 1 {
+		t.Fatalf("exact selected model probe=%d %s", w.Code, w.Body.String())
 	}
 }

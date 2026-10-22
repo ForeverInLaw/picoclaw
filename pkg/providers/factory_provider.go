@@ -7,6 +7,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	anthropicmessages "github.com/sipeed/picoclaw/pkg/providers/anthropic_messages"
 	"github.com/sipeed/picoclaw/pkg/providers/azure"
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.
@@ -52,6 +54,14 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 	provider.contextTokenSource = func(ctx context.Context) (string, string, error) {
 		current, err := auth.AccountCredentialContext(ctx, accountID)
 		if err != nil {
+			var tokenError *auth.TokenRequestError
+			if errors.As(err, &tokenError) {
+				status := tokenError.StatusCode
+				if tokenError.ReauthorizationRequired {
+					status = 401
+				}
+				err = &protocoltypes.HTTPError{StatusCode: status, Code: tokenError.Code, RetryAfter: tokenError.RetryAfter, Wrapped: err}
+			}
 			return "", "", err
 		}
 		return current.AccessToken, current.AccountID, nil

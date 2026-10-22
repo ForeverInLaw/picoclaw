@@ -361,7 +361,7 @@ func (h *Handler) handlePollOAuthFlow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	flow, ok := h.getOAuthFlow(flowID)
-	if !ok {
+	if !ok || (flow.Manual && (flow.Owner != dashboardFlowOwner(r) || flow.Owner == "")) {
 		http.Error(w, "flow not found", http.StatusNotFound)
 		return
 	}

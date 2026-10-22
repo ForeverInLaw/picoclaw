@@ -60,7 +60,7 @@ func (h *Handler) startCodexAccountLogin(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "Could not prepare sign-in", 500)
 		return
 	}
-	hostID, err := auth.InstanceHostID()
+	hostID, err := auth.InstanceHostIDContext(r.Context())
 	if err != nil {
 		http.Error(w, "Could not prepare host identity", 500)
 		return
@@ -69,6 +69,9 @@ func (h *Handler) startCodexAccountLogin(w http.ResponseWriter, r *http.Request,
 	if previous == nil {
 		values.Set("agent_name_hint", "Picoclaw")
 	} else {
+		if !previous.CanUsePlan() {
+			values.Set("prompt", "consent")
+		}
 		if previous.IDToken != "" {
 			values.Set("id_token_hint", previous.IDToken)
 		}
@@ -175,7 +178,7 @@ func (h *Handler) handleCompleteCodexAccount(w http.ResponseWriter, r *http.Requ
 	if copy.PreviousAccount == nil && copy.Label != "" {
 		account.Label = copy.Label
 	}
-	saved, err := auth.SaveRegisteredAccount(account, copy.PreviousAccount)
+	saved, err := auth.SaveRegisteredAccountContext(r.Context(), account, copy.PreviousAccount)
 	if err != nil {
 		h.setOAuthFlowError(copy.ID, "Could not save the selected account registration")
 		http.Error(w, "Could not save the selected account registration", 409)

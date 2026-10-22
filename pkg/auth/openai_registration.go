@@ -31,8 +31,10 @@ func OpenAIRegistrationConfig() OAuthProviderConfig {
 }
 
 // InstanceHostID survives account changes and process restarts in protected storage.
-func InstanceHostID() (string, error) {
-	unlock, err := lockStore()
+func InstanceHostID() (string, error) { return InstanceHostIDContext(context.Background()) }
+
+func InstanceHostIDContext(ctx context.Context) (string, error) {
+	unlock, err := lockStoreContext(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -160,11 +162,11 @@ func requestRegisteredToken(ctx context.Context, cfg OAuthProviderConfig, form u
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, errors.New("OpenAI token service is unavailable")
+		return nil, &TokenRequestError{Wrapped: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, errors.New("OpenAI token request failed; start a fresh sign-in")
+		return nil, tokenEndpointError(response)
 	}
 	var token registeredToken
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&token); err != nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") || token.ExpiresIn <= 0 {
@@ -176,7 +178,11 @@ func requestRegisteredToken(ctx context.Context, cfg OAuthProviderConfig, form u
 // SaveRegisteredAccount preserves live labels/enabled state and rejects a
 // registration deleted or changed while browser authorization was pending.
 func SaveRegisteredAccount(account, previous *AccountConnection) (*AccountConnection, error) {
-	unlock, err := lockStore()
+	return SaveRegisteredAccountContext(context.Background(), account, previous)
+}
+
+func SaveRegisteredAccountContext(ctx context.Context, account, previous *AccountConnection) (*AccountConnection, error) {
+	unlock, err := lockStoreContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +210,9 @@ func SaveRegisteredAccount(account, previous *AccountConnection) (*AccountConnec
 				break
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	store.Accounts[account.ID] = account
 	if err := saveStore(store); err != nil {
