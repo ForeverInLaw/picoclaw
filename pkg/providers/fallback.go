@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -48,7 +49,7 @@ type FallbackAttempt struct {
 	Error     error
 	Reason    FailoverReason
 	Duration  time.Duration
-	Skipped   bool // true if skipped due to cooldown
+	Skipped   bool // true if cooldown or candidate eligibility prevented an outbound request
 	Candidate FallbackCandidate
 }
 
@@ -180,8 +181,8 @@ func (fc *FallbackChain) execute(
 
 	for i, candidate := range candidates {
 		// Check context before each attempt.
-		if ctx.Err() == context.Canceled {
-			return nil, context.Canceled
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 
 		// Each selected endpoint and credential has its own health state.
@@ -219,7 +220,7 @@ func (fc *FallbackChain) execute(
 		}
 
 		// Context cancellation: abort immediately, no fallback.
-		if ctx.Err() == context.Canceled {
+		if ctx.Err() != nil {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Candidate: candidate,
 				Provider:  candidate.Provider,
@@ -227,7 +228,25 @@ func (fc *FallbackChain) execute(
 				Error:     err,
 				Duration:  elapsed,
 			})
-			return nil, context.Canceled
+			return nil, ctx.Err()
+		}
+
+		var incompatible *IncompatibleCandidateError
+		if errors.As(err, &incompatible) {
+			result.Attempts = append(result.Attempts, FallbackAttempt{
+				Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model,
+				Skipped: true, Reason: FailoverIncompatible, Error: err, Duration: elapsed,
+			})
+			continue
+		}
+
+		var unavailable *CandidateUnavailableError
+		if errors.As(err, &unavailable) {
+			result.Attempts = append(result.Attempts, FallbackAttempt{
+				Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model,
+				Skipped: true, Reason: unavailable.Reason, Error: err, Duration: elapsed,
+			})
+			continue
 		}
 
 		// Classify the error.
@@ -260,7 +279,7 @@ func (fc *FallbackChain) execute(
 		}
 
 		// Retriable error: mark failure and continue to next candidate.
-		fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+		fc.cooldown.RecordFailure(cooldownKey, failErr)
 		result.Attempts = append(result.Attempts, FallbackAttempt{
 			Candidate: candidate,
 			Provider:  candidate.Provider,
@@ -311,8 +330,8 @@ func (fc *FallbackChain) ExecuteImageCandidate(
 	}
 
 	for i, candidate := range candidates {
-		if ctx.Err() == context.Canceled {
-			return nil, context.Canceled
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 
 		start := time.Now()
@@ -327,7 +346,7 @@ func (fc *FallbackChain) ExecuteImageCandidate(
 			return result, nil
 		}
 
-		if ctx.Err() == context.Canceled {
+		if ctx.Err() != nil {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Candidate: candidate,
 				Provider:  candidate.Provider,
@@ -335,7 +354,7 @@ func (fc *FallbackChain) ExecuteImageCandidate(
 				Error:     err,
 				Duration:  elapsed,
 			})
-			return nil, context.Canceled
+			return nil, ctx.Err()
 		}
 
 		// Image dimension/size errors are non-retriable.
@@ -385,7 +404,7 @@ func (e *FallbackExhaustedError) Error() string {
 	sb.WriteString(fmt.Sprintf("fallback: all %d candidates failed:", len(e.Attempts)))
 	for i, a := range e.Attempts {
 		if a.Skipped {
-			sb.WriteString(fmt.Sprintf("\n  [%d] %s/%s: skipped (cooldown)", i+1, a.Provider, a.Model))
+			sb.WriteString(fmt.Sprintf("\n  [%d] %s/%s: skipped (%s): %v", i+1, a.Provider, a.Model, a.Reason, a.Error))
 		} else {
 			sb.WriteString(fmt.Sprintf("\n  [%d] %s/%s: %v (reason=%s, %s)",
 				i+1, a.Provider, a.Model, a.Error, a.Reason, a.Duration.Round(time.Millisecond)))

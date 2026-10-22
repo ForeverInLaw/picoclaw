@@ -101,6 +101,7 @@ func TestModelRetryPolicyBoundsAttemptsAndServerWaitInBothModes(t *testing.T) {
 	}{
 		{"timeout", []error{context.DeadlineExceeded}, 2, time.Second, true},
 		{"capacity_recovery", []error{capacity, capacity, capacity, capacity}, 5, 15 * time.Second, true},
+		{"capacity_backoff_cap", []error{capacity, capacity, capacity, capacity, capacity, capacity, capacity, capacity}, 9, 121 * time.Second, true},
 		{
 			"capacity_server_wait",
 			[]error{&protocoltypes.HTTPError{
@@ -125,8 +126,8 @@ func TestModelRetryPolicyBoundsAttemptsAndServerWaitInBothModes(t *testing.T) {
 			false,
 		},
 		{
-			"exhausted",
-			[]error{fmt.Errorf("status: 503"), fmt.Errorf("status: 503"), fmt.Errorf("status: 503")},
+			"exhausted_non_503",
+			[]error{fmt.Errorf("status: 500"), fmt.Errorf("status: 500"), fmt.Errorf("status: 500")},
 			3,
 			3 * time.Second,
 			false,
@@ -193,7 +194,7 @@ func TestModelRetryPolicyBoundsAttemptsAndServerWaitInBothModes(t *testing.T) {
 	}
 }
 
-func TestCapacityWaitKeepsCandidateAndStopsOnCancellation(t *testing.T) {
+func TestCapacityRecoveryRoundsStopOnCancellation(t *testing.T) {
 	for _, chat := range []string{"42", "inline:chosen"} {
 		t.Run(chat, func(t *testing.T) {
 			withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
@@ -216,14 +217,12 @@ func TestCapacityWaitKeepsCandidateAndStopsOnCancellation(t *testing.T) {
 				got, err := al.processMessage(ctx, bus.InboundMessage{
 					Channel: "telegram", ChatID: chat, SenderID: "telegram:42", Content: "hello",
 				})
-				if got != "" || !errors.Is(err, context.Canceled) || p.calls != 6 ||
+				if got != "" || !errors.Is(err, context.Canceled) || p.calls != 12 ||
 					time.Since(start) != 35*time.Second {
 					t.Fatalf("answer=%q err=%v calls=%d elapsed=%v", got, err, p.calls, time.Since(start))
 				}
-				for _, model := range p.models {
-					if model != "one" {
-						t.Fatalf("capacity wait changed candidate to %s", model)
-					}
+				if strings.Join(p.models, ",") != "one,two,one,two,one,two,one,two,one,two,one,two" {
+					t.Fatalf("capacity recovery did not preserve configured order: %v", p.models)
 				}
 				var last bus.OutboundMessage
 				for {
@@ -243,37 +242,43 @@ func TestCapacityWaitKeepsCandidateAndStopsOnCancellation(t *testing.T) {
 }
 
 func TestCapacityWaitRetainsCompletedToolWithoutReplay(t *testing.T) {
-	withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
-		tool := &recordingActionTool{}
-		al.RegisterTool(tool)
-		capacity := &protocoltypes.HTTPError{
-			StatusCode: 503,
-			Code:       "capacity_unavailable",
-			Wrapped:    errors.New("no capacity"),
-		}
-		p := &retryScriptProvider{
-			failures: []error{nil, capacity, capacity, capacity, capacity},
-			responses: map[int]*providers.LLMResponse{
-				0: {ToolCalls: []providers.ToolCall{{ID: "recorded", Name: "mock_custom"}}},
-			},
-		}
-		al.registry.GetDefaultAgent().Provider = p
-		got, err := al.processMessage(t.Context(), bus.InboundMessage{
-			Channel: "telegram", ChatID: "42", SenderID: "telegram:42", Content: "run action",
+	for _, chat := range []string{"42", "inline:chosen"} {
+		t.Run(chat, func(t *testing.T) {
+			withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
+				tool := &recordingActionTool{name: "web_fetch"}
+				al.RegisterTool(tool)
+				capacity := &protocoltypes.HTTPError{
+					StatusCode: 503,
+					Code:       "capacity_unavailable",
+					Wrapped:    errors.New("no capacity"),
+				}
+				p := &retryScriptProvider{
+					failures: []error{nil, capacity, capacity, capacity, capacity},
+					responses: map[int]*providers.LLMResponse{
+						0: {ToolCalls: []providers.ToolCall{{ID: "recorded", Name: tool.Name()}}},
+					},
+				}
+				a := al.registry.GetDefaultAgent()
+				a.Provider = p
+				a.Candidates = []providers.FallbackCandidate{{Provider: "openai", Model: "primary"}, {Provider: "openai", Model: "backup"}}
+				got, err := al.processMessage(t.Context(), bus.InboundMessage{
+					Channel: "telegram", ChatID: chat, SenderID: "telegram:42", Content: "run action",
+				})
+				if err != nil || !strings.HasSuffix(got, "recovered") || tool.executions != 1 || p.calls != 6 {
+					t.Fatalf("answer=%q err=%v executions=%d calls=%d", got, err, tool.executions, p.calls)
+				}
+				for _, messages := range p.messages[1:] {
+					retained := false
+					for _, msg := range messages {
+						retained = retained || msg.Role == "tool" && msg.Content == "action completed once"
+					}
+					if !retained {
+						t.Fatal("capacity retry lost completed tool output")
+					}
+				}
+			})
 		})
-		if err != nil || got != "recovered" || tool.executions != 1 || p.calls != 6 {
-			t.Fatalf("answer=%q err=%v executions=%d calls=%d", got, err, tool.executions, p.calls)
-		}
-		for _, messages := range p.messages[1:] {
-			retained := false
-			for _, msg := range messages {
-				retained = retained || msg.Role == "tool" && msg.Content == "action completed once"
-			}
-			if !retained {
-				t.Fatal("capacity retry lost completed tool output")
-			}
-		}
-	})
+	}
 }
 
 func TestCancellationStopsModelRetryInBothModes(t *testing.T) {
@@ -312,6 +317,14 @@ func TestCancellationStopsModelRetryInBothModes(t *testing.T) {
 type recordingActionTool struct {
 	mockCustomTool
 	executions int
+	name       string
+}
+
+func (t *recordingActionTool) Name() string {
+	if t.name != "" {
+		return t.name
+	}
+	return t.mockCustomTool.Name()
 }
 
 func (t *recordingActionTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
@@ -361,14 +374,14 @@ func withRetryLoop(t *testing.T, run func(*testing.T, *AgentLoop, *bus.MessageBu
 	synctest.Test(t, func(t *testing.T) { run(t, al, mb) })
 }
 
-func TestModelFallbackAndRecoveryShareAttemptBudget(t *testing.T) {
+func TestConfiguredFallbackPassReachesBeyondOrdinaryRetryBudget(t *testing.T) {
 	withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
 		p := &retryScriptProvider{
 			failures: []error{
-				fmt.Errorf("status: 503"),
-				fmt.Errorf("status: 503"),
-				fmt.Errorf("status: 503"),
-				fmt.Errorf("status: 503"),
+				fmt.Errorf("status: 500"),
+				fmt.Errorf("status: 500"),
+				fmt.Errorf("status: 500"),
+				fmt.Errorf("status: 500"),
 			},
 		}
 		a := al.registry.GetDefaultAgent()
@@ -380,7 +393,7 @@ func TestModelFallbackAndRecoveryShareAttemptBudget(t *testing.T) {
 			{Provider: "openai", Model: "four"},
 		}
 		_, err := al.ProcessDirect(context.Background(), "hello", "fallback-budget")
-		if err == nil || p.calls != 3 {
+		if err == nil || p.calls != 4 {
 			t.Fatalf("error=%v actual provider attempts=%d", err, p.calls)
 		}
 	})
@@ -393,9 +406,9 @@ func TestRunFallbackRecoveryUsesRemainingAttemptWithoutClearingGlobalCooldowns(t
 				al, _, mb, _, cleanup := newTestAgentLoop(t)
 				defer cleanup()
 				defer al.Close()
-				p := &retryScriptProvider{failures: []error{fmt.Errorf("status: 503"), fmt.Errorf("status: 503")}}
+				p := &retryScriptProvider{failures: []error{fmt.Errorf("status: 500"), fmt.Errorf("status: 500")}}
 				if !recover {
-					p.failures = append(p.failures, fmt.Errorf("status: 503"))
+					p.failures = append(p.failures, fmt.Errorf("status: 500"))
 				}
 				cooldown := providers.NewCooldownTracker()
 				cooldown.MarkFailure(providers.ModelKey("openai", "already-cold"), providers.FailoverTimeout)
@@ -440,13 +453,212 @@ func TestRunFallbackRecoveryUsesRemainingAttemptWithoutClearingGlobalCooldowns(t
 func TestEmptyAnswerRecoverySharesTransientAttemptBudget(t *testing.T) {
 	withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
 		p := &retryScriptProvider{
-			failures:  []error{fmt.Errorf("status: 503"), nil, fmt.Errorf("status: 503")},
+			failures:  []error{fmt.Errorf("status: 500"), nil, fmt.Errorf("status: 500")},
 			responses: map[int]*providers.LLMResponse{1: {}},
 		}
 		al.registry.GetDefaultAgent().Provider = p
 		got, err := al.ProcessDirect(context.Background(), "hello", "mixed-budget")
 		if err == nil || got != "" || p.calls != 3 {
 			t.Fatalf("answer=%q error=%v attempts=%d", got, err, p.calls)
+		}
+	})
+}
+
+func Test503TriesEveryConfiguredBackupBeforeWaiting(t *testing.T) {
+	for _, chat := range []string{"42", "inline:chosen"} {
+		t.Run(chat, func(t *testing.T) {
+			withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
+				unavailable := &protocoltypes.HTTPError{StatusCode: 503, Code: "capacity_unavailable", RetryAfter: time.Minute, Wrapped: errors.New("capacity unavailable")}
+				p := &retryScriptProvider{failures: []error{unavailable, unavailable, unavailable, unavailable}}
+				al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker())
+				a := al.registry.GetDefaultAgent()
+				a.Provider = p
+				a.Candidates = nil
+				for _, model := range []string{"primary", "backup-1", "backup-2", "backup-3", "backup-4"} {
+					a.Candidates = append(a.Candidates, providers.FallbackCandidate{Provider: "openai", Model: model})
+				}
+				start := time.Now()
+				got, err := al.processMessage(t.Context(), bus.InboundMessage{Channel: "telegram", ChatID: chat, SenderID: "telegram:42", Content: "hello"})
+				if err != nil || !strings.HasSuffix(got, "recovered") || strings.Join(p.models, ",") != "primary,backup-1,backup-2,backup-3,backup-4" || time.Since(start) != 0 {
+					t.Fatalf("answer=%q err=%v models=%v elapsed=%v", got, err, p.models, time.Since(start))
+				}
+				for {
+					select {
+					case status := <-mb.OutboundChan():
+						if status.Progress != nil && status.Progress.Kind == bus.ProgressRetry {
+							t.Fatalf("successful first-pass failover should be silent: %+v", status)
+						}
+					default:
+						return
+					}
+				}
+			})
+		})
+	}
+}
+
+func Test503RecoveryRevisitsPrimaryAndBackupsInPriorityOrder(t *testing.T) {
+	for _, chat := range []string{"42", "inline:chosen"} {
+		for _, recovered := range []string{"primary", "backup"} {
+			t.Run(chat+"/"+recovered, func(t *testing.T) {
+				withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
+					unavailable := &protocoltypes.HTTPError{StatusCode: 503, Wrapped: errors.New("temporarily unavailable")}
+					failures := []error{unavailable, unavailable, unavailable, unavailable}
+					wantModels := "primary,backup,primary,backup,primary"
+					if recovered == "backup" {
+						failures = append(failures, unavailable)
+						wantModels += ",backup"
+					}
+					p := &retryScriptProvider{failures: failures}
+					a := al.registry.GetDefaultAgent()
+					a.Provider = p
+					a.Candidates = []providers.FallbackCandidate{{Provider: "openai", Model: "primary"}, {Provider: "openai", Model: "backup"}}
+					start := time.Now()
+					got, err := al.processMessage(t.Context(), bus.InboundMessage{Channel: "telegram", ChatID: chat, SenderID: "telegram:42", Content: "hello"})
+					if err != nil || !strings.HasSuffix(got, "recovered") || strings.Join(p.models, ",") != wantModels || time.Since(start) != 3*time.Second {
+						t.Fatalf("answer=%q err=%v models=%v elapsed=%v", got, err, p.models, time.Since(start))
+					}
+					statusID := ""
+					states := []string{}
+					for {
+						select {
+						case status := <-mb.OutboundChan():
+							if status.Progress == nil || status.Progress.Kind != bus.ProgressRetry {
+								continue
+							}
+							if statusID != "" && status.Progress.ActionID != statusID {
+								t.Fatalf("multiple waiting statuses: %+v", status.Progress)
+							}
+							statusID = status.Progress.ActionID
+							states = append(states, string(status.Progress.State))
+						default:
+							if len(states) != 3 || states[0] != string(bus.ProgressStarted) || states[1] != string(bus.ProgressStarted) || states[2] != string(bus.ProgressCompleted) {
+								t.Fatalf("waiting status states=%v", states)
+							}
+							return
+						}
+					}
+				})
+			})
+		}
+	}
+}
+
+func Test503RecoveryRespectsEachCandidatesRetryAfter(t *testing.T) {
+	withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
+		p := &retryScriptProvider{failures: []error{
+			&protocoltypes.HTTPError{StatusCode: 503, RetryAfter: time.Minute, Wrapped: errors.New("primary unavailable")},
+			&protocoltypes.HTTPError{StatusCode: 503, Wrapped: errors.New("backup unavailable")},
+		}}
+		a := al.registry.GetDefaultAgent()
+		a.Provider = p
+		a.Candidates = []providers.FallbackCandidate{{Provider: "openai", Model: "primary"}, {Provider: "openai", Model: "backup"}}
+		start := time.Now()
+		got, err := al.ProcessDirect(t.Context(), "hello", "per-candidate-delay")
+		if err != nil || got != "recovered" || strings.Join(p.models, ",") != "primary,backup,backup" || time.Since(start) != time.Second {
+			t.Fatalf("answer=%q err=%v models=%v elapsed=%v", got, err, p.models, time.Since(start))
+		}
+	})
+}
+
+func Test503RecoveryStopsWhenEveryRecoveryCandidateBecomesUnavailable(t *testing.T) {
+	for _, chat := range []string{"42", "inline:chosen"} {
+		for _, terminal := range []error{
+			&protocoltypes.HTTPError{StatusCode: 401, Wrapped: errors.New("authorization revoked")},
+			&providers.CandidateUnavailableError{Reason: providers.FailoverAuth, Message: "account disabled"},
+		} {
+			t.Run(chat+"/"+terminal.Error(), func(t *testing.T) {
+				withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
+					unavailable := &protocoltypes.HTTPError{StatusCode: 503, Wrapped: errors.New("unavailable")}
+					p := &retryScriptProvider{failures: []error{unavailable, unavailable, terminal, terminal}}
+					a := al.registry.GetDefaultAgent()
+					a.Provider = p
+					a.Candidates = []providers.FallbackCandidate{{Provider: "openai", Model: "primary"}, {Provider: "openai", Model: "backup"}}
+					start := time.Now()
+					got, err := al.processMessage(t.Context(), bus.InboundMessage{Channel: "telegram", ChatID: chat, SenderID: "telegram:42", Content: "keep this conversation"})
+					if err == nil || got != "" || strings.Join(p.models, ",") != "primary,backup,primary,backup" || time.Since(start) != time.Second {
+						t.Fatalf("answer=%q err=%v models=%v elapsed=%v", got, err, p.models, time.Since(start))
+					}
+					var last bus.OutboundMessage
+					for {
+						select {
+						case last = <-mb.OutboundChan():
+						default:
+							if last.Progress == nil || last.Progress.State != bus.ProgressFailed {
+								t.Fatalf("unfinished status: %+v", last)
+							}
+							return
+						}
+					}
+				})
+			})
+		}
+	}
+}
+
+func Test503RecoveryRevisitsQuotaCandidateAtItsKnownReset(t *testing.T) {
+	withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
+		p := &retryScriptProvider{failures: []error{
+			&protocoltypes.HTTPError{StatusCode: 503, RetryAfter: time.Minute, Wrapped: errors.New("unavailable")},
+			&protocoltypes.HTTPError{StatusCode: 429, RetryAfter: 2 * time.Second, Wrapped: errors.New("quota exhausted")},
+		}}
+		a := al.registry.GetDefaultAgent()
+		a.Provider = p
+		a.Candidates = []providers.FallbackCandidate{{Provider: "openai", Model: "primary"}, {Provider: "openai", Model: "backup"}}
+		start := time.Now()
+		got, err := al.ProcessDirect(t.Context(), "hello", "quota-reset")
+		if err != nil || got != "recovered" || strings.Join(p.models, ",") != "primary,backup,backup" || time.Since(start) != 2*time.Second {
+			t.Fatalf("answer=%q err=%v models=%v elapsed=%v", got, err, p.models, time.Since(start))
+		}
+	})
+}
+
+func Test503RecoveryLeavesEmptyAnswerRecoveryAvailable(t *testing.T) {
+	withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
+		unavailable := &protocoltypes.HTTPError{StatusCode: 503, Wrapped: errors.New("unavailable")}
+		p := &retryScriptProvider{
+			failures:  []error{unavailable, unavailable, unavailable, unavailable},
+			responses: map[int]*providers.LLMResponse{4: {}},
+		}
+		al.registry.GetDefaultAgent().Provider = p
+		got, err := al.ProcessDirect(t.Context(), "hello", "empty-after-capacity")
+		if err != nil || got != "recovered" || p.calls != 6 {
+			t.Fatalf("answer=%q err=%v calls=%d", got, err, p.calls)
+		}
+	})
+}
+
+func TestNewRequestWaitsForConfigured503CandidateCooldown(t *testing.T) {
+	withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
+		p := &retryScriptProvider{failures: []error{&protocoltypes.HTTPError{StatusCode: 503, Wrapped: errors.New("unavailable")}}}
+		al.registry.GetDefaultAgent().Provider = p
+		ctx, cancel := context.WithCancel(t.Context())
+		go func() { time.Sleep(500 * time.Millisecond); cancel() }()
+		_, err := al.ProcessDirect(ctx, "first request", "cooldown")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		got, err := al.ProcessDirect(t.Context(), "try again", "cooldown")
+		if err != nil || got != "recovered" || p.calls != 2 || time.Since(start) != 500*time.Millisecond {
+			t.Fatalf("answer=%q err=%v calls=%d elapsed=%v", got, err, p.calls, time.Since(start))
+		}
+	})
+}
+
+func Test503RecoveryRespectsLongerRateLimitPause(t *testing.T) {
+	withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
+		p := &retryScriptProvider{failures: []error{
+			&protocoltypes.HTTPError{StatusCode: 503, RetryAfter: 3 * time.Minute, Wrapped: errors.New("unavailable")},
+			&protocoltypes.HTTPError{StatusCode: 429, RetryAfter: 2 * time.Minute, Wrapped: errors.New("rate_limit_exceeded")},
+		}}
+		a := al.registry.GetDefaultAgent()
+		a.Provider = p
+		a.Candidates = []providers.FallbackCandidate{{Provider: "openai", Model: "primary"}, {Provider: "openai", Model: "backup"}}
+		start := time.Now()
+		got, err := al.ProcessDirect(t.Context(), "hello", "rate-limit-pause")
+		if err != nil || got != "recovered" || strings.Join(p.models, ",") != "primary,backup,backup" || time.Since(start) != 2*time.Minute {
+			t.Fatalf("answer=%q err=%v models=%v elapsed=%v", got, err, p.models, time.Since(start))
 		}
 	})
 }
