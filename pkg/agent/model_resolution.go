@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -69,12 +70,13 @@ func candidateFromConfig(mc *config.ModelConfig) providers.FallbackCandidate {
 		return providers.FallbackCandidate{}
 	}
 	return providers.FallbackCandidate{
-		Provider:   ref.Provider,
-		Model:      ref.Model,
-		ConfigName: mc.ModelName,
-		ConfigKey:  providers.ModelConfigKey(mc),
-		ConfigID:   mc.ID,
-		AccountID:  mc.AccountID,
+		Provider:          ref.Provider,
+		Model:             ref.Model,
+		ConfigName:        mc.ModelName,
+		ConfigKey:         providers.ModelConfigKey(mc),
+		ConfigID:          mc.ID,
+		AccountID:         mc.AccountID,
+		InactivityTimeout: mc.InactivityTimeout(),
 	}
 }
 
@@ -169,7 +171,7 @@ func candidateProviderResolver(
 	workspace string,
 	primary providers.LLMProvider,
 	candidates []providers.FallbackCandidate,
-) func(providers.FallbackCandidate) (providers.LLMProvider, error) {
+) func(context.Context, providers.FallbackCandidate) (providers.LLMProvider, error) {
 	clients := make(map[string]providers.LLMProvider)
 	var clientsMu sync.Mutex
 	primaryProvider := ""
@@ -180,7 +182,7 @@ func candidateProviderResolver(
 			clients[candidates[0].StableKey()] = primary
 		}
 	}
-	return func(candidate providers.FallbackCandidate) (providers.LLMProvider, error) {
+	return func(ctx context.Context, candidate providers.FallbackCandidate) (providers.LLMProvider, error) {
 		key := candidate.StableKey()
 		clientsMu.Lock()
 		cached := clients[key]
@@ -195,7 +197,7 @@ func candidateProviderResolver(
 			}
 			return nil, err
 		}
-		client, _, err := providers.CreateProviderFromConfig(mc)
+		client, _, err := providers.CreateProviderFromConfigContext(ctx, mc)
 		if err != nil {
 			return nil, err
 		}

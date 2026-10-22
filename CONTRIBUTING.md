@@ -56,7 +56,7 @@ For substantial new features, please open an issue first to discuss the design b
 
 ### Prerequisites
 
-- Go 1.27.2 or later (see `go.mod`)
+- Go 1.27.3 or later (see `go.mod`)
 - `make`
 - Node.js 22.12+ and pnpm for the web frontend
 - `golangci-lint` v2.14.0, matching the PR workflow

@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -863,4 +864,233 @@ func TestAnthropicTruncatedStreamYieldsToReserve(t *testing.T) {
 			t.Fatalf("answer=%q err=%v calls=%v", answer, err, calls)
 		}
 	})
+}
+
+func TestCompaction503WaitUsesForegroundStatusOnly(t *testing.T) {
+	for _, foreground := range []bool{true, false} {
+		t.Run(fmt.Sprintf("foreground=%t", foreground), func(t *testing.T) {
+			initial, cfg := newSeahorseScenarioLoop(t, &sourceScenarioProvider{})
+			initial.Close()
+			cfg.Agents.Defaults.Model = "primary"
+			cfg.Agents.Defaults.ModelFallbacks = []string{"backup"}
+			cfg.Agents.Defaults.MaxTokens = 123
+			cfg.Agents.Defaults.ContextWindow = 12000
+			cfg.Agents.Defaults.SummarizeTokenPercent = 100
+			if !foreground {
+				cfg.Agents.Defaults.ContextWindow = 1000000
+				cfg.Agents.Defaults.SummarizeTokenPercent = 1
+			}
+			cfg.ModelList = []config.ModelConfig{
+				{ModelName: "primary", Model: "openai/primary", APIBase: "https://model.test"},
+				{ModelName: "backup", Model: "openai/backup", APIBase: "https://model.test"},
+			}
+			provider, _, err := providers.CreateProvider(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mb := bus.NewMessageBus()
+			al := NewAgentLoop(cfg, mb, provider)
+			al.SetRoutingConfigSource(func() (*config.Config, error) { return cfg, nil })
+			agent := al.registry.GetDefaultAgent()
+			key := inlineConversationKey("main", "42")
+			for range 8 {
+				agent.Sessions.AddFullMessage(
+					key,
+					providers.Message{Role: "user", Content: strings.Repeat("ORIGINAL_EVIDENCE ", 1500)},
+				)
+				agent.Sessions.AddFullMessage(key, providers.Message{Role: "assistant", Content: "retained answer"})
+			}
+			synctest.Test(t, func(t *testing.T) {
+				defer al.Close()
+				previous := http.DefaultTransport
+				defer func() { http.DefaultTransport = previous }()
+				summaries := 0
+				http.DefaultTransport = inactivityRoundTripper(func(r *http.Request) (*http.Response, error) {
+					var input struct {
+						Messages []providers.Message `json:"messages"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+						t.Fatal(err)
+					}
+					if len(input.Messages) == 1 && input.Messages[0].Role == "user" {
+						summaries++
+						if summaries <= 2 {
+							return &http.Response{
+								StatusCode: 503,
+								Header:     http.Header{},
+								Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"capacity"}}`)),
+								Request:    r,
+							}, nil
+						}
+						time.Sleep(time.Millisecond)
+					}
+					return &http.Response{
+						StatusCode: 200,
+						Header:     http.Header{"Content-Type": {"application/json"}},
+						Request:    r,
+						Body: io.NopCloser(
+							strings.NewReader(
+								`{"choices":[{"message":{"content":"retained summary and answer"},"finish_reason":"stop"}]}`,
+							),
+						),
+					}, nil
+				})
+				answer, err := al.processMessage(
+					t.Context(),
+					selectedInlineMessage("42", "compaction-capacity", "next"),
+				)
+				if err != nil || !strings.Contains(answer, "retained summary and answer") {
+					t.Fatalf("answer=%q err=%v", answer, err)
+				}
+				// Let the background operation finish in the quiet variant.
+				time.Sleep(2 * time.Second)
+				synctest.Wait()
+				if summaries < 3 || len(agent.Sessions.GetHistory(key)) < 18 {
+					t.Fatalf("summaries=%d history=%d", summaries, len(agent.Sessions.GetHistory(key)))
+				}
+				states := []bus.ProgressState{}
+				statusID := ""
+				for len(mb.OutboundChan()) > 0 {
+					out := <-mb.OutboundChan()
+					if out.Progress == nil || out.Progress.Kind != bus.ProgressRetry {
+						continue
+					}
+					if statusID != "" && statusID != out.Progress.ActionID {
+						t.Fatalf("multiple wait statuses: %s %s", statusID, out.Progress.ActionID)
+					}
+					statusID = out.Progress.ActionID
+					states = append(states, out.Progress.State)
+				}
+				if foreground &&
+					(len(states) != 2 || states[0] != bus.ProgressStarted || states[1] != bus.ProgressCompleted) {
+					t.Fatalf("foreground wait states=%v", states)
+				}
+				if !foreground && len(states) != 0 {
+					t.Fatalf("background compaction published status: %v", states)
+				}
+			})
+		})
+	}
+}
+
+func TestCredentialStoreContentionHonorsAttemptAndRequestCancellation(t *testing.T) {
+	for _, protocol := range []string{"anthropic", "openai", "antigravity"} {
+		for _, fresh := range []bool{false, true} {
+			for _, canceled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/fresh=%t/canceled=%t", protocol, fresh, canceled), func(t *testing.T) {
+					home := t.TempDir()
+					t.Setenv(config.EnvHome, home)
+					if err := auth.SetCredential(
+						"anthropic",
+						&auth.AuthCredential{AccessToken: "fixture", AuthMethod: "oauth"},
+					); err != nil {
+						t.Fatal(err)
+					}
+					if err := auth.SetCredential(
+						"google-antigravity",
+						&auth.AuthCredential{AccessToken: "fixture", AuthMethod: "oauth", ProjectID: "fixture"},
+					); err != nil {
+						t.Fatal(err)
+					}
+					if err := auth.SaveAccount(
+						&auth.AccountConnection{
+							ID:         "first",
+							Provider:   "openai",
+							Enabled:    true,
+							Credential: &auth.AuthCredential{AccessToken: "fixture", AuthMethod: "oauth"},
+						},
+					); err != nil {
+						t.Fatal(err)
+					}
+					initial, cfg, _, _, cleanup := newTestAgentLoop(t)
+					initial.Close()
+					defer cleanup()
+					cfg.Agents.Defaults.Model = "primary"
+					cfg.Agents.Defaults.ModelFallbacks = []string{"backup"}
+					cfg.ModelList = []config.ModelConfig{
+						{
+							ModelName:                "primary",
+							Model:                    protocol + "/primary",
+							AuthMethod:               "oauth",
+							InactivityTimeoutSeconds: 1,
+						},
+						{ModelName: "backup", Model: "openai/backup", APIBase: "https://reserve.test"},
+					}
+					if protocol == "openai" {
+						cfg.ModelList[0].AccountID = "first"
+					}
+					provider, _, err := providers.CreateProvider(cfg)
+					if err != nil {
+						t.Fatal(err)
+					}
+					al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+					defer al.Close()
+					if fresh {
+						al.SetRoutingConfigSource(func() (*config.Config, error) { return cfg, nil })
+					}
+					synctest.Test(t, func(t *testing.T) {
+						lock, err := fileutil.LockFile(t.Context(), filepath.Join(home, "auth.json.lock"))
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer lock.Close()
+						released := make(chan struct{})
+						defer func() { <-released }()
+						go func() { time.Sleep(3 * time.Second); _ = lock.Close(); close(released) }()
+						previous := http.DefaultTransport
+						defer func() { http.DefaultTransport = previous }()
+						backupCalls := 0
+						http.DefaultTransport = inactivityRoundTripper(func(r *http.Request) (*http.Response, error) {
+							if r.URL.Host != "reserve.test" {
+								t.Errorf("blocked credentials sent inference: %s", r.URL.Host)
+							}
+							select {
+							case <-released:
+								t.Error("backup waited for credential lock release")
+							default:
+							}
+							backupCalls++
+							return &http.Response{
+								StatusCode: 200,
+								Header:     http.Header{"Content-Type": {"application/json"}},
+								Request:    r,
+								Body: io.NopCloser(
+									strings.NewReader(
+										`{"choices":[{"message":{"content":"reserve answered"},"finish_reason":"stop"}]}`,
+									),
+								),
+							}, nil
+						})
+						ctx, cancel := context.WithCancel(t.Context())
+						defer cancel()
+						if canceled {
+							go func() { time.Sleep(500 * time.Millisecond); cancel() }()
+						}
+						started := time.Now()
+						answer, err := al.ProcessDirect(ctx, "hello", "auth-lock")
+						if canceled {
+							if !errors.Is(err, context.Canceled) || backupCalls != 0 ||
+								time.Since(started) != 500*time.Millisecond {
+								t.Fatalf(
+									"cancel answer=%q err=%v calls=%d elapsed=%v",
+									answer,
+									err,
+									backupCalls,
+									time.Since(started),
+								)
+							}
+						} else if err != nil || answer != "reserve answered" || backupCalls != 1 || time.Since(started) != time.Second {
+							t.Fatalf(
+								"timeout answer=%q err=%v calls=%d elapsed=%v",
+								answer,
+								err,
+								backupCalls,
+								time.Since(started),
+							)
+						}
+					})
+				})
+			}
+		}
+	}
 }

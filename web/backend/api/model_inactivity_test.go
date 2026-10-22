@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
 func TestAuthenticatedModelEditorPersistsInactivityPolicy(t *testing.T) {
@@ -118,6 +121,65 @@ func TestSelectedModelProbeHonorsConfiguredInactivityWithoutFallback(t *testing.
 		if w.Code != 502 || !strings.Contains(w.Body.String(), "timed out") || calls != 1 ||
 			time.Since(start) != time.Second {
 			t.Fatalf("status=%d body=%s calls=%d elapsed=%v", w.Code, w.Body.String(), calls, time.Since(start))
+		}
+	})
+}
+
+func TestSelectedAccountProbeBoundsCredentialAcquisition(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	if err := auth.SaveAccount(
+		&auth.AccountConnection{
+			ID:         "selected",
+			Provider:   "openai",
+			Enabled:    true,
+			Credential: &auth.AuthCredential{AccessToken: "fixture", AuthMethod: "oauth"},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	h, cookie, _ := modelInferenceDashboard(
+		t,
+		[]config.ModelConfig{
+			{
+				ModelName:                "selected",
+				Model:                    "openai/o1",
+				AuthMethod:               "oauth",
+				AccountID:                "selected",
+				InactivityTimeoutSeconds: 1,
+			},
+		},
+	)
+	synctest.Test(t, func(t *testing.T) {
+		lock, err := fileutil.LockFile(t.Context(), filepath.Join(home, "auth.json.lock"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+		released := make(chan struct{})
+		defer func() { <-released }()
+		go func() { time.Sleep(3 * time.Second); _ = lock.Close(); close(released) }()
+		previous := http.DefaultTransport
+		defer func() { http.DefaultTransport = previous }()
+		calls := 0
+		http.DefaultTransport = inactivityProbeTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{
+				StatusCode: 200,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Request:    r,
+				Body: io.NopCloser(
+					strings.NewReader(
+						"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"probe\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}}\n\n",
+					),
+				),
+			}, nil
+		})
+		started := time.Now()
+		w := dashboardRequest(h, "POST", "/api/models/0/test", "", cookie)
+		if w.Code != 502 || !strings.Contains(w.Body.String(), "timed out") || calls != 0 ||
+			time.Since(started) != time.Second {
+			t.Fatalf("status=%d body=%s calls=%d elapsed=%v", w.Code, w.Body.String(), calls, time.Since(started))
 		}
 	})
 }

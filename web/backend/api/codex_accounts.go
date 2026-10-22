@@ -44,7 +44,7 @@ func (h *Handler) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 			Label:    account.Label,
 			Provider: account.Provider,
 			Enabled:  account.Enabled,
-			Status:   "reauthorization_required",
+			Status:   string(account.LocalState().Authorization),
 			Models:   []string{},
 		}
 		item.LastProbe = account.LastProbe
@@ -54,18 +54,12 @@ func (h *Handler) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		if cred := account.Credential; cred != nil {
 			item.AccountID = cred.AccountID
 			item.Email = cred.Email
-			if cred.AccessToken != "" && (!cred.IsExpired() || cred.RefreshToken != "") {
-				item.Status = "authenticated"
-			}
 			if !cred.ExpiresAt.IsZero() {
 				item.ExpiresAt = cred.ExpiresAt.Format(time.RFC3339)
 			}
 		}
-		if !account.CanUsePlan() {
-			item.Status = "plan_permission_required"
-		}
-		if !account.Enabled {
-			item.Status = "disabled"
+		if item.Status == string(auth.AccountAuthorized) {
+			item.Status = "authenticated"
 		}
 		for _, model := range cfg.ModelList {
 			if model.AccountID == account.ID {

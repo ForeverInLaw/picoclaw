@@ -222,7 +222,7 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	mc = saved
 	mc.APIKey = ""
 	mc.APIKeys = nil
-	if err := json.Unmarshal(body, &mc); err != nil {
+	if err = json.Unmarshal(body, &mc); err != nil {
 		http.Error(w, "Invalid model configuration", http.StatusBadRequest)
 		return
 	}

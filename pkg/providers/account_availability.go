@@ -10,6 +10,7 @@ import (
 type accountHealth struct {
 	sessionVersion      string
 	reauthorization     bool
+	clientConfiguration bool
 	quota               bool
 	quotaReset          time.Time
 	quotaFailedAt       time.Time
@@ -54,10 +55,16 @@ func (ct *CooldownTracker) AccountAvailabilityContext(ctx context.Context, id st
 	if health != nil && health.sessionVersion != state.SessionVersion {
 		health.sessionVersion = state.SessionVersion
 		health.reauthorization = false
+		health.clientConfiguration = false
 	}
 	if !state.Enabled || state.RequiresReauthorization || health != nil && health.reauthorization {
 		result.Available = false
 		result.Reason = FailoverAuth
+		return result, nil
+	}
+	if health != nil && health.clientConfiguration {
+		result.Available = false
+		result.Reason = FailoverClientConfiguration
 		return result, nil
 	}
 	now := ct.nowFunc()
@@ -95,7 +102,8 @@ func (ct *CooldownTracker) recordAccountFailure(
 	}
 	// A model/policy-specific forbidden response permits fallback but does not
 	// revoke a valid registration for every other model on that connection.
-	if failure.Reason != FailoverBilling && failure.Reason != FailoverRateLimit &&
+	if failure.Reason != FailoverClientConfiguration && failure.Reason != FailoverBilling &&
+		failure.Reason != FailoverRateLimit &&
 		!(failure.Reason == FailoverAuth && failure.Status == 401) {
 		return false
 	}
@@ -112,6 +120,8 @@ func (ct *CooldownTracker) recordAccountFailure(
 	}
 	health.sessionVersion = version
 	switch failure.Reason {
+	case FailoverClientConfiguration:
+		health.clientConfiguration = true
 	case FailoverAuth:
 		health.reauthorization = true
 	case FailoverBilling:

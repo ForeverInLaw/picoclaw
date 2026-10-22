@@ -63,6 +63,9 @@ func routingOutcome(
 		Candidate:  candidate.RoutingIdentity(),
 		DurationMS: time.Since(started).Milliseconds(),
 	}
+	if err == nil && response != nil && response.ServedModel != "" {
+		event.Candidate.Model = response.ServedModel
+	}
 	if err == nil && (response == nil || (strings.TrimSpace(response.Content) == "" && len(response.ToolCalls) == 0)) {
 		event.Phase = "failed"
 		event.Reason = "empty_answer"
@@ -135,6 +138,8 @@ func (fc *FallbackChain) Availability(ctx context.Context, candidate FallbackCan
 
 func routingFailureReason(failure *FailoverError) string {
 	switch {
+	case failure.Reason == FailoverClientConfiguration:
+		return string(failure.Reason)
 	case failure.Status == 503:
 		return "service_unavailable"
 	case failure.Status == 403:

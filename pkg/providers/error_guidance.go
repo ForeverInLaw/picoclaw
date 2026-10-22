@@ -27,6 +27,8 @@ func ErrorGuidance(err error) string {
 	failure := ClassifyError(err, "", "")
 	if failure != nil {
 		switch failure.Reason {
+		case FailoverClientConfiguration:
+			return "The account registration was rejected. Check its OAuth client configuration; saved tokens have been retained."
 		case FailoverAuth:
 			text := strings.ToLower(err.Error())
 			if strings.Contains(text, "expired") || strings.Contains(text, "re-authenticate") ||

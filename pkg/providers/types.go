@@ -83,15 +83,16 @@ type NativeSearchCapable interface {
 type FailoverReason string
 
 const (
-	FailoverAuth         FailoverReason = "auth"
-	FailoverIncompatible FailoverReason = "incompatible"
-	FailoverRateLimit    FailoverReason = "rate_limit"
-	FailoverBilling      FailoverReason = "billing"
-	FailoverTimeout      FailoverReason = "timeout"
-	FailoverFormat       FailoverReason = "format"
-	FailoverOverloaded   FailoverReason = "overloaded"
-	FailoverUnknown      FailoverReason = "unknown"
-	FailoverNetwork      FailoverReason = "network"
+	FailoverAuth                FailoverReason = "auth"
+	FailoverClientConfiguration FailoverReason = "client_configuration"
+	FailoverIncompatible        FailoverReason = "incompatible"
+	FailoverRateLimit           FailoverReason = "rate_limit"
+	FailoverBilling             FailoverReason = "billing"
+	FailoverTimeout             FailoverReason = "timeout"
+	FailoverFormat              FailoverReason = "format"
+	FailoverOverloaded          FailoverReason = "overloaded"
+	FailoverUnknown             FailoverReason = "unknown"
+	FailoverNetwork             FailoverReason = "network"
 )
 
 // FailoverError wraps an LLM provider error with classification metadata.

@@ -704,10 +704,9 @@ func (h *Handler) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) gatewayStatusData() map[string]any {
 	data := map[string]any{}
-	configDefaultModel := ""
 	cfg, cfgErr := config.LoadConfig(h.configPath)
 	if cfgErr == nil && cfg != nil {
-		configDefaultModel = strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
+		configDefaultModel := strings.TrimSpace(cfg.Agents.Defaults.GetModelName())
 		if configDefaultModel != "" {
 			data["config_default_model"] = configDefaultModel
 		}

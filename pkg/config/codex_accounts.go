@@ -7,7 +7,9 @@ import "strings"
 func (c *Config) BindLegacyCodexAccount(authMethod string) {
 	for i := range c.ModelList {
 		model := &c.ModelList[i]
-		if (strings.HasPrefix(model.Model, "openai/") || !strings.Contains(model.Model, "/")) && (model.AuthMethod == "oauth" || model.AuthMethod == "token") && (model.AccountID == "" || model.AccountID == LegacyOpenAIAccountID) {
+		if (strings.HasPrefix(model.Model, "openai/") || !strings.Contains(model.Model, "/")) &&
+			(model.AuthMethod == "oauth" || model.AuthMethod == "token") &&
+			(model.AccountID == "" || model.AccountID == LegacyOpenAIAccountID) {
 			model.AccountID = LegacyOpenAIAccountID
 			return
 		}
@@ -20,5 +22,13 @@ func (c *Config) BindLegacyCodexAccount(authMethod string) {
 	for names[alias] {
 		alias = "codex-" + alias
 	}
-	c.ModelList = append(c.ModelList, ModelConfig{ModelName: alias, Model: "openai/gpt-5.4", AuthMethod: authMethod, AccountID: LegacyOpenAIAccountID})
+	c.ModelList = append(
+		c.ModelList,
+		ModelConfig{
+			ModelName:  alias,
+			Model:      "openai/gpt-5.4",
+			AuthMethod: authMethod,
+			AccountID:  LegacyOpenAIAccountID,
+		},
+	)
 }

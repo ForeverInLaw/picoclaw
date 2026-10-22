@@ -481,6 +481,8 @@ func contextHistory(ctx context.Context, agent *AgentInstance, key string, prote
 	return result, err
 }
 
+type foregroundCompactionKey struct{}
+
 func (al *AgentLoop) compressContext(
 	ctx context.Context,
 	agent *AgentInstance,
@@ -490,6 +492,7 @@ func (al *AgentLoop) compressContext(
 	defs []providers.ToolDefinition,
 	reserve int,
 ) (compressionResult, bool, error) {
+	ctx = context.WithValue(ctx, foregroundCompactionKey{}, true)
 	if agent.ContextManager == nil || agent.ContextManager.Name() == "legacy" {
 		result, ok := al.forceCompression(agent, key, protected)
 		return result, ok, nil

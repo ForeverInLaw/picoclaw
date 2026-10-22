@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/modelruntime"
@@ -124,7 +125,7 @@ type routingContextProvider struct {
 	chain         *providers.FallbackChain
 	agent         *AgentInstance
 	candidates    []providers.FallbackCandidate
-	resolve       func(providers.FallbackCandidate) (providers.LLMProvider, error)
+	resolve       func(context.Context, providers.FallbackCandidate) (providers.LLMProvider, error)
 }
 
 func (p *routingContextProvider) GetDefaultModel() string {
@@ -143,11 +144,21 @@ func (p *routingContextProvider) Chat(
 	if trace != nil {
 		ctx = providers.WithRoutingObserver(ctx, trace.Record)
 	}
+	var onWait func(time.Duration, error)
+	waits := 0
+	foreground, _ := ctx.Value(foregroundCompactionKey{}).(bool)
+	al, ts := AgentLoopFromContext(ctx), turnStateFromContext(ctx)
+	if foreground && al != nil && ts != nil {
+		onWait = func(delay time.Duration, failure error) {
+			waits++
+			al.reportModelRetry(ctx, ts, waits, "service_unavailable", failure, delay)
+		}
+	}
 	result, err := p.chain.ExecuteRecoveryCandidate(
 		ctx,
 		p.routing.prefer(p.candidates),
 		func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
-			client, err := p.resolve(candidate)
+			client, err := p.resolve(ctx, candidate)
 			if err != nil {
 				return nil, err
 			}
@@ -182,8 +193,12 @@ func (p *routingContextProvider) Chat(
 				},
 			)
 		},
-		nil,
+		onWait,
 	)
+	if waits > 0 {
+		al.finishModelRetry(ctx, ts, err)
+	}
+
 	if trace != nil {
 		state := "completed"
 		if err != nil {

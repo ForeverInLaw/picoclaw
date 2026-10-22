@@ -2284,9 +2284,8 @@ turnLoop:
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if modelBudgetAttempts >= max(modelMaxAttempts, len(activeCandidates)) {
-					return nil, errModelAttemptBudget
-				}
+				// The scheduler owns complete candidate passes and 503 recovery rounds.
+				// Only the outer ordinary/empty/context retries consume this budget.
 				modelAttempts++
 				modelBudgetAttempts++
 				reasoningActionID := fmt.Sprintf("reasoning:%d:%d", iteration, modelAttempts)
@@ -2298,7 +2297,9 @@ turnLoop:
 					!ts.opts.NoHistory && !constants.IsInternalChannel(ts.channel)
 				if streamingEnabled {
 					// Each candidate gets its own preview; failed attempts cancel theirs.
-					streamer, streamUpdater = selectStreamingTargets(ctx, al.bus, al.channelManager, ts.channel, ts.chatID)
+					providers.WithoutModelInactivity(ctx, func() {
+						streamer, streamUpdater = selectStreamingTargets(ctx, al.bus, al.channelManager, ts.channel, ts.chatID)
+					})
 				}
 				if streamingEnabled && (streamer != nil || streamUpdater != nil) {
 					lastSnapshots := make(map[providers.ContentPhase]string)
@@ -2388,7 +2389,7 @@ turnLoop:
 				client := activeProvider
 				if len(activeCandidates) > 0 {
 					var err error
-					client, err = resolveCandidateProvider(candidate)
+					client, err = resolveCandidateProvider(ctx, candidate)
 					if err != nil {
 						return nil, err
 					}
@@ -2399,6 +2400,9 @@ turnLoop:
 				response, err := callProvider(ctx, client, candidate)
 				lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
 				return response, err
+			}
+			for i := range candidates {
+				candidates[i].InactivityTimeout = candidateInactivityTimeout(cfg, candidates[i], ts.agent.Workspace)
 			}
 			var fbResult *providers.FallbackResult
 			var fbErr error

@@ -10,7 +10,7 @@ import (
 
 const defaultAnthropicAPIBase = "https://api.anthropic.com/v1"
 
-var getCredential = auth.GetCredential
+var getCredential = auth.GetCredentialContext
 
 type providerType int
 

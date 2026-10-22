@@ -12,7 +12,10 @@ import (
 
 const DefaultInactivityTimeout = config.DefaultModelInactivityTimeout
 
-type inactivityDeliveryKey struct{}
+type (
+	inactivityDeliveryKey struct{}
+	inactivityAttemptKey  struct{}
+)
 
 // WithoutModelInactivity excludes synchronous preview delivery from model wait
 // time. Only decoded provider events reset the underlying progress clock.
@@ -42,11 +45,17 @@ func RunModelAttempt(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// The fallback scheduler may already own this candidate's acquisition and
+	// inference scope. Reuse its progress clock rather than nesting timers.
+	if active, _ := ctx.Value(inactivityAttemptKey{}).(bool); active {
+		return call(ctx)
+	}
 	if limit <= 0 {
 		limit = DefaultInactivityTimeout
 	}
 	failure := &InactivityTimeoutError{Timeout: limit}
 	attempt, cancel := context.WithCancelCause(ctx)
+	attempt = context.WithValue(attempt, inactivityAttemptKey{}, true)
 	var mu sync.Mutex
 	lastProgress := time.Now()
 	var pausedAt time.Time

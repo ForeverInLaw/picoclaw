@@ -1,13 +1,14 @@
 package auth
 
 import (
-	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
-	authstore "github.com/sipeed/picoclaw/pkg/auth"
-	"github.com/sipeed/picoclaw/pkg/config"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/sipeed/picoclaw/cmd/picoclaw/internal"
+	authstore "github.com/sipeed/picoclaw/pkg/auth"
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 func TestNewLogoutSubcommand(t *testing.T) {
@@ -31,7 +32,13 @@ func TestLogoutKeepsCodexModelBindingAndAPIKeyConfiguration(t *testing.T) {
 	}
 	cfg.Agents.Defaults.ModelName = "paid"
 	require.NoError(t, config.SaveConfig(internal.GetConfigPath(), cfg))
-	require.NoError(t, authstore.SetCredential("openai", &authstore.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "codex-token"}))
+	require.NoError(
+		t,
+		authstore.SetCredential(
+			"openai",
+			&authstore.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "codex-token"},
+		),
+	)
 	cmd := NewAuthCommand()
 	cmd.SetArgs([]string{"logout", "--provider", "openai"})
 	require.NoError(t, cmd.Execute())
@@ -48,8 +55,36 @@ func TestLogoutAllKeepsHostAndAccountRegistrationMappings(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	hostID, err := authstore.InstanceHostID()
 	require.NoError(t, err)
-	require.NoError(t, authstore.SetCredential("openai", &authstore.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "legacy-token"}))
-	require.NoError(t, authstore.SaveAccount(&authstore.AccountConnection{ID: "registered", Label: "Registered", Provider: "openai", Enabled: true, HostID: hostID, Subject: "verified-subject", Issuer: authstore.OpenAIRegistrationIssuer, IDToken: "retained-id-token", Resource: authstore.OpenAIRegistrationResource, OAuth: authstore.OAuthProviderConfig{ClientID: "issued-client"}, Credential: &authstore.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "access", RefreshToken: "refresh"}}))
+	require.NoError(
+		t,
+		authstore.SetCredential(
+			"openai",
+			&authstore.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "legacy-token"},
+		),
+	)
+	require.NoError(
+		t,
+		authstore.SaveAccount(
+			&authstore.AccountConnection{
+				ID:       "registered",
+				Label:    "Registered",
+				Provider: "openai",
+				Enabled:  true,
+				HostID:   hostID,
+				Subject:  "verified-subject",
+				Issuer:   authstore.OpenAIRegistrationIssuer,
+				IDToken:  "retained-id-token",
+				Resource: authstore.OpenAIRegistrationResource,
+				OAuth:    authstore.OAuthProviderConfig{ClientID: "issued-client"},
+				Credential: &authstore.AuthCredential{
+					Provider:     "openai",
+					AuthMethod:   "oauth",
+					AccessToken:  "access",
+					RefreshToken: "refresh",
+				},
+			},
+		),
+	)
 	command := NewAuthCommand()
 	command.SetArgs([]string{"logout"})
 	require.NoError(t, command.Execute())

@@ -691,3 +691,142 @@ func TestRuntimeLateBackgroundContextHasItsOwnOutcome(t *testing.T) {
 		t.Fatalf("late context overwrote parent: %+v", after.Records)
 	}
 }
+
+func TestOAuthMachineFailuresSelectReserveWithoutLosingCredentials(t *testing.T) {
+	for _, code := range []string{"invalid_client", "temporarily_unavailable", "server_error", "invalid_request"} {
+		t.Run(code, func(t *testing.T) {
+			var tokenCalls atomic.Int32
+			tokens := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				tokenCalls.Add(1)
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = fmt.Fprintf(w, `{"error":%q,"error_description":"PRIVATE_PROVIDER_DESCRIPTION"}`, code)
+			}))
+			defer tokens.Close()
+			var backupCalls atomic.Int32
+			h, cookie, loop, status := runtimeHTTPFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+				backupCalls.Add(1)
+				_, _ = io.WriteString(
+					w,
+					`{"choices":[{"message":{"content":"reserve answered"},"finish_reason":"stop"}]}`,
+				)
+			}, func(cfg *config.Config) {
+				if err := auth.SaveAccount(&auth.AccountConnection{
+					ID:       "oauth-first",
+					Provider: "openai",
+					Enabled:  true,
+					OAuth:    auth.OAuthProviderConfig{TokenURL: tokens.URL, ClientID: "fixture-client"},
+					Credential: &auth.AuthCredential{
+						AccessToken:  "expired",
+						RefreshToken: "retained-refresh",
+						AuthMethod:   "oauth",
+						ExpiresAt:    time.Now().Add(-time.Hour),
+					},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				cfg.ModelList[0].AuthMethod = "oauth"
+				cfg.ModelList[0].AccountID = "oauth-first"
+				if code == "invalid_client" {
+					alias := cfg.ModelList[0]
+					alias.ID, alias.ModelName = "same-account-alias", "Alias"
+					cfg.ModelList = append(cfg.ModelList, alias)
+					cfg.Agents.Defaults.ModelFallbacks = []string{
+						config.ModelIDPrefix + alias.ID,
+						config.ModelIDPrefix + "b",
+					}
+				}
+			})
+			answer, err := loop.ProcessDirect(t.Context(), "use reserve", "oauth-code")
+			if code == "invalid_request" {
+				if err == nil || backupCalls.Load() != 0 {
+					t.Fatalf("invalid request retried: %q %v calls=%d", answer, err, backupCalls.Load())
+				}
+			} else {
+				if err != nil || answer != "reserve answered" || backupCalls.Load() != 1 {
+					t.Fatalf("code=%s answer=%q err=%v calls=%d", code, answer, err, backupCalls.Load())
+				}
+			}
+			if code == "invalid_client" && tokenCalls.Load() != 1 {
+				t.Fatalf("same-account alias repeated rejected client refresh: %d", tokenCalls.Load())
+			}
+			saved, err := auth.GetAccount("oauth-first")
+			if err != nil || saved.Credential == nil || saved.Credential.RefreshToken != "retained-refresh" {
+				t.Fatalf("client/service error erased session: %+v %v", saved, err)
+			}
+			_, snapshot := runtimeSnapshot(t, h, cookie, status)
+			if code == "invalid_client" {
+				for _, item := range snapshot.Availability {
+					if item.Candidate.AccountID == "oauth-first" && item.Authorization != "authorized" {
+						t.Fatalf("invalid client falsely revoked saved authorization: %+v", item)
+					}
+				}
+				classified := false
+				for _, attempt := range snapshot.Records[0].Attempts {
+					classified = classified ||
+						attempt.Candidate.AccountID == "oauth-first" && attempt.Reason == "client_configuration"
+				}
+				if !classified {
+					t.Fatal("client registration failure lost its distinct runtime reason")
+				}
+			}
+			serialized, _ := json.Marshal(snapshot)
+			if strings.Contains(string(serialized), "PRIVATE_PROVIDER_DESCRIPTION") ||
+				strings.Contains(string(serialized), "retained-refresh") {
+				t.Fatal("runtime exposed token failure secrets")
+			}
+		})
+	}
+}
+
+func TestRuntimeLegacyCodexReportsServedWireModel(t *testing.T) {
+	h, cookie, loop, status := runtimeHTTPFixture(t, func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("legacy account must retain its existing endpoint")
+	}, func(cfg *config.Config) {
+		if err := auth.SaveAccount(&auth.AccountConnection{
+			ID: config.LegacyOpenAIAccountID, Provider: "openai", Enabled: true,
+			Credential: &auth.AuthCredential{AccessToken: "legacy-token", AuthMethod: "oauth"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		cfg.ModelList[0].Model = "openai/o1"
+		cfg.ModelList[0].AuthMethod = "oauth"
+		cfg.ModelList[0].AccountID = config.LegacyOpenAIAccountID
+	})
+	original := http.DefaultTransport
+	defer func() { http.DefaultTransport = original }()
+	var wireModel string
+	http.DefaultTransport = accountRecordingTransport{handler: func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "chatgpt.com" {
+			return original.RoundTrip(r)
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		wireModel = body.Model
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Request:    r,
+			Body: io.NopCloser(
+				strings.NewReader(
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"legacy\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"legacy answered\"}]}]}}\n\n",
+				),
+			),
+		}, nil
+	}}
+	answer, err := loop.ProcessDirect(t.Context(), "hello", "legacy-wire")
+	if err != nil || answer != "legacy answered" || wireModel != "gpt-5.3-codex" {
+		t.Fatalf("answer=%q err=%v wire=%q", answer, err, wireModel)
+	}
+	_, snapshot := runtimeSnapshot(t, h, cookie, status)
+	record := snapshot.Records[0]
+	if record.Selected == nil || record.Selected.ID != "a" ||
+		record.Selected.AccountID != config.LegacyOpenAIAccountID ||
+		record.Selected.Model != wireModel ||
+		record.Chain[0].Model != "o1" {
+		t.Fatalf("actual identity must retain configured choice and captured chain: %+v", record)
+	}
+}

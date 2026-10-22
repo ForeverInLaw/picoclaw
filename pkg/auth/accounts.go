@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
 var ErrAccountNotFound = errors.New("account connection not found")
@@ -155,7 +156,7 @@ func AccountCredentialContext(ctx context.Context, id string) (*AuthCredential, 
 		return nil, err
 	}
 	defer mu.Unlock()
-	refreshFile, err := lockAuthFileContext(
+	refreshFile, err := fileutil.LockFile(
 		ctx,
 		fmt.Sprintf("%s.refresh-%x.lock", authFilePath(), sha256.Sum256([]byte(id))),
 	)
@@ -281,12 +282,46 @@ func clearRejectedAccountSession(ctx context.Context, expected *AccountConnectio
 	return saveStore(store)
 }
 
+// AccountAuthorization classifies saved authorization without refreshing or probing.
+type AccountAuthorization string
+
+const (
+	AccountAuthorized              AccountAuthorization = "authorized"
+	AccountReauthorizationRequired AccountAuthorization = "reauthorization_required"
+	AccountPlanPermissionRequired  AccountAuthorization = "plan_permission_required"
+	AccountDisabled                AccountAuthorization = "disabled"
+)
+
 // AccountSessionState is a local snapshot; reading it never refreshes or probes.
 type AccountSessionState struct {
 	LastSuccessfulProbeAt   time.Time
 	SessionVersion          string
+	Authorization           AccountAuthorization
 	Enabled                 bool
 	RequiresReauthorization bool
+}
+
+// LocalState keeps credential, plan and enabled policy consistent for all callers.
+func (account *AccountConnection) LocalState() AccountSessionState {
+	state := AccountSessionState{
+		LastSuccessfulProbeAt: account.LastSuccessAt,
+		SessionVersion:        account.SessionVersion,
+		Enabled:               account.Enabled,
+		Authorization:         AccountAuthorized,
+	}
+	credential := account.Credential
+	switch {
+	case !account.CanUsePlan():
+		state.Authorization = AccountPlanPermissionRequired
+	case credential == nil || credential.AccessToken == "" ||
+		(credential.IsExpired() && credential.RefreshToken == ""):
+		state.Authorization = AccountReauthorizationRequired
+	}
+	state.RequiresReauthorization = state.Authorization != AccountAuthorized
+	if !state.Enabled {
+		state.Authorization = AccountDisabled
+	}
+	return state
 }
 
 func AccountState(id string) (AccountSessionState, error) {
@@ -298,14 +333,7 @@ func AccountStateContext(ctx context.Context, id string) (AccountSessionState, e
 	if err != nil {
 		return AccountSessionState{}, err
 	}
-	credential := account.Credential
-	return AccountSessionState{
-		LastSuccessfulProbeAt: account.LastSuccessAt,
-		SessionVersion:        account.SessionVersion,
-		Enabled:               account.Enabled,
-		RequiresReauthorization: !account.CanUsePlan() || credential == nil || credential.AccessToken == "" ||
-			(credential.IsExpired() && credential.RefreshToken == ""),
-	}, nil
+	return account.LocalState(), nil
 }
 
 // AccountProbe contains only bounded operational metadata, never provider text.
@@ -318,7 +346,11 @@ type AccountProbe struct {
 
 // RecordAccountProbe ignores results from a deleted or superseded session.
 func RecordAccountProbe(id, version string, probe AccountProbe) error {
-	unlock, err := lockStore()
+	return RecordAccountProbeContext(context.Background(), id, version, probe)
+}
+
+func RecordAccountProbeContext(ctx context.Context, id, version string, probe AccountProbe) error {
+	unlock, err := lockStoreContext(ctx)
 	if err != nil {
 		return err
 	}

@@ -31,7 +31,7 @@ const (
 
 type Provider struct {
 	client      *anthropic.Client
-	tokenSource func() (string, error)
+	tokenSource func(context.Context) (string, error)
 	baseURL     string
 }
 
@@ -68,7 +68,18 @@ func NewProviderWithTokenSource(token string, tokenSource func() (string, error)
 
 func NewProviderWithTokenSourceAndBaseURL(token string, tokenSource func() (string, error), apiBase string) *Provider {
 	p := NewProviderWithBaseURL(token, apiBase)
-	p.tokenSource = tokenSource
+	p.tokenSource = func(context.Context) (string, error) { return tokenSource() }
+	return p
+}
+
+// NewProviderWithContextTokenSource uses the model attempt's cancellation for credential acquisition.
+func NewProviderWithContextTokenSource(
+	token string,
+	source func(context.Context) (string, error),
+	apiBase string,
+) *Provider {
+	p := NewProviderWithBaseURL(token, apiBase)
+	p.tokenSource = source
 	return p
 }
 
@@ -81,7 +92,7 @@ func (p *Provider) Chat(
 ) (*LLMResponse, error) {
 	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	if p.tokenSource != nil {
-		tok, err := p.tokenSource()
+		tok, err := p.tokenSource(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("refreshing token: %w", err)
 		}
@@ -119,7 +130,7 @@ func (p *Provider) ChatStream(
 ) (*LLMResponse, error) {
 	opts := []option.RequestOption{option.WithMaxRetries(0)}
 	if p.tokenSource != nil {
-		tok, err := p.tokenSource()
+		tok, err := p.tokenSource(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("refreshing token: %w", err)
 		}

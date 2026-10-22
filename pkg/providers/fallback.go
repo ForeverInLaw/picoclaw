@@ -18,10 +18,11 @@ type FallbackCandidate struct {
 	Provider string
 	Model    string
 	// ConfigName retains the configured alias and its endpoint/credential selection.
-	ConfigName string
-	ConfigKey  string
-	ConfigID   string
-	AccountID  string
+	ConfigName        string
+	ConfigKey         string
+	ConfigID          string
+	AccountID         string
+	InactivityTimeout time.Duration // Request policy; excluded from stable identity.
 }
 
 // StableKey keeps same-model configurations separate in caches and cooldowns.
@@ -187,71 +188,40 @@ func (fc *FallbackChain) execute(
 			return nil, ctx.Err()
 		}
 
-		availability, availabilityErr := fc.cooldown.AccountAvailabilityContext(ctx, candidate.AccountID)
-		if availabilityErr != nil {
-			return nil, availabilityErr
-		}
-		if !availability.Available {
-			reportRouting(
-				ctx,
-				RoutingEvent{
-					Phase:          "skipped",
-					Candidate:      candidate.RoutingIdentity(),
-					Reason:         string(availability.Reason),
-					NextEligibleAt: availability.NextEligibleAt,
-				},
-			)
-			unavailable := &CandidateUnavailableError{
-				Reason:  availability.Reason,
-				RetryAt: availability.NextEligibleAt,
-				Message: "account connection is unavailable",
-			}
-			result.Attempts = append(
-				result.Attempts,
-				FallbackAttempt{
-					Candidate: candidate,
-					Provider:  candidate.Provider,
-					Model:     candidate.Model,
-					Skipped:   true,
-					Reason:    unavailable.Reason,
-					Error:     unavailable,
-				},
-			)
-			continue
-		}
-
-		// Each selected endpoint and credential has its own health state.
 		cooldownKey := candidate.StableKey()
-		if !retryOwnFailure && !fc.cooldown.IsAvailable(cooldownKey) {
-			remaining := fc.cooldown.CooldownRemaining(cooldownKey)
-			reportRouting(
-				ctx,
-				RoutingEvent{
-					Phase:          "skipped",
-					Candidate:      candidate.RoutingIdentity(),
-					Reason:         "cooldown",
-					NextEligibleAt: time.Now().UTC().Add(remaining),
-				},
-			)
-			result.Attempts = append(result.Attempts, FallbackAttempt{
-				Candidate: candidate,
-				Provider:  candidate.Provider,
-				Model:     candidate.Model,
-				Skipped:   true,
-				Reason:    FailoverRateLimit,
-				Error: fmt.Errorf(
-					"%s in cooldown (%s remaining)",
-					cooldownKey,
-					remaining.Round(time.Second),
-				),
-			})
-			continue
-		}
-
-		// Execute the run function.
+		availability := AccountAvailability{}
 		start := time.Now()
-		reportRouting(ctx, RoutingEvent{Phase: "attempt", Candidate: candidate.RoutingIdentity()})
-		resp, err := run(ctx, candidate)
+		resp, err := RunModelAttempt(
+			ctx,
+			candidate.InactivityTimeout,
+			func(attemptCtx context.Context) (*LLMResponse, error) {
+				var availabilityErr error
+				availability, availabilityErr = fc.cooldown.AccountAvailabilityContext(attemptCtx, candidate.AccountID)
+				if availabilityErr != nil {
+					return nil, availabilityErr
+				}
+				if !availability.Available {
+					return nil, &CandidateUnavailableError{
+						Reason: availability.Reason, RetryAt: availability.NextEligibleAt,
+						Message: "account connection is unavailable",
+					}
+				}
+				if !retryOwnFailure && !fc.cooldown.IsAvailable(cooldownKey) {
+					remaining := fc.cooldown.CooldownRemaining(cooldownKey)
+					return nil, &CandidateUnavailableError{
+						Reason:  FailoverRateLimit,
+						RetryAt: time.Now().Add(remaining),
+						Message: fmt.Sprintf(
+							"%s in cooldown (%s remaining)",
+							cooldownKey,
+							remaining.Round(time.Second),
+						),
+					}
+				}
+				reportRouting(attemptCtx, RoutingEvent{Phase: "attempt", Candidate: candidate.RoutingIdentity()})
+				return run(attemptCtx, candidate)
+			},
+		)
 		elapsed := time.Since(start)
 		routingOutcome(ctx, candidate, start, resp, err)
 

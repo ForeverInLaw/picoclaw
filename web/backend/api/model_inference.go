@@ -146,7 +146,7 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 	}
 	// These protocols can open subprocesses/connections or use global OAuth
 	// credentials. This action only supports configured OpenAI-compatible HTTP.
-	protocol, _ := providers.ExtractProtocol(mc.Model)
+	protocol, modelID := providers.ExtractProtocol(mc.Model)
 	switch protocol {
 	case "azure", "azure-openai", "anthropic-messages", "coding-plan-anthropic", "alibaba-coding-anthropic",
 		"antigravity", "claude-cli", "claudecli", "codex-cli", "codexcli", "github-copilot", "copilot":
@@ -165,43 +165,56 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		)
 		return
 	}
-	// Capture the session revision so a late result cannot update a replacement.
-	accountID, sessionVersion := "", ""
-	if protocol == "openai" && (mc.AuthMethod == "oauth" || mc.AuthMethod == "token") {
-		accountID = mc.AccountID
-		if accountID == "" {
-			accountID = config.LegacyOpenAIAccountID
-		}
-		account, err := auth.GetAccount(accountID)
-		if err != nil || !account.Enabled {
-			modelTestError(w, 400, "The selected account is unavailable or disabled.")
-			return
-		}
-		sessionVersion = account.SessionVersion
-	}
-	provider, modelID, err := providers.CreateProviderFromConfig(&mc)
-	if err != nil {
-		modelTestError(w, http.StatusBadRequest, "Check the selected provider, model identifier, API base and API key.")
-		return
-	}
-	if codex, ok := provider.(*providers.CodexProvider); ok {
-		codex.SetExactModel(true)
-	}
-	if _, ok := provider.(*providers.HTTPProvider); !ok && protocol != "openai" {
-		modelTestError(w, http.StatusBadRequest, "This test requires an OpenAI-compatible HTTP provider.")
-		return
-	}
 	timeout := 15 * time.Second
 	if mc.RequestTimeout > 0 && mc.RequestTimeout < 15 {
 		timeout = time.Duration(mc.RequestTimeout) * time.Second
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	accountID, sessionVersion := "", ""
+	if protocol == "openai" && (mc.AuthMethod == "oauth" || mc.AuthMethod == "token") {
+		accountID = mc.AccountID
+		if accountID == "" {
+			accountID = config.LegacyOpenAIAccountID
+		}
+	}
+	setupMessage := ""
 	started := time.Now()
 	response, err := providers.RunModelAttempt(
 		ctx,
 		mc.InactivityTimeout(),
 		func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+			// Capture the session revision inside the same acquisition/inference scope.
+			if accountID != "" {
+				account, loadErr := auth.GetAccountContext(attemptCtx, accountID)
+				if loadErr != nil {
+					if attemptCtx.Err() != nil {
+						return nil, attemptCtx.Err()
+					}
+					setupMessage = "The selected account is unavailable or disabled."
+					return nil, loadErr
+				}
+				if !account.Enabled {
+					setupMessage = "The selected account is unavailable or disabled."
+					return nil, errors.New(setupMessage)
+				}
+				sessionVersion = account.SessionVersion
+			}
+			provider, selectedModel, createErr := providers.CreateProviderFromConfigContext(attemptCtx, &mc)
+			if createErr != nil {
+				if attemptCtx.Err() == nil {
+					setupMessage = "Check the selected provider, model identifier, API base and API key."
+				}
+				return nil, createErr
+			}
+			modelID = selectedModel
+			if codex, ok := provider.(*providers.CodexProvider); ok {
+				codex.SetExactModel(true)
+			}
+			if _, ok := provider.(*providers.HTTPProvider); !ok && protocol != "openai" {
+				setupMessage = "This test requires an OpenAI-compatible HTTP provider."
+				return nil, errors.New(setupMessage)
+			}
 			return provider.Chat(
 				attemptCtx,
 				[]providers.Message{{Role: "user", Content: "Reply with OK."}},
@@ -211,6 +224,11 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 			)
 		},
 	)
+	if setupMessage != "" {
+		modelTestError(w, http.StatusBadRequest, setupMessage)
+		return
+	}
+
 	probe := auth.AccountProbe{
 		At:        time.Now().UTC(),
 		Model:     modelID,
@@ -233,8 +251,8 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 				probe.Status = "temporarily_unavailable"
 			}
 		}
-		if accountID != "" {
-			_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
+		if accountID != "" && sessionVersion != "" {
+			_ = auth.RecordAccountProbeContext(ctx, accountID, sessionVersion, probe)
 		}
 		message := providers.ErrorGuidance(err)
 		var networkError net.Error
@@ -249,8 +267,8 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 	}
 	if response == nil || strings.TrimSpace(response.Content) == "" {
 		probe.Status = "failed"
-		if accountID != "" {
-			_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
+		if accountID != "" && sessionVersion != "" {
+			_ = auth.RecordAccountProbeContext(ctx, accountID, sessionVersion, probe)
 		}
 		modelTestError(
 			w,
@@ -259,8 +277,8 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		)
 		return
 	}
-	if accountID != "" {
-		_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
+	if accountID != "" && sessionVersion != "" {
+		_ = auth.RecordAccountProbeContext(ctx, accountID, sessionVersion, probe)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

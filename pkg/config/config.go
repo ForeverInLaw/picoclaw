@@ -906,13 +906,6 @@ type OpenAIProviderConfig struct {
 	WebSearch bool `json:"web_search" env:"PICOCLAW_PROVIDERS_OPENAI_WEB_SEARCH"`
 }
 
-// ModelConfig represents a model-centric provider configuration.
-// It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
-// The model field uses protocol prefix format: [protocol/]model-identifier
-// Supported protocols include openai, anthropic, antigravity, claude-cli,
-// codex-cli, github-copilot, and named OpenAI-compatible protocols such as
-// groq, deepseek, modelscope, and novita.
-// Default protocol is "openai" if no prefix is specified.
 // LegacyOpenAIAccountID preserves the single-account OAuth configuration.
 const LegacyOpenAIAccountID = "codex-default"
 
@@ -924,6 +917,13 @@ type ModelCapabilities struct {
 	ContextWindow int   `json:"context_window,omitempty"`
 }
 
+// ModelConfig represents a model-centric provider configuration.
+// It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
+// The model field uses protocol prefix format: [protocol/]model-identifier
+// Supported protocols include openai, anthropic, antigravity, claude-cli,
+// codex-cli, github-copilot, and named OpenAI-compatible protocols such as
+// groq, deepseek, modelscope, and novita.
+// Default protocol is "openai" if no prefix is specified.
 type ModelConfig struct {
 	// ID identifies the configured entry independently of credentials and labels.
 	ID string `json:"id,omitempty"`
