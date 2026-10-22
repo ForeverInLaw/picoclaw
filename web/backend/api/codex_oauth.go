@@ -40,7 +40,11 @@ func (h *Handler) startCodexAccountLogin(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		if previous.Resource == "" {
-			http.Error(w, "This legacy connection must be renewed with the CLI; add a new ChatGPT connection to use browser sign-in", 400)
+			http.Error(
+				w,
+				"This legacy connection must be renewed with the CLI; add a new ChatGPT connection to use browser sign-in",
+				400,
+			)
 			return
 		}
 		cfg = previous.OAuth
@@ -65,7 +69,18 @@ func (h *Handler) startCodexAccountLogin(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "Could not prepare host identity", 500)
 		return
 	}
-	values := url.Values{"client_id": {cfg.ClientID}, "response_type": {"code"}, "redirect_uri": {auth.OpenAIRegistrationRedirect}, "scope": {cfg.Scopes}, "resource": {cfg.Resource}, "state": {state}, "nonce": {nonce}, "code_challenge_method": {"S256"}, "code_challenge": {pkce.CodeChallenge}, "ext_agent_host_id": {hostID}}
+	values := url.Values{
+		"client_id":             {cfg.ClientID},
+		"response_type":         {"code"},
+		"redirect_uri":          {auth.OpenAIRegistrationRedirect},
+		"scope":                 {cfg.Scopes},
+		"resource":              {cfg.Resource},
+		"state":                 {state},
+		"nonce":                 {nonce},
+		"code_challenge_method": {"S256"},
+		"code_challenge":        {pkce.CodeChallenge},
+		"ext_agent_host_id":     {hostID},
+	}
 	if previous == nil {
 		values.Set("agent_name_hint", "Picoclaw")
 	} else {
@@ -80,11 +95,30 @@ func (h *Handler) startCodexAccountLogin(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	now := oauthNow()
-	flow := &oauthFlow{ID: newOAuthFlowID(), Provider: oauthProviderOpenAI, Method: oauthMethodBrowser, Status: oauthFlowPending, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(oauthBrowserFlowTTL), OAuthState: state, Nonce: nonce, CodeVerifier: pkce.CodeVerifier, RedirectURI: auth.OpenAIRegistrationRedirect, Manual: true, Owner: owner, OAuthConfig: cfg, PreviousAccount: previous, HostID: hostID, Label: strings.TrimSpace(label)}
+	flow := &oauthFlow{
+		ID:              newOAuthFlowID(),
+		Provider:        oauthProviderOpenAI,
+		Method:          oauthMethodBrowser,
+		Status:          oauthFlowPending,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ExpiresAt:       now.Add(oauthBrowserFlowTTL),
+		OAuthState:      state,
+		Nonce:           nonce,
+		CodeVerifier:    pkce.CodeVerifier,
+		RedirectURI:     auth.OpenAIRegistrationRedirect,
+		Manual:          true,
+		Owner:           owner,
+		OAuthConfig:     cfg,
+		PreviousAccount: previous,
+		HostID:          hostID,
+		Label:           strings.TrimSpace(label),
+	}
 	h.storeOAuthFlow(flow)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "provider": oauthProviderOpenAI, "method": oauthMethodBrowser, "flow_id": flow.ID, "auth_url": cfg.Issuer + "/api/accounts/authorize?" + values.Encode(), "manual_callback": true, "expires_at": flow.ExpiresAt.Format(time.RFC3339)})
+	_ = json.NewEncoder(w).
+		Encode(map[string]any{"status": "ok", "provider": oauthProviderOpenAI, "method": oauthMethodBrowser, "flow_id": flow.ID, "auth_url": cfg.Issuer + "/api/accounts/authorize?" + values.Encode(), "manual_callback": true, "expires_at": flow.ExpiresAt.Format(time.RFC3339)})
 }
 
 func parseManualCallback(raw string, flow *oauthFlow) (code, clientID string, denied bool, err error) {
@@ -92,7 +126,10 @@ func parseManualCallback(raw string, flow *oauthFlow) (code, clientID string, de
 		return "", "", false, errors.New("Paste the complete callback URL from this sign-in attempt")
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.User != nil || parsed.Fragment != "" || parsed.Scheme != "http" || parsed.Host != "127.0.0.1:1455" || parsed.Path != "/auth/callback" || parsed.RawPath != "" {
+	if err != nil || parsed.User != nil || parsed.Fragment != "" || parsed.Scheme != "http" ||
+		parsed.Host != "127.0.0.1:1455" ||
+		parsed.Path != "/auth/callback" ||
+		parsed.RawPath != "" {
 		return invalid()
 	}
 	values, err := url.ParseQuery(parsed.RawQuery)
@@ -119,7 +156,8 @@ func parseManualCallback(raw string, flow *oauthFlow) (code, clientID string, de
 		}
 		clientID = expected
 	}
-	if code == "" || clientID == "" || clientID == auth.OpenAIRegistrationEntryClient || len(clientID) > 1024 || strings.ContainsAny(clientID, " \t\r\n") {
+	if code == "" || clientID == "" || clientID == auth.OpenAIRegistrationEntryClient || len(clientID) > 1024 ||
+		strings.ContainsAny(clientID, " \t\r\n") {
 		return invalid()
 	}
 	return code, clientID, false, nil
@@ -155,42 +193,51 @@ func (h *Handler) handleCompleteCodexAccount(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	flow.Consumed = true
-	copy := *flow
+	consumed := *flow
 	// Remove pending secrets before network I/O; only this request retains them.
 	flow.CodeVerifier = ""
 	flow.Nonce = ""
 	flow.OAuthState = ""
 	flow.PreviousAccount = nil
-	delete(h.oauthState, copy.OAuthState)
+	delete(h.oauthState, consumed.OAuthState)
 	h.oauthMu.Unlock()
 	if denied {
-		h.setOAuthFlowError(copy.ID, "OpenAI sign-in was declined")
+		h.setOAuthFlowError(consumed.ID, "OpenAI sign-in was declined")
 		http.Error(w, "OpenAI sign-in was declined", 400)
 		return
 	}
-	copy.OAuthConfig.ClientID = clientID
-	account, err := auth.ExchangeRegisteredAccount(r.Context(), copy.OAuthConfig, code, copy.CodeVerifier, copy.RedirectURI, copy.Nonce, copy.HostID, copy.PreviousAccount)
+	consumed.OAuthConfig.ClientID = clientID
+	account, err := auth.ExchangeRegisteredAccount(
+		r.Context(),
+		consumed.OAuthConfig,
+		code,
+		consumed.CodeVerifier,
+		consumed.RedirectURI,
+		consumed.Nonce,
+		consumed.HostID,
+		consumed.PreviousAccount,
+	)
 	if err != nil {
-		h.setOAuthFlowError(copy.ID, "OpenAI account verification failed; start a fresh sign-in")
+		h.setOAuthFlowError(consumed.ID, "OpenAI account verification failed; start a fresh sign-in")
 		http.Error(w, "OpenAI account verification failed; start a fresh sign-in", 400)
 		return
 	}
-	if copy.PreviousAccount == nil && copy.Label != "" {
-		account.Label = copy.Label
+	if consumed.PreviousAccount == nil && consumed.Label != "" {
+		account.Label = consumed.Label
 	}
-	saved, err := auth.SaveRegisteredAccountContext(r.Context(), account, copy.PreviousAccount)
+	saved, err := auth.SaveRegisteredAccountContext(r.Context(), account, consumed.PreviousAccount)
 	if err != nil {
-		h.setOAuthFlowError(copy.ID, "Could not save the selected account registration")
+		h.setOAuthFlowError(consumed.ID, "Could not save the selected account registration")
 		http.Error(w, "Could not save the selected account registration", 409)
 		return
 	}
 	h.oauthMu.Lock()
-	if current := h.oauthFlows[copy.ID]; current != nil {
+	if current := h.oauthFlows[consumed.ID]; current != nil {
 		current.AccountID = saved.ID
 	}
 	h.oauthMu.Unlock()
-	h.setOAuthFlowSuccess(copy.ID)
-	updated, _ := h.getOAuthFlow(copy.ID)
+	h.setOAuthFlowSuccess(consumed.ID)
+	updated, _ := h.getOAuthFlow(consumed.ID)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(flowToResponse(updated))

@@ -456,12 +456,6 @@ func isAntigravityModel(model string) bool {
 		strings.HasPrefix(model, "google-antigravity/")
 }
 
-// isOpenAIModel checks if a model string belongs to openai provider
-func isOpenAIModel(model string) bool {
-	return model == "openai" ||
-		strings.HasPrefix(model, "openai/")
-}
-
 // isAnthropicModel checks if a model string belongs to anthropic provider
 func isAnthropicModel(model string) bool {
 	return model == "anthropic" ||

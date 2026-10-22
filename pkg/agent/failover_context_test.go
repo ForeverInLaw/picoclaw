@@ -23,7 +23,14 @@ type nativeSearchFailureProvider struct{}
 
 func (*nativeSearchFailureProvider) GetDefaultModel() string    { return "primary" }
 func (*nativeSearchFailureProvider) SupportsNativeSearch() bool { return true }
-func (*nativeSearchFailureProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+
+func (*nativeSearchFailureProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
 	return nil, fmt.Errorf("status: 401 invalid API key")
 }
 
@@ -40,7 +47,9 @@ func TestFailoverRestoresClientSearchForCandidateWithoutNativeSearch(t *testing.
 		if !hasSearch {
 			t.Error("fallback must retain a usable search surface")
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"search retained"},"finish_reason":"stop"}]}`))
+		_, _ = w.Write(
+			[]byte(`{"choices":[{"message":{"role":"assistant","content":"search retained"},"finish_reason":"stop"}]}`),
+		)
 	}))
 	defer backup.Close()
 	al, _ := configuredProviderLoop(t, []config.ModelConfig{
@@ -66,7 +75,11 @@ func TestFailoverSkipsIncompatibleCandidatesWithoutDroppingActiveContext(t *test
 			calls := 0
 			skipped := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"incompatible candidate was called"},"finish_reason":"stop"}]}`))
+				_, _ = w.Write(
+					[]byte(
+						`{"choices":[{"message":{"role":"assistant","content":"incompatible candidate was called"},"finish_reason":"stop"}]}`,
+					),
+				)
 			}))
 			defer skipped.Close()
 			backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,14 +91,27 @@ func TestFailoverSkipsIncompatibleCandidatesWithoutDroppingActiveContext(t *test
 				}
 				require.Contains(t, string(request.Messages), "ACTIVE_EVIDENCE")
 				require.Contains(t, string(request.Messages), "data:image/png;base64,aW1hZ2U=")
-				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"compatible answer"},"finish_reason":"stop"}]}`))
+				_, _ = w.Write(
+					[]byte(
+						`{"choices":[{"message":{"role":"assistant","content":"compatible answer"},"finish_reason":"stop"}]}`,
+					),
+				)
 			}))
 			defer backup.Close()
 			var incompatible config.ModelConfig
-			require.NoError(t, json.Unmarshal([]byte(`{"model_name":"limited","model":"openai/limited","capabilities":`+scenario.capabilities+`}`), &incompatible))
+			require.NoError(
+				t,
+				json.Unmarshal(
+					[]byte(
+						`{"model_name":"limited","model":"openai/limited","capabilities":`+scenario.capabilities+`}`,
+					),
+					&incompatible,
+				),
+			)
 			incompatible.APIBase = skipped.URL
 			al, _ := configuredProviderLoop(t, []config.ModelConfig{
-				{ModelName: "primary", Model: "openai/primary", APIBase: backup.URL}, incompatible,
+				{ModelName: "primary", Model: "openai/primary", APIBase: backup.URL},
+				incompatible,
 				{ModelName: "backup", Model: "openai/backup", APIBase: backup.URL},
 			}, []string{"limited", "backup"})
 			al.registry.GetDefaultAgent().Provider = &nativeSearchFailureProvider{}
@@ -110,7 +136,8 @@ func TestFailoverSkipsIncompatibleCandidatesWithoutDroppingActiveContext(t *test
 				case event := <-events.C:
 					if event.Kind == EventKindLLMRetry {
 						payload := event.Payload.(LLMRetryPayload)
-						foundReason = foundReason || payload.Reason == "incompatible" && strings.Contains(payload.Error, scenario.reason)
+						foundReason = foundReason ||
+							payload.Reason == "incompatible" && strings.Contains(payload.Error, scenario.reason)
 					}
 				default:
 					require.True(t, foundReason, "operator must be told why a candidate was skipped")
@@ -133,7 +160,10 @@ func TestFailoverReplacesTruncatedStreamAndRetainsCompletedWorkInDirectAndInline
 				primaryCalls++
 				w.Header().Set("Content-Type", "text/event-stream")
 				if primaryCalls == 1 {
-					_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"completed-action\",\"type\":\"function\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n")
+					_, _ = fmt.Fprint(
+						w,
+						"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"completed-action\",\"type\":\"function\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+					)
 					return
 				}
 				// A clean HTTP EOF is still incomplete when the model never ends its stream.
@@ -159,7 +189,10 @@ func TestFailoverReplacesTruncatedStreamAndRetainsCompletedWorkInDirectAndInline
 				require.Contains(t, string(encoded), "data:image/png;base64,aW1hZ2U=")
 				require.NotContains(t, string(encoded), "FAILED_PARTIAL_ANSWER")
 				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Coherent backup answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+				_, _ = fmt.Fprint(
+					w,
+					"data: {\"choices\":[{\"delta\":{\"content\":\"Coherent backup answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+				)
 			}))
 			defer backup.Close()
 			al, mb := configuredProviderLoop(t, []config.ModelConfig{
@@ -213,7 +246,10 @@ func TestFailoverRetainsConversationResetAndInlineIsolation(t *testing.T) {
 				} else {
 					require.Contains(t, input, "SAVED_BICYCLE_FACT")
 				}
-				_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"isolated backup answer"},"finish_reason":"stop"}]}`)
+				_, _ = fmt.Fprint(
+					w,
+					`{"choices":[{"message":{"role":"assistant","content":"isolated backup answer"},"finish_reason":"stop"}]}`,
+				)
 			}))
 			defer backup.Close()
 			al, _ := configuredProviderLoop(t, []config.ModelConfig{
@@ -253,7 +289,14 @@ type textOnlyImageProvider struct{ calls int }
 
 func (*textOnlyImageProvider) GetDefaultModel() string  { return "primary" }
 func (*textOnlyImageProvider) SupportsImageInput() bool { return false }
-func (p *textOnlyImageProvider) Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error) {
+
+func (p *textOnlyImageProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
 	p.calls++
 	return &providers.LLMResponse{Content: "image was silently omitted"}, nil
 }
@@ -267,7 +310,10 @@ func TestFailoverSkipsAdapterThatCannotTransmitImageInput(t *testing.T) {
 			t.Error(err)
 		}
 		require.Contains(t, string(request.Messages), "data:image/png;base64,aW1hZ2U=")
-		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"image preserved"},"finish_reason":"stop"}]}`)
+		_, _ = fmt.Fprint(
+			w,
+			`{"choices":[{"message":{"role":"assistant","content":"image preserved"},"finish_reason":"stop"}]}`,
+		)
 	}))
 	defer backup.Close()
 	al, _ := configuredProviderLoop(t, []config.ModelConfig{

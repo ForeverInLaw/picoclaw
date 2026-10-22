@@ -36,16 +36,9 @@ func (h *Handler) handleModelRuntime(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		account, loadErr := auth.GetAccountContext(r.Context(), item.Candidate.AccountID)
-		item.Authorization = "authorized"
-		if loadErr != nil || account.Credential == nil {
-			item.Authorization = "reauthorization_required"
-		} else if !account.CanUsePlan() {
-			item.Authorization = "plan_permission_required"
-		} else if account.Credential.AccessToken == "" || (account.Credential.IsExpired() && account.Credential.RefreshToken == "") {
-			item.Authorization = "reauthorization_required"
-		}
-		if loadErr == nil && !account.Enabled {
-			item.Authorization = "disabled"
+		item.Authorization = string(auth.AccountReauthorizationRequired)
+		if loadErr == nil {
+			item.Authorization = string(account.LocalState().Authorization)
 		}
 		if item.Reason == "auth" && item.Authorization == "authorized" {
 			item.Authorization = "reauthorization_required"

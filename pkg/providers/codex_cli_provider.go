@@ -81,6 +81,9 @@ func (p *CodexCliProvider) Chat(
 	return p.parseJSONLEvents(stdout.String())
 }
 
+// SupportsImageInput reports whether this adapter transmits image payloads.
+func (p *CodexCliProvider) SupportsImageInput() bool { return false }
+
 // GetDefaultModel returns the default model identifier.
 func (p *CodexCliProvider) GetDefaultModel() string {
 	return "codex-cli"

@@ -84,13 +84,6 @@ func checkCandidateContext(
 	if capable, ok := client.(providers.ImageInputCapable); images && ok && !capable.SupportsImageInput() {
 		return &providers.IncompatibleCandidateError{Reason: "provider adapter cannot transmit image input"}
 	}
-	// These adapters build text-only prompts and cannot transmit image payloads.
-	switch candidate.Provider {
-	case "claude-cli", "claudecli", "codex-cli", "codexcli", "github-copilot", "copilot", "antigravity":
-		if images {
-			return &providers.IncompatibleCandidateError{Reason: "provider adapter cannot transmit image input"}
-		}
-	}
 	if limits != nil {
 		if images && limits.Images != nil && !*limits.Images {
 			return &providers.IncompatibleCandidateError{Reason: "model does not support required image input"}
@@ -112,7 +105,13 @@ func checkCandidateContext(
 	if defaultWindow > 0 {
 		estimated := estimateRequestTokens(messages, definitions, outputReserve)
 		if estimated > defaultWindow {
-			return &providers.IncompatibleCandidateError{Reason: fmt.Sprintf("Active context requires approximately %d tokens; model context window is %d", estimated, defaultWindow)}
+			return &providers.IncompatibleCandidateError{
+				Reason: fmt.Sprintf(
+					"Active context requires approximately %d tokens; model context window is %d",
+					estimated,
+					defaultWindow,
+				),
+			}
 		}
 	}
 	return nil

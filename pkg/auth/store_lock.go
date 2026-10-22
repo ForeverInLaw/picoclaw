@@ -2,48 +2,11 @@ package auth
 
 import (
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
-
-// Lock files remain beside auth.json: removing them could split ownership between
-// processes holding an old inode and processes opening its replacement.
-var errAuthLockBusy = errors.New("credential lock is busy")
-
-func lockAuthFile(path string) (*os.File, error) {
-	return lockAuthFileContext(context.Background(), path)
-}
-
-func lockAuthFileContext(ctx context.Context, path string) (*os.File, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return nil, err
-	}
-	for {
-		err := lockAuthPlatform(file)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, errAuthLockBusy) {
-			_ = file.Close()
-			return nil, err
-		}
-		if err := waitAuthLock(ctx); err != nil {
-			_ = file.Close()
-			return nil, err
-		}
-	}
-	return file, nil
-}
 
 func lockStore() (func(), error) { return lockStoreContext(context.Background()) }
 
@@ -51,7 +14,7 @@ func lockStoreContext(ctx context.Context) (func(), error) {
 	if err := acquireAuthMutex(ctx, &storeMu); err != nil {
 		return nil, err
 	}
-	file, err := lockAuthFileContext(ctx, authFilePath()+".lock")
+	file, err := fileutil.LockFile(ctx, authFilePath()+".lock")
 	if err != nil {
 		storeMu.Unlock()
 		return nil, err

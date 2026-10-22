@@ -15,8 +15,6 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/sipeed/picoclaw/pkg/auth"
-	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
@@ -617,20 +615,6 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage:        usage,
-	}
-}
-
-func createCodexTokenSource() func() (string, string, error) {
-	return createCodexAccountTokenSource(config.LegacyOpenAIAccountID)
-}
-
-func createCodexAccountTokenSource(accountID string) func() (string, string, error) {
-	return func() (string, string, error) {
-		cred, err := auth.AccountCredential(accountID)
-		if err != nil {
-			return "", "", fmt.Errorf("loading Codex account credentials: %w", err)
-		}
-		return cred.AccessToken, cred.AccountID, nil
 	}
 }
 

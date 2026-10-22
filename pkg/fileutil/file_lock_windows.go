@@ -1,6 +1,6 @@
 //go:build windows
 
-package config
+package fileutil
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func lockConfigPlatform(file *os.File) error {
+func lockFilePlatform(file *os.File) error {
 	err := windows.LockFileEx(
 		windows.Handle(file.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
@@ -18,7 +18,7 @@ func lockConfigPlatform(file *os.File) error {
 		&windows.Overlapped{},
 	)
 	if err == windows.ERROR_LOCK_VIOLATION {
-		return errConfigLockBusy
+		return errFileLockBusy
 	}
 	return err
 }

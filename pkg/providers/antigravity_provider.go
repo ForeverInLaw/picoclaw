@@ -147,6 +147,9 @@ func (p *AntigravityProvider) Chat(
 	return llmResp, nil
 }
 
+// SupportsImageInput reports whether this adapter transmits image payloads.
+func (p *AntigravityProvider) SupportsImageInput() bool { return false }
+
 // GetDefaultModel returns the default model identifier.
 func (p *AntigravityProvider) GetDefaultModel() string {
 	return antigravityDefaultModel

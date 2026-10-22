@@ -56,7 +56,12 @@ func (ct *CooldownTracker) RecordFailure(provider string, failure *FailoverError
 	ct.markFailure(provider, failure.Reason, delay, failure)
 }
 
-func (ct *CooldownTracker) markFailure(provider string, reason FailoverReason, delay time.Duration, failure *FailoverError) {
+func (ct *CooldownTracker) markFailure(
+	provider string,
+	reason FailoverReason,
+	delay time.Duration,
+	failure *FailoverError,
+) {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 
