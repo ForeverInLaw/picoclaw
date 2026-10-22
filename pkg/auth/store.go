@@ -163,7 +163,10 @@ func DeleteCredential(provider string) error {
 	}
 	delete(store.Credentials, provider)
 	if provider == "openai" {
-		delete(store.Accounts, config.LegacyOpenAIAccountID)
+		if account := store.Accounts[config.LegacyOpenAIAccountID]; account != nil {
+			account.Credential = nil
+			account.IDToken = ""
+		}
 	}
 	return saveStore(store)
 }
@@ -174,9 +177,14 @@ func DeleteAllCredentials() error {
 		return err
 	}
 	defer unlock()
-	path := authFilePath()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	store, err := loadStore()
+	if err != nil {
 		return err
 	}
-	return nil
+	store.Credentials = make(map[string]*AuthCredential)
+	for _, account := range store.Accounts {
+		account.Credential = nil
+		account.IDToken = ""
+	}
+	return saveStore(store)
 }

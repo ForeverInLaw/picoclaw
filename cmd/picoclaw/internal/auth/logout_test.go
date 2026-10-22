@@ -43,3 +43,26 @@ func TestLogoutKeepsCodexModelBindingAndAPIKeyConfiguration(t *testing.T) {
 	assert.Equal(t, "https://custom.example/v1", saved.ModelList[1].APIBase)
 	assert.Equal(t, "paid", saved.Agents.Defaults.ModelName)
 }
+
+func TestLogoutAllKeepsHostAndAccountRegistrationMappings(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	hostID, err := authstore.InstanceHostID()
+	require.NoError(t, err)
+	require.NoError(t, authstore.SetCredential("openai", &authstore.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "legacy-token"}))
+	require.NoError(t, authstore.SaveAccount(&authstore.AccountConnection{ID: "registered", Label: "Registered", Provider: "openai", Enabled: true, HostID: hostID, Subject: "verified-subject", Issuer: authstore.OpenAIRegistrationIssuer, IDToken: "retained-id-token", Resource: authstore.OpenAIRegistrationResource, OAuth: authstore.OAuthProviderConfig{ClientID: "issued-client"}, Credential: &authstore.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: "access", RefreshToken: "refresh"}}))
+	command := NewAuthCommand()
+	command.SetArgs([]string{"logout"})
+	require.NoError(t, command.Execute())
+	after, err := authstore.InstanceHostID()
+	require.NoError(t, err)
+	assert.Equal(t, hostID, after)
+	registered, err := authstore.GetAccount("registered")
+	require.NoError(t, err)
+	assert.Equal(t, "issued-client", registered.OAuth.ClientID)
+	assert.Equal(t, "verified-subject", registered.Subject)
+	assert.Nil(t, registered.Credential)
+	assert.Empty(t, registered.IDToken)
+	legacy, err := authstore.GetAccount(config.LegacyOpenAIAccountID)
+	require.NoError(t, err)
+	assert.Nil(t, legacy.Credential)
+}
