@@ -37,7 +37,11 @@ type AccountConnection struct {
 }
 
 func GetAccount(id string) (*AccountConnection, error) {
-	store, err := LoadStore()
+	return GetAccountContext(context.Background(), id)
+}
+
+func GetAccountContext(ctx context.Context, id string) (*AccountConnection, error) {
+	store, err := LoadStoreContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +289,11 @@ type AccountSessionState struct {
 }
 
 func AccountState(id string) (AccountSessionState, error) {
-	account, err := GetAccount(id)
+	return AccountStateContext(context.Background(), id)
+}
+
+func AccountStateContext(ctx context.Context, id string) (AccountSessionState, error) {
+	account, err := GetAccountContext(ctx, id)
 	if err != nil {
 		return AccountSessionState{}, err
 	}
