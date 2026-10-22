@@ -580,7 +580,8 @@ func TestCodexDisableDuringRefreshKeepsRotationWithoutSendingInference(t *testin
 		saved.SessionVersion != account.SessionVersion {
 		t.Fatal("disable changed registration identity")
 	}
-	if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/selected", `{"enabled":true}`, cookie); w.Code != 200 {
+	w = dashboardRequest(h, "PATCH", "/api/oauth/accounts/selected", `{"enabled":true}`, cookie)
+	if w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
 	w = dashboardRequest(h, "POST", "/api/oauth/accounts/selected/test", `{"model":"selected-model"}`, cookie)
