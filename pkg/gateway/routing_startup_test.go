@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,9 +35,9 @@ func TestUnavailableStartupPrimaryStillServesRequestThroughConfiguredReserve(t *
 					},
 				),
 			)
-			calls := 0
+			var calls atomic.Int32
 			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls++
+				calls.Add(1)
 				require.Equal(t, "Bearer reserve-key", r.Header.Get("Authorization"))
 				_, _ = w.Write(
 					[]byte(
@@ -110,7 +111,7 @@ func TestUnavailableStartupPrimaryStillServesRequestThroughConfiguredReserve(t *
 			answer, err := loop.ProcessDirect(t.Context(), "serve using configured reserve", "cold-start")
 			require.NoError(t, err)
 			require.Equal(t, "cold reserve answer", answer)
-			require.Equal(t, 1, calls)
+			require.Equal(t, int32(1), calls.Load())
 		})
 	}
 }
