@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -180,8 +181,8 @@ func (fc *FallbackChain) execute(
 
 	for i, candidate := range candidates {
 		// Check context before each attempt.
-		if ctx.Err() == context.Canceled {
-			return nil, context.Canceled
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 
 		// Each selected endpoint and credential has its own health state.
@@ -219,7 +220,7 @@ func (fc *FallbackChain) execute(
 		}
 
 		// Context cancellation: abort immediately, no fallback.
-		if ctx.Err() == context.Canceled {
+		if ctx.Err() != nil {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Candidate: candidate,
 				Provider:  candidate.Provider,
@@ -227,7 +228,16 @@ func (fc *FallbackChain) execute(
 				Error:     err,
 				Duration:  elapsed,
 			})
-			return nil, context.Canceled
+			return nil, ctx.Err()
+		}
+
+		var unavailable *CandidateUnavailableError
+		if errors.As(err, &unavailable) {
+			result.Attempts = append(result.Attempts, FallbackAttempt{
+				Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model,
+				Skipped: true, Reason: unavailable.Reason, Error: err, Duration: elapsed,
+			})
+			continue
 		}
 
 		// Classify the error.
@@ -260,7 +270,7 @@ func (fc *FallbackChain) execute(
 		}
 
 		// Retriable error: mark failure and continue to next candidate.
-		fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+		fc.cooldown.RecordFailure(cooldownKey, failErr)
 		result.Attempts = append(result.Attempts, FallbackAttempt{
 			Candidate: candidate,
 			Provider:  candidate.Provider,
@@ -311,8 +321,8 @@ func (fc *FallbackChain) ExecuteImageCandidate(
 	}
 
 	for i, candidate := range candidates {
-		if ctx.Err() == context.Canceled {
-			return nil, context.Canceled
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 
 		start := time.Now()
@@ -327,7 +337,7 @@ func (fc *FallbackChain) ExecuteImageCandidate(
 			return result, nil
 		}
 
-		if ctx.Err() == context.Canceled {
+		if ctx.Err() != nil {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Candidate: candidate,
 				Provider:  candidate.Provider,
@@ -335,7 +345,7 @@ func (fc *FallbackChain) ExecuteImageCandidate(
 				Error:     err,
 				Duration:  elapsed,
 			})
-			return nil, context.Canceled
+			return nil, ctx.Err()
 		}
 
 		// Image dimension/size errors are non-retriable.

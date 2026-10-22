@@ -2017,14 +2017,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		activeProvider, activeCandidates, activeModel = al.selectCandidates(ts.agent, ts.userMessage, messages)
 	}
 	resolveCandidateProvider := candidateProviderResolver(al.cfg, ts.agent.Workspace, activeProvider, activeCandidates)
-	if len(activeCandidates) > 0 {
-		resolvedProvider, err := resolveCandidateProvider(activeCandidates[0])
-		if err != nil {
-			turnStatus = TurnEndStatusError
-			return turnResult{}, err
-		}
-		activeProvider = resolvedProvider
-	}
+
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
 	var finalModelContent string
@@ -2263,6 +2256,7 @@ turnLoop:
 			})
 
 		modelAttempts := 0
+		modelBudgetAttempts := 0
 		retryAnnounced := false
 		var lastCandidateFailure *providers.FailoverError
 		callLLM := func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
@@ -2278,13 +2272,19 @@ turnLoop:
 
 			callProviderOnce := func(ctx context.Context, client providers.LLMProvider, model string) (reply *providers.LLMResponse, requestErr error) {
 				lastResponseModel = model
+				defer func() {
+					if failure := providers.ClassifyError(requestErr, "", ""); failure != nil && failure.Status == 503 {
+						modelBudgetAttempts--
+					}
+				}()
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if modelAttempts >= max(modelMaxAttempts, len(activeCandidates)) {
+				if modelBudgetAttempts >= max(modelMaxAttempts, len(activeCandidates)) {
 					return nil, errModelAttemptBudget
 				}
 				modelAttempts++
+				modelBudgetAttempts++
 				reasoningActionID := fmt.Sprintf("reasoning:%d:%d", iteration, modelAttempts)
 				streamProvider, providerCanStream := client.(providers.StreamingProvider)
 				phasedProvider, providerCanStreamPhases := client.(providers.PhasedStreamingProvider)
@@ -2359,61 +2359,45 @@ turnLoop:
 				}
 				return client.Chat(ctx, messagesForCall, toolDefsForCall, model, llmOpts)
 			}
-			callProvider := func(ctx context.Context, client providers.LLMProvider, model string) (*providers.LLMResponse, error) {
-				if len(activeCandidates) > 1 && al.fallback != nil {
-					return callProviderOnce(ctx, client, model)
-				}
-				for retry := 0; ; retry++ {
-					response, err := callProviderOnce(ctx, client, model)
-					delay, capacity := capacityRetryDelay(err, retry)
-					if !capacity {
-						return response, err
-					}
-					if ctx.Err() != nil {
-						return nil, ctx.Err()
-					}
-					// Capacity rejections do not spend the ordinary recovery/fallback budget.
-					modelAttempts--
-					retryAnnounced = true
-					al.reportModelRetry(ctx, ts, retry+1, "capacity_unavailable", err, delay)
-					if err := sleepWithContext(ctx, delay); err != nil {
-						return nil, err
-					}
-				}
+			callProvider := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
+				return callProviderOnce(ctx, client, candidate.Model)
 			}
-
-			if len(activeCandidates) > 1 && al.fallback != nil {
-				retryCurrentCandidate := lastCandidateFailure != nil && lastCandidateFailure.IsTransient()
-				runCandidate := func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
-					client, err := resolveCandidateProvider(candidate)
+			candidates := activeCandidates
+			if len(candidates) == 0 {
+				candidates = []providers.FallbackCandidate{{Model: llmModel}}
+			} else if len(candidates) == 1 {
+				candidates = append([]providers.FallbackCandidate(nil), candidates...)
+				candidates[0].Model = llmModel
+			}
+			runCandidate := func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
+				client := activeProvider
+				if len(activeCandidates) > 0 {
+					var err error
+					client, err = resolveCandidateProvider(candidate)
 					if err != nil {
 						return nil, err
 					}
-					response, err := callProvider(ctx, client, candidate.Model)
-					lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
-					return response, err
 				}
-				var fbResult *providers.FallbackResult
-				var fbErr error
-				if retryCurrentCandidate {
-					fbResult, fbErr = al.fallback.RetryCandidate(providerCtx, lastCandidateFailure, runCandidate)
-				} else {
-					fbResult, fbErr = al.fallback.ExecuteCandidate(providerCtx, activeCandidates, runCandidate)
-				}
-				if fbErr != nil {
-					return nil, fbErr
-				}
-				if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
-					logger.InfoCF(
-						"agent",
-						fmt.Sprintf("Fallback: succeeded with %s/%s after %d attempts",
-							fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
-						map[string]any{"agent_id": ts.agent.ID, "iteration": iteration},
-					)
-				}
-				return fbResult.Response, nil
+				response, err := callProvider(ctx, client, candidate)
+				lastCandidateFailure = providers.ClassifyCandidateError(err, candidate)
+				return response, err
 			}
-			return callProvider(providerCtx, activeProvider, llmModel)
+			var fbResult *providers.FallbackResult
+			var fbErr error
+			if lastCandidateFailure != nil && lastCandidateFailure.IsTransient() && lastCandidateFailure.Status != 503 {
+				fbResult, fbErr = al.fallback.RetryCandidate(providerCtx, lastCandidateFailure, runCandidate)
+			} else {
+				waits := 0
+				fbResult, fbErr = al.fallback.ExecuteRecoveryCandidate(providerCtx, candidates, runCandidate, func(delay time.Duration, err error) {
+					retryAnnounced = true
+					waits++
+					al.reportModelRetry(providerCtx, ts, waits, "service_unavailable", err, delay)
+				})
+			}
+			if fbErr != nil {
+				return nil, fbErr
+			}
+			return fbResult.Response, nil
 		}
 
 		var response *providers.LLMResponse
@@ -2447,10 +2431,10 @@ turnLoop:
 					break
 				}
 				err = errEmptyAnswer
-				if !emptyRecoveryUsed && retry < maxRetries && modelAttempts < modelMaxAttempts {
+				if !emptyRecoveryUsed && retry < maxRetries && modelBudgetAttempts < modelMaxAttempts {
 					emptyRecoveryUsed = true
 					retryAnnounced = true
-					al.reportModelRetry(turnCtx, ts, modelAttempts, "empty_answer", err, 0)
+					al.reportModelRetry(turnCtx, ts, modelBudgetAttempts, "empty_answer", err, 0)
 					continue
 				}
 				break
@@ -2485,9 +2469,9 @@ turnLoop:
 				strings.Contains(errMsg, "request too large"))
 
 			delay, reason, isTransient := modelRetryDelay(err, retry, waited)
-			if isTransient && retry < maxRetries && modelAttempts < modelMaxAttempts {
+			if isTransient && retry < maxRetries && modelBudgetAttempts < modelMaxAttempts {
 				retryAnnounced = true
-				al.reportModelRetry(turnCtx, ts, modelAttempts, reason, err, delay)
+				al.reportModelRetry(turnCtx, ts, modelBudgetAttempts, reason, err, delay)
 				if sleepErr := sleepWithContext(turnCtx, delay); sleepErr != nil {
 					if ts.hardAbortRequested() {
 						if retryAnnounced {
@@ -2503,7 +2487,7 @@ turnLoop:
 				continue
 			}
 
-			if isContextError && retry < maxRetries && modelAttempts < modelMaxAttempts && !ts.opts.NoHistory {
+			if isContextError && retry < maxRetries && modelBudgetAttempts < modelMaxAttempts && !ts.opts.NoHistory {
 				logger.WarnCF(
 					"agent",
 					"Context window error detected, attempting compression",
@@ -2514,7 +2498,7 @@ turnLoop:
 				)
 
 				retryAnnounced = true
-				al.reportModelRetry(turnCtx, ts, modelAttempts, "context_limit", err, 0)
+				al.reportModelRetry(turnCtx, ts, modelBudgetAttempts, "context_limit", err, 0)
 
 				ts.mu.RLock()
 				protectedMessages := len(ts.persistedMessages)

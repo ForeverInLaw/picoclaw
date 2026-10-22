@@ -8,7 +8,6 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 const (
@@ -17,16 +16,6 @@ const (
 )
 
 var errModelAttemptBudget = errors.New("model request attempt budget exhausted")
-
-// A rejected capacity request can wait indefinitely without replaying a tool.
-func capacityRetryDelay(err error, retry int) (time.Duration, bool) {
-	var failure *protocoltypes.HTTPError
-	if !errors.As(err, &failure) || failure.StatusCode != 503 || failure.Code != "capacity_unavailable" {
-		return 0, false
-	}
-	delay := min(time.Second<<min(retry, 5), modelMaxRetryWait)
-	return max(delay, failure.RetryAfter), true
-}
 
 func modelRetryDelay(err error, retry int, waited time.Duration) (time.Duration, string, bool) {
 	failure := providers.ClassifyError(err, "", "")
@@ -53,7 +42,7 @@ func (al *AgentLoop) reportModelRetry(
 	delay time.Duration,
 ) {
 	maxRetries := modelMaxAttempts - 1
-	if reason == "capacity_unavailable" {
+	if reason == "service_unavailable" {
 		maxRetries = 0 // Capacity waits stop only on success, a different error or cancellation.
 	}
 	al.emitEvent(
@@ -68,8 +57,8 @@ func (al *AgentLoop) reportModelRetry(
 		},
 	)
 	content := fmt.Sprintf("Temporary model failure. Retrying (%d/%d)...", attempt, modelMaxAttempts-1)
-	if reason == "capacity_unavailable" {
-		content = "Model capacity unavailable. Waiting and retrying..."
+	if reason == "service_unavailable" {
+		content = "Providers temporarily unavailable. Waiting and retrying..."
 	}
 	if reason == "fallback" {
 		content = "Model request failed. Trying another configured model..."

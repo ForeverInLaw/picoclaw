@@ -594,7 +594,7 @@ func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
 					if r.Header.Get("Authorization") != "Bearer primary-key" {
 						t.Error("primary credentials changed")
 					}
-					w.WriteHeader(http.StatusServiceUnavailable)
+					w.WriteHeader(http.StatusInternalServerError)
 					_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
 				}))
 				defer primary.Close()
@@ -766,7 +766,7 @@ func TestRunDuplicateFallbackAliasPreservesSelectedProviderModelAndRetryClient(t
 	var primaryCalls, firstCalls, secondCalls, mismatches atomic.Int32
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		primaryCalls.Add(1)
-		w.WriteHeader(503)
+		w.WriteHeader(500)
 		_, _ = w.Write([]byte(`{"error":{"message":"unavailable"}}`))
 	}))
 	defer primary.Close()
