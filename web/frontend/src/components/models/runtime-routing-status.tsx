@@ -185,7 +185,9 @@ export function RuntimeRoutingStatus() {
                                 )}
                                 {translateState(attempt.phase)} ·{" "}
                                 {reason(attempt.reason)}
- {attempt.http_status ? ` (HTTP ${attempt.http_status})` : ""}
+                                {attempt.http_status
+                                  ? ` (HTTP ${attempt.http_status})`
+                                  : ""}
                                 {attempt.inactivity_timeout_ms
                                   ? ` (${attempt.inactivity_timeout_ms / 1000}s)`
                                   : ""}

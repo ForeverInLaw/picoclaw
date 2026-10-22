@@ -90,10 +90,7 @@ func routingOutcome(
 		default:
 			if failure := ClassifyCandidateError(err, candidate); failure != nil {
 				event.HTTPStatus = failure.Status
-				event.Reason = string(failure.Reason)
-				if failure.Status == 503 {
-					event.Reason = "service_unavailable"
-				}
+				event.Reason = routingFailureReason(failure)
 			}
 		}
 	}
@@ -127,14 +124,24 @@ func (fc *FallbackChain) Availability(ctx context.Context, candidate FallbackCan
 		result.Reason = "cooldown"
 		if failure := fc.cooldown.Failure(candidate.StableKey()); failure != nil {
 			result.HTTPStatus = failure.Status
-			result.Reason = string(failure.Reason)
-			if failure.Status == 503 {
-				result.Reason = "service_unavailable"
-			}
+			result.Reason = routingFailureReason(failure)
 		}
 		if remaining := fc.cooldown.CooldownRemaining(candidate.StableKey()); remaining > 0 {
 			result.NextEligibleAt = time.Now().UTC().Add(remaining)
 		}
 	}
 	return result, nil
+}
+
+func routingFailureReason(failure *FailoverError) string {
+	switch {
+	case failure.Status == 503:
+		return "service_unavailable"
+	case failure.Status == 403:
+		return "permission_denied"
+	case failure.Status >= 500:
+		return "provider_error"
+	default:
+		return string(failure.Reason)
+	}
 }

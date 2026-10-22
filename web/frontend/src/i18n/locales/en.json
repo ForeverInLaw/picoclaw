@@ -359,7 +359,9 @@
         "incompatible": "Incompatible with this request",
         "format": "Provider rejected the request",
         "canceled": "Canceled",
-        "empty_answer": "No answer or tool call returned"
+        "empty_answer": "No answer or tool call returned",
+        "permission_denied": "Model permission denied",
+        "provider_error": "Provider server error"
       },
       "attempts": "Attempts: {{count}}"
     }
