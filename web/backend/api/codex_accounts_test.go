@@ -9,7 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -458,5 +461,136 @@ func TestCodexAccountDeleteNamesReferencesAndRejectsLateBindings(t *testing.T) {
 		cookie,
 	); w.Code == 200 {
 		t.Fatal("new model bound to deleted connection")
+	}
+}
+
+func TestCodexDisableDuringRefreshKeepsRotationWithoutSendingInference(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	started, release := make(chan struct{}), make(chan struct{})
+	var releases sync.Once
+	defer releases.Do(func() { close(release) })
+	var refreshes, inference atomic.Int32
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			refreshes.Add(1)
+			_ = r.ParseForm()
+			if r.Form.Get("client_id") != "issued-selected" || r.Form.Get("refresh_token") != "old-refresh" {
+				t.Error("refresh changed selected registration")
+			}
+			close(started)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = io.WriteString(
+				w,
+				`{"access_token":"fresh-access","refresh_token":"rotated-refresh","token_type":"Bearer","expires_in":3600}`,
+			)
+		case "/v1/responses":
+			inference.Add(1)
+			if r.Header.Get("Authorization") != "Bearer fresh-access" {
+				t.Error("reenabled connection used discarded session")
+			}
+			var request struct {
+				Model string `json:"model"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			if request.Model != "selected-model" {
+				t.Error("reenabled probe switched model")
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(
+				w,
+				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"selected\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}}\n\n",
+			)
+		default:
+			t.Errorf("unexpected outbound path %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer func() { releases.Do(func() { close(release) }); endpoint.Close() }()
+	account := &auth.AccountConnection{
+		ID:       "selected",
+		Label:    "Selected",
+		Provider: "openai",
+		Enabled:  true,
+		Subject:  "verified-subject",
+		Issuer:   endpoint.URL,
+		HostID:   "persistent-host",
+		Resource: endpoint.URL + "/v1",
+		Scopes:   auth.OpenAIPlanScope,
+		OAuth: auth.OAuthProviderConfig{
+			Issuer:   endpoint.URL,
+			ClientID: "issued-selected",
+			TokenURL: endpoint.URL + "/token",
+			Resource: auth.OpenAIRegistrationResource,
+		},
+		Credential: &auth.AuthCredential{
+			Provider:     "openai",
+			AuthMethod:   "oauth",
+			AccessToken:  "old-access",
+			RefreshToken: "old-refresh",
+			ExpiresAt:    time.Now().Add(-time.Hour),
+		},
+	}
+	if err := auth.SaveAccount(account); err != nil {
+		t.Fatal(err)
+	}
+	h, cookie, _ := modelInferenceDashboard(t, nil)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- dashboardRequest(h, "POST", "/api/oauth/accounts/selected/test", `{"model":"selected-model"}`, cookie)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("refresh did not start")
+	}
+	w := dashboardRequest(
+		h,
+		"PATCH",
+		"/api/oauth/accounts/selected",
+		`{"enabled":false,"label":"Disabled during refresh"}`,
+		cookie,
+	)
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	releases.Do(func() { close(release) })
+	select {
+	case w = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("refresh did not finish")
+	}
+	if w.Code != 502 || inference.Load() != 0 {
+		t.Fatalf("disabled refresh sent inference: status%d calls%d", w.Code, inference.Load())
+	}
+	saved, err := auth.GetAccount("selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Enabled || saved.Label != "Disabled during refresh" ||
+		saved.Credential.RefreshToken != "rotated-refresh" ||
+		saved.Credential.AccessToken != "fresh-access" {
+		t.Fatal("disable discarded newest rotating credentials or metadata")
+	}
+	if saved.Subject != account.Subject || saved.OAuth.ClientID != account.OAuth.ClientID ||
+		saved.SessionVersion != account.SessionVersion {
+		t.Fatal("disable changed registration identity")
+	}
+	if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/selected", `{"enabled":true}`, cookie); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	w = dashboardRequest(h, "POST", "/api/oauth/accounts/selected/test", `{"model":"selected-model"}`, cookie)
+	if w.Code != 200 || inference.Load() != 1 || refreshes.Load() != 1 {
+		t.Fatalf(
+			"reenabled session did not resume: status%d inference%d refreshes%d %s",
+			w.Code,
+			inference.Load(),
+			refreshes.Load(),
+			w.Body.String(),
+		)
 	}
 }

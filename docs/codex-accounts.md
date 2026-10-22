@@ -31,8 +31,10 @@ Credentials, issued OAuth client configuration and registration identity remain
 in the protected auth store. Listing connections returns a separate sanitized
 view. Atomic writes use mode `0600`; store transactions and rotating refreshes
 use filesystem locks shared by the launcher and gateway. Refreshing one account
-preserves concurrent account labels and other sessions. Deletion or disablement
-during refresh prevents the late token set from being used or saved.
+preserves concurrent account labels and other sessions. Disabling during refresh
+retains newly rotated credentials for the same registration, while blocking
+inference until re-enabled. Deletion, logout or a replaced authorization prevents
+a late refresh from saving over the changed session.
 
 Keep the auth directory private and retain the `auth.json*.lock` files while
 Picoclaw processes run. They provide coordination between processes; deleting a
