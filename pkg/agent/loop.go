@@ -2313,9 +2313,13 @@ turnLoop:
 						}
 					}
 					if providerCanStreamPhases {
-						response, err = phasedProvider.ChatStreamContent(ctx, messagesForCall, candidateDefs, model, candidateOpts, onUpdate)
+						response, err = providers.RunModelAttempt(ctx, 0, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+							return phasedProvider.ChatStreamContent(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, onUpdate)
+						})
 					} else {
-						response, err = streamProvider.ChatStream(ctx, messagesForCall, candidateDefs, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
+						response, err = providers.RunModelAttempt(ctx, 0, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+							return streamProvider.ChatStream(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts, func(content string) { onUpdate(providers.StreamContent{Content: content}) })
+						})
 					}
 					if err != nil {
 						al.publishWebReasoning(ctx, ts, reasoningActionID, bus.ProgressFailed, lastSnapshots[providers.ContentPhaseReasoning])
@@ -2340,7 +2344,9 @@ turnLoop:
 					}
 					return response, nil
 				}
-				return client.Chat(ctx, messagesForCall, candidateDefs, model, candidateOpts)
+				return providers.RunModelAttempt(ctx, 0, func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+					return client.Chat(attemptCtx, messagesForCall, candidateDefs, model, candidateOpts)
+				})
 			}
 			callProvider := func(ctx context.Context, client providers.LLMProvider, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 				return callProviderOnce(ctx, client, candidate)
