@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/agent"
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -163,7 +164,7 @@ func (h *Handler) gatewayStartReady() (bool, string, error) {
 	for _, modelCfg := range models {
 		if !hasModelConfiguration(modelCfg) {
 			if reason == "" {
-				reason = fmt.Sprintf("model %q has no credentials configured", modelCfg.ModelName)
+				reason = unavailableModelReason(modelCfg)
 			}
 			continue
 		}
@@ -176,6 +177,23 @@ func (h *Handler) gatewayStartReady() (bool, string, error) {
 		return true, "", nil
 	}
 	return false, reason, nil
+}
+
+func unavailableModelReason(model config.ModelConfig) string {
+	method := strings.ToLower(strings.TrimSpace(model.AuthMethod))
+	if (method == "oauth" || method == "token") && modelProtocol(model.Model) == "openai" && model.AccountID != "" {
+		if state, err := auth.AccountState(model.AccountID); err == nil {
+			switch state.Authorization {
+			case auth.AccountDisabled:
+				return fmt.Sprintf("model %q account connection is disabled", model.ModelName)
+			case auth.AccountReauthorizationRequired:
+				return fmt.Sprintf("model %q account connection requires reauthorization", model.ModelName)
+			case auth.AccountPlanPermissionRequired:
+				return fmt.Sprintf("model %q account connection requires ChatGPT plan permission", model.ModelName)
+			}
+		}
+	}
+	return fmt.Sprintf("model %q has no credentials configured", model.ModelName)
 }
 
 func isCmdProcessAliveLocked(cmd *exec.Cmd) bool {

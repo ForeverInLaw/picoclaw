@@ -3,14 +3,17 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 type routingChoice config.AgentModelConfig
@@ -65,6 +68,10 @@ func (h *Handler) handlePutModelRouting(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid routing configuration", 400)
 		return
 	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		http.Error(w, "invalid routing configuration", http.StatusBadRequest)
+		return
+	}
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		http.Error(w, "failed to load configuration", 500)
@@ -82,7 +89,7 @@ func (h *Handler) handlePutModelRouting(w http.ResponseWriter, r *http.Request) 
 			if ref == "" && inherited {
 				continue
 			}
-			if _, lookupErr := cfg.GetModelConfig(ref); lookupErr != nil {
+			if !configuredRoutingReference(cfg, ref) {
 				return fmt.Errorf("unknown configured model %q", ref)
 			}
 		}
@@ -125,6 +132,25 @@ func (h *Handler) handlePutModelRouting(w http.ResponseWriter, r *http.Request) 
 	h.handleGetModelRouting(w, r)
 }
 
+// Match the runtime's legacy names without selecting or advancing a round-robin
+// entry. Explicit IDs must always identify a configured entry.
+func configuredRoutingReference(cfg *config.Config, ref string) bool {
+	ref = strings.TrimSpace(ref)
+	for _, model := range cfg.ModelList {
+		if strings.HasPrefix(ref, config.ModelIDPrefix) {
+			if ref == config.ModelIDPrefix+model.ID {
+				return true
+			}
+			continue
+		}
+		_, slug := providers.ExtractProtocol(model.Model)
+		if ref != "" && (model.ModelName == ref || model.Model == ref || slug == ref) {
+			return true
+		}
+	}
+	return false
+}
+
 // All model writers validate saved connections while holding the same config
 // guard as account deletion, preventing a new dangling binding during deletion.
 func saveValidatedModels(path string, cfg *config.Config) error {
@@ -138,11 +164,27 @@ func saveValidatedModels(path string, cfg *config.Config) error {
 	for _, m := range cfg.ModelList {
 		if m.AccountID != "" {
 			if _, err := auth.GetAccount(m.AccountID); err != nil {
+				// Loading a legacy OAuth model can synthesize codex-default even
+				// before sign-in. Keep that binding writable, but never create one.
+				previous, loadErr := config.LoadConfig(path)
+				if loadErr == nil && unchangedAccountBinding(previous, m) {
+					continue
+				}
 				return fmt.Errorf("model %q references unavailable account connection", m.ModelName)
 			}
 		}
 	}
 	return config.SaveConfig(path, cfg)
+}
+
+func unchangedAccountBinding(previous *config.Config, model config.ModelConfig) bool {
+	for _, old := range previous.ModelList {
+		if old.ID == model.ID && old.AccountID == model.AccountID && old.Model == model.Model &&
+			old.AuthMethod == model.AuthMethod {
+			return true
+		}
+	}
+	return false
 }
 
 func rejectReferencedModel(w http.ResponseWriter, cfg *config.Config, model config.ModelConfig) bool {
