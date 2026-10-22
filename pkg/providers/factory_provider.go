@@ -76,6 +76,17 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 					RetryAfter: tokenError.RetryAfter,
 					Wrapped:    err,
 				}
+			} else {
+				live, liveErr := auth.AccountStateContext(ctx, accountID)
+				if ctx.Err() != nil {
+					return "", "", ctx.Err()
+				}
+				if liveErr != nil || !live.Enabled || live.RequiresReauthorization {
+					err = &CandidateUnavailableError{
+						Reason:  FailoverAuth,
+						Message: "Codex account connection is unavailable",
+					}
+				}
 			}
 			return "", "", err
 		}
