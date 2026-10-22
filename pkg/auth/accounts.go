@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
@@ -17,6 +18,8 @@ var ErrAccountNotFound = errors.New("account connection not found")
 // AccountConnection owns one renewable session. OAuth client metadata and tokens
 // stay in the protected auth store; dashboard responses use a separate view.
 type AccountConnection struct {
+	LastProbe      *AccountProbe       `json:"last_probe,omitempty"`
+	LastSuccessAt  time.Time           `json:"last_success_at,omitzero"`
 	SessionVersion string              `json:"session_version,omitempty"`
 	ID             string              `json:"id"`
 	Label          string              `json:"label"`
@@ -274,4 +277,34 @@ func AccountState(id string) (AccountSessionState, error) {
 	credential := account.Credential
 	return AccountSessionState{SessionVersion: account.SessionVersion, Enabled: account.Enabled,
 		RequiresReauthorization: !account.CanUsePlan() || credential == nil || credential.AccessToken == "" || (credential.IsExpired() && credential.RefreshToken == "")}, nil
+}
+
+// AccountProbe contains only bounded operational metadata, never provider text.
+type AccountProbe struct {
+	At        time.Time `json:"at"`
+	Model     string    `json:"model"`
+	Status    string    `json:"status"`
+	LatencyMS int64     `json:"latency_ms"`
+}
+
+// RecordAccountProbe ignores results from a deleted or superseded session.
+func RecordAccountProbe(id, version string, probe AccountProbe) error {
+	unlock, err := lockStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	store, err := loadStore()
+	if err != nil {
+		return err
+	}
+	account := store.Accounts[id]
+	if account == nil || account.SessionVersion != version {
+		return nil
+	}
+	account.LastProbe = &probe
+	if probe.Status == "success" {
+		account.LastSuccessAt = probe.At
+	}
+	return saveStore(store)
 }

@@ -13,15 +13,17 @@ import (
 )
 
 type accountResponse struct {
-	ID        string   `json:"id"`
-	Label     string   `json:"label"`
-	Provider  string   `json:"provider"`
-	Enabled   bool     `json:"enabled"`
-	AccountID string   `json:"account_id,omitempty"`
-	Email     string   `json:"email,omitempty"`
-	Status    string   `json:"status"`
-	ExpiresAt string   `json:"expires_at,omitempty"`
-	Models    []string `json:"models"`
+	ID            string             `json:"id"`
+	Label         string             `json:"label"`
+	Provider      string             `json:"provider"`
+	Enabled       bool               `json:"enabled"`
+	AccountID     string             `json:"account_id,omitempty"`
+	Email         string             `json:"email,omitempty"`
+	Status        string             `json:"status"`
+	LastProbe     *auth.AccountProbe `json:"last_probe,omitempty"`
+	LastSuccessAt *time.Time         `json:"last_success_at,omitempty"`
+	ExpiresAt     string             `json:"expires_at,omitempty"`
+	Models        []string           `json:"models"`
 }
 
 func (h *Handler) handleListAccounts(w http.ResponseWriter, r *http.Request) {
@@ -38,6 +40,10 @@ func (h *Handler) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	result := make([]accountResponse, 0, len(accounts))
 	for _, account := range accounts {
 		item := accountResponse{ID: account.ID, Label: account.Label, Provider: account.Provider, Enabled: account.Enabled, Status: "reauthorization_required", Models: []string{}}
+		item.LastProbe = account.LastProbe
+		if !account.LastSuccessAt.IsZero() {
+			item.LastSuccessAt = &account.LastSuccessAt
+		}
 		if cred := account.Credential; cred != nil {
 			item.AccountID = cred.AccountID
 			item.Email = cred.Email
@@ -93,4 +99,17 @@ func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func (h *Handler) handleTestAccount(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Model string `json:"model"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(request.Model) == "" || len(request.Model) > 200 || strings.ContainsAny(request.Model, "/ \t\n\r") {
+		modelTestError(w, 400, "Enter the exact OpenAI model identifier.")
+		return
+	}
+	h.runModelInference(w, r, config.ModelConfig{ModelName: "Account test", Model: "openai/" + request.Model, AuthMethod: "oauth", AccountID: r.PathValue("id")})
 }

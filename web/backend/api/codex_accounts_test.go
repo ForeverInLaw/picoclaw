@@ -207,3 +207,66 @@ func TestCodexAccountPatchPreservesReferencesAndIndependentFields(t *testing.T) 
 		t.Fatal("partially applied invalid patch")
 	}
 }
+
+func TestCodexExplicitAccountProbeRecordsOnlySelectedIdentity(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	for _, id := range []string{"first", "second"} {
+		if err := auth.SaveAccount(&auth.AccountConnection{ID: id, Label: "Same email", Provider: "openai", Enabled: true, Credential: &auth.AuthCredential{Provider: "openai", AuthMethod: "oauth", AccessToken: id + "-secret", AccountID: "workspace-" + id}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls, fail := 0, false
+	original := http.DefaultTransport
+	http.DefaultTransport = accountRecordingTransport{handler: func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Header.Get("Authorization") != "Bearer second-secret" || r.Header.Get("Chatgpt-Account-Id") != "workspace-second" {
+			t.Error("probe changed selected identity")
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"model":"gpt-5.4"`) {
+			t.Errorf("probe changed model: %s", body)
+		}
+		status, content := 200, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]}}\n\n"
+		if fail {
+			status, content = 503, `{"error":{"code":"unavailable","message":"second-secret"}}`
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(content)), Request: r}, nil
+	}}
+	t.Cleanup(func() { http.DefaultTransport = original })
+	h, cookie, _ := modelInferenceDashboard(t, nil)
+	list := func() string {
+		t.Helper()
+		w := dashboardRequest(h, "GET", "/api/oauth/accounts", "", cookie)
+		if w.Code != 200 {
+			t.Fatal(w.Code)
+		}
+		return w.Body.String()
+	}
+	if result := list(); calls != 0 || strings.Contains(result, "last_probe") {
+		t.Fatalf("view inferred availability: %s calls%d", result, calls)
+	}
+	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, nil); w.Code != 401 {
+		t.Fatal("probe unprotected")
+	}
+	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, cookie); w.Code != 200 {
+		t.Fatalf("probe=%d %s", w.Code, w.Body.String())
+	}
+	successful := list()
+	if calls != 1 || !strings.Contains(successful, `"last_success_at":`) || !strings.Contains(successful, `"model":"gpt-5.4"`) || strings.Contains(successful, "secret") {
+		t.Fatalf("missing/sensitive successful probe: %s calls%d", successful, calls)
+	}
+	fail = true
+	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, cookie); w.Code != 502 || strings.Contains(w.Body.String(), "secret") {
+		t.Fatalf("failure=%d %s", w.Code, w.Body.String())
+	}
+	failed := list()
+	if calls != 2 || !strings.Contains(failed, `"status":"temporarily_unavailable"`) || !strings.Contains(failed, `"last_success_at":`) {
+		t.Fatalf("failed probe lost previous success or retried: %s calls%d", failed, calls)
+	}
+	if w := dashboardRequest(h, "PATCH", "/api/oauth/accounts/second", `{"enabled":false}`, cookie); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	if w := dashboardRequest(h, "POST", "/api/oauth/accounts/second/test", `{"model":"gpt-5.4"}`, cookie); w.Code != 400 || calls != 2 {
+		t.Fatalf("disabled account sent request: %d calls%d", w.Code, calls)
+	}
+}

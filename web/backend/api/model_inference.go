@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -132,6 +133,20 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		)
 		return
 	}
+	// Capture the session revision so a late result cannot update a replacement.
+	accountID, sessionVersion := "", ""
+	if protocol == "openai" && (mc.AuthMethod == "oauth" || mc.AuthMethod == "token") {
+		accountID = mc.AccountID
+		if accountID == "" {
+			accountID = config.LegacyOpenAIAccountID
+		}
+		account, err := auth.GetAccount(accountID)
+		if err != nil || !account.Enabled {
+			modelTestError(w, 400, "The selected account is unavailable or disabled.")
+			return
+		}
+		sessionVersion = account.SessionVersion
+	}
 	provider, modelID, err := providers.CreateProviderFromConfig(&mc)
 	if err != nil {
 		modelTestError(w, http.StatusBadRequest, "Check the selected provider, model identifier, API base and API key.")
@@ -146,7 +161,20 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 	started := time.Now()
 	response, err := provider.Chat(ctx, []providers.Message{{Role: "user", Content: "Reply with OK."}}, nil, modelID,
 		map[string]any{"max_tokens": 32})
+	probe := auth.AccountProbe{At: time.Now().UTC(), Model: modelID, LatencyMS: time.Since(started).Milliseconds(), Status: "success"}
 	if err != nil {
+		probe.Status = "failed"
+		if failure := providers.ClassifyError(err, "openai", modelID); failure != nil {
+			switch failure.Reason {
+			case providers.FailoverAuth:
+				probe.Status = "reauthorization_required"
+			case providers.FailoverRateLimit, providers.FailoverBilling, providers.FailoverOverloaded, providers.FailoverTimeout, providers.FailoverNetwork:
+				probe.Status = "temporarily_unavailable"
+			}
+		}
+		if accountID != "" {
+			_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
+		}
 		message := providers.ErrorGuidance(err)
 		var networkError net.Error
 		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
@@ -159,12 +187,19 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		return
 	}
 	if response == nil || strings.TrimSpace(response.Content) == "" {
+		probe.Status = "failed"
+		if accountID != "" {
+			_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
+		}
 		modelTestError(
 			w,
 			http.StatusBadGateway,
 			"The selected model returned no answer. Check its model identifier and request settings.",
 		)
 		return
+	}
+	if accountID != "" {
+		_ = auth.RecordAccountProbe(accountID, sessionVersion, probe)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
