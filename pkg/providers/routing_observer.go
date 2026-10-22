@@ -138,6 +138,8 @@ func (fc *FallbackChain) Availability(ctx context.Context, candidate FallbackCan
 
 func routingFailureReason(failure *FailoverError) string {
 	switch {
+	case failure.Reason == FailoverClientConfiguration:
+		return string(failure.Reason)
 	case failure.Status == 503:
 		return "service_unavailable"
 	case failure.Status == 403:

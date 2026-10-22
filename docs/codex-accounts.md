@@ -153,6 +153,6 @@ Tests use authenticated dashboard sessions, temporary stores and fake
 OAuth/inference endpoints. Run `go test ./pkg/auth ./web/backend/api` and
 `pnpm --dir web/frontend test:models`; no personal tokens or paid calls are needed.
 
-Token failures use their OAuth machine codes. A rejected client configuration (`invalid_client`) permits a configured reserve without deleting the saved tokens; repair the client configuration. Temporary service codes preserve tokens and use service recovery even if the token endpoint returns HTTP400. Malformed-request codes remain terminal.
+Token failures use their OAuth machine codes. A rejected client configuration (`invalid_client`) suspends further calls through every alias of that registration and permits an independent configured reserve without deleting the saved tokens; repair the client configuration. Runtime reports `client_configuration` separately from revoked authorization. Saving a corrected registration clears that session-scoped suspension. Temporary service codes preserve tokens and use service recovery even if the token endpoint returns HTTP400. Malformed-request codes remain terminal.
 
 Legacy CLI-compatible accounts retain their existing model substitution policy. Runtime successful outcomes show the model actually sent on the wire, alongside the unchanged configured-model ID and account; captured routing chains keep the configured model. Exact explicit probes continue to use the selected slug without substitution.

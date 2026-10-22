@@ -695,7 +695,9 @@ func TestRuntimeLateBackgroundContextHasItsOwnOutcome(t *testing.T) {
 func TestOAuthMachineFailuresSelectReserveWithoutLosingCredentials(t *testing.T) {
 	for _, code := range []string{"invalid_client", "temporarily_unavailable", "server_error", "invalid_request"} {
 		t.Run(code, func(t *testing.T) {
+			var tokenCalls atomic.Int32
 			tokens := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				tokenCalls.Add(1)
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = fmt.Fprintf(w, `{"error":%q,"error_description":"PRIVATE_PROVIDER_DESCRIPTION"}`, code)
 			}))
@@ -724,6 +726,15 @@ func TestOAuthMachineFailuresSelectReserveWithoutLosingCredentials(t *testing.T)
 				}
 				cfg.ModelList[0].AuthMethod = "oauth"
 				cfg.ModelList[0].AccountID = "oauth-first"
+				if code == "invalid_client" {
+					alias := cfg.ModelList[0]
+					alias.ID, alias.ModelName = "same-account-alias", "Alias"
+					cfg.ModelList = append(cfg.ModelList, alias)
+					cfg.Agents.Defaults.ModelFallbacks = []string{
+						config.ModelIDPrefix + alias.ID,
+						config.ModelIDPrefix + "b",
+					}
+				}
 			})
 			answer, err := loop.ProcessDirect(t.Context(), "use reserve", "oauth-code")
 			if code == "invalid_request" {
@@ -735,11 +746,29 @@ func TestOAuthMachineFailuresSelectReserveWithoutLosingCredentials(t *testing.T)
 					t.Fatalf("code=%s answer=%q err=%v calls=%d", code, answer, err, backupCalls.Load())
 				}
 			}
+			if code == "invalid_client" && tokenCalls.Load() != 1 {
+				t.Fatalf("same-account alias repeated rejected client refresh: %d", tokenCalls.Load())
+			}
 			saved, err := auth.GetAccount("oauth-first")
 			if err != nil || saved.Credential == nil || saved.Credential.RefreshToken != "retained-refresh" {
 				t.Fatalf("client/service error erased session: %+v %v", saved, err)
 			}
 			_, snapshot := runtimeSnapshot(t, h, cookie, status)
+			if code == "invalid_client" {
+				for _, item := range snapshot.Availability {
+					if item.Candidate.AccountID == "oauth-first" && item.Authorization != "authorized" {
+						t.Fatalf("invalid client falsely revoked saved authorization: %+v", item)
+					}
+				}
+				classified := false
+				for _, attempt := range snapshot.Records[0].Attempts {
+					classified = classified ||
+						attempt.Candidate.AccountID == "oauth-first" && attempt.Reason == "client_configuration"
+				}
+				if !classified {
+					t.Fatal("client registration failure lost its distinct runtime reason")
+				}
+			}
 			serialized, _ := json.Marshal(snapshot)
 			if strings.Contains(string(serialized), "PRIVATE_PROVIDER_DESCRIPTION") ||
 				strings.Contains(string(serialized), "retained-refresh") {
