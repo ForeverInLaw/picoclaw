@@ -864,3 +864,110 @@ func TestAnthropicTruncatedStreamYieldsToReserve(t *testing.T) {
 		}
 	})
 }
+
+func TestCompaction503WaitUsesForegroundStatusOnly(t *testing.T) {
+	for _, foreground := range []bool{true, false} {
+		t.Run(fmt.Sprintf("foreground=%t", foreground), func(t *testing.T) {
+			initial, cfg := newSeahorseScenarioLoop(t, &sourceScenarioProvider{})
+			initial.Close()
+			cfg.Agents.Defaults.Model = "primary"
+			cfg.Agents.Defaults.ModelFallbacks = []string{"backup"}
+			cfg.Agents.Defaults.MaxTokens = 123
+			cfg.Agents.Defaults.ContextWindow = 12000
+			cfg.Agents.Defaults.SummarizeTokenPercent = 100
+			if !foreground {
+				cfg.Agents.Defaults.ContextWindow = 1000000
+				cfg.Agents.Defaults.SummarizeTokenPercent = 1
+			}
+			cfg.ModelList = []config.ModelConfig{
+				{ModelName: "primary", Model: "openai/primary", APIBase: "https://model.test"},
+				{ModelName: "backup", Model: "openai/backup", APIBase: "https://model.test"},
+			}
+			provider, _, err := providers.CreateProvider(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mb := bus.NewMessageBus()
+			al := NewAgentLoop(cfg, mb, provider)
+			al.SetRoutingConfigSource(func() (*config.Config, error) { return cfg, nil })
+			agent := al.registry.GetDefaultAgent()
+			key := inlineConversationKey("main", "42")
+			for range 8 {
+				agent.Sessions.AddFullMessage(
+					key,
+					providers.Message{Role: "user", Content: strings.Repeat("ORIGINAL_EVIDENCE ", 1500)},
+				)
+				agent.Sessions.AddFullMessage(key, providers.Message{Role: "assistant", Content: "retained answer"})
+			}
+			synctest.Test(t, func(t *testing.T) {
+				defer al.Close()
+				previous := http.DefaultTransport
+				defer func() { http.DefaultTransport = previous }()
+				summaries := 0
+				http.DefaultTransport = inactivityRoundTripper(func(r *http.Request) (*http.Response, error) {
+					var input struct {
+						Messages []providers.Message `json:"messages"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+						t.Fatal(err)
+					}
+					if len(input.Messages) == 1 && input.Messages[0].Role == "user" {
+						summaries++
+						if summaries <= 2 {
+							return &http.Response{
+								StatusCode: 503,
+								Header:     http.Header{},
+								Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"capacity"}}`)),
+								Request:    r,
+							}, nil
+						}
+						time.Sleep(time.Millisecond)
+					}
+					return &http.Response{
+						StatusCode: 200,
+						Header:     http.Header{"Content-Type": {"application/json"}},
+						Request:    r,
+						Body: io.NopCloser(
+							strings.NewReader(
+								`{"choices":[{"message":{"content":"retained summary and answer"},"finish_reason":"stop"}]}`,
+							),
+						),
+					}, nil
+				})
+				answer, err := al.processMessage(
+					t.Context(),
+					selectedInlineMessage("42", "compaction-capacity", "next"),
+				)
+				if err != nil || !strings.Contains(answer, "retained summary and answer") {
+					t.Fatalf("answer=%q err=%v", answer, err)
+				}
+				// Let the background operation finish in the quiet variant.
+				time.Sleep(2 * time.Second)
+				synctest.Wait()
+				if summaries < 3 || len(agent.Sessions.GetHistory(key)) < 18 {
+					t.Fatalf("summaries=%d history=%d", summaries, len(agent.Sessions.GetHistory(key)))
+				}
+				states := []bus.ProgressState{}
+				statusID := ""
+				for len(mb.OutboundChan()) > 0 {
+					out := <-mb.OutboundChan()
+					if out.Progress == nil || out.Progress.Kind != bus.ProgressRetry {
+						continue
+					}
+					if statusID != "" && statusID != out.Progress.ActionID {
+						t.Fatalf("multiple wait statuses: %s %s", statusID, out.Progress.ActionID)
+					}
+					statusID = out.Progress.ActionID
+					states = append(states, out.Progress.State)
+				}
+				if foreground &&
+					(len(states) != 2 || states[0] != bus.ProgressStarted || states[1] != bus.ProgressCompleted) {
+					t.Fatalf("foreground wait states=%v", states)
+				}
+				if !foreground && len(states) != 0 {
+					t.Fatalf("background compaction published status: %v", states)
+				}
+			})
+		})
+	}
+}
