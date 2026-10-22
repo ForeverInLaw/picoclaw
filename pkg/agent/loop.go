@@ -2284,9 +2284,8 @@ turnLoop:
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				if modelBudgetAttempts >= max(modelMaxAttempts, len(activeCandidates)) {
-					return nil, errModelAttemptBudget
-				}
+				// The scheduler owns complete candidate passes and 503 recovery rounds.
+				// Only the outer ordinary/empty/context retries consume this budget.
 				modelAttempts++
 				modelBudgetAttempts++
 				reasoningActionID := fmt.Sprintf("reasoning:%d:%d", iteration, modelAttempts)

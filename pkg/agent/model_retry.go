@@ -15,8 +15,6 @@ const (
 	modelMaxRetryWait = 30 * time.Second
 )
 
-var errModelAttemptBudget = errors.New("model request attempt budget exhausted")
-
 func modelRetryDelay(err error, retry int, waited time.Duration) (time.Duration, string, bool) {
 	failure := providers.ClassifyError(err, "", "")
 	if failure == nil || !failure.IsTransient() {

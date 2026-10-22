@@ -737,3 +737,41 @@ func Test503RecoveryRespectsLongerRateLimitPause(t *testing.T) {
 		}
 	})
 }
+
+func Test503RecoveryOutlivesOrdinaryReserveFailures(t *testing.T) {
+	for _, chat := range []string{"42", "inline:chosen"} {
+		t.Run(chat, func(t *testing.T) {
+			withRetryLoop(t, func(t *testing.T, al *AgentLoop, _ *bus.MessageBus) {
+				capacity := &protocoltypes.HTTPError{
+					StatusCode: 503,
+					RetryAfter: time.Minute,
+					Wrapped:    errors.New("capacity"),
+				}
+				ordinary := &protocoltypes.HTTPError{StatusCode: 500, Wrapped: errors.New("provider failure")}
+				// B's ordinary cooldowns permit calls at 0, 1 and 6 minutes;
+				// A remains a valid 503 path and recovers at minute 7.
+				p := &retryScriptProvider{failures: []error{
+					capacity, ordinary, capacity, ordinary,
+					capacity, capacity, capacity, capacity, capacity, ordinary,
+				}}
+				a := al.registry.GetDefaultAgent()
+				a.Provider = p
+				a.Candidates = []providers.FallbackCandidate{
+					{Provider: "openai", Model: "primary"},
+					{Provider: "openai", Model: "backup"},
+				}
+				started := time.Now()
+				answer, err := al.processMessage(t.Context(), bus.InboundMessage{
+					Channel: "telegram", ChatID: chat, SenderID: "telegram:42", Content: "recover",
+				})
+				if err != nil || !strings.HasSuffix(answer, "recovered") || time.Since(started) != 7*time.Minute ||
+					strings.Join(
+						p.models,
+						",",
+					) != "primary,backup,primary,backup,primary,primary,primary,primary,primary,backup,primary" {
+					t.Fatalf("answer=%q err=%v models=%v elapsed=%v", answer, err, p.models, time.Since(started))
+				}
+			})
+		})
+	}
+}
