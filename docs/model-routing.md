@@ -19,6 +19,15 @@ or becomes unavailable. A new request starts with the saved primary again,
 subject to existing cooldowns. Updating routing does not replace conversation
 sessions, the context manager or canonical transcripts.
 
+The chat command `/switch model to <name-or-model-id>` selects a temporary primary
+for that agent, across its direct and Inline requests. `/show model` reports the
+same effective selection. The command does not save administrator settings. Its
+selection is pinned to the configured entry ID and uses fresh saved credentials,
+endpoint and label after edits. It remains active until the administrator changes
+that agent’s effective saved primary/reserve chain (or removes the selected
+entry), at which point saved routing takes precedence. Changes to unrelated
+agents or model-list order do not retarget the selection.
+
 ## Saved references and inheritance
 
 Each `model_list` entry has a persisted `id`. Routing uses `model-id:<id>` to select

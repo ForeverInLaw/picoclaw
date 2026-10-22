@@ -66,15 +66,9 @@ func (al *AgentLoop) captureRouting(agent *AgentInstance) (*AgentInstance, error
 		if err := cfg.ValidateRoutingReferences(); err != nil {
 			return nil, err
 		}
-		var settings *config.AgentConfig
-		for i := range cfg.Agents.List {
-			if routing.NormalizeAgentID(cfg.Agents.List[i].ID) == agent.ID {
-				settings = &cfg.Agents.List[i]
-				break
-			}
-		}
+		settings := agentModelSettings(cfg, agent.ID)
 		defaults := &cfg.Agents.Defaults
-		copyAgent.Model = resolveAgentModel(settings, defaults)
+		copyAgent.Model = al.selectedSavedModel(cfg, agent.ID, resolveAgentModel(settings, defaults))
 		copyAgent.Fallbacks = resolveAgentFallbacks(settings, defaults)
 		copyAgent.Candidates = resolveModelCandidates(cfg, defaults.Provider, copyAgent.Model, copyAgent.Fallbacks)
 		if len(copyAgent.Candidates) == 0 {

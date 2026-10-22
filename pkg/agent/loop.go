@@ -67,9 +67,10 @@ type AgentLoop struct {
 	turnSeq        atomic.Uint64
 	activeRequests sync.WaitGroup
 
-	routingSource func() (*config.Config, error)
-	reloadFunc    func() error
-	runCancel     context.CancelFunc
+	temporaryModels map[string]temporaryModelSelection
+	routingSource   func() (*config.Config, error)
+	reloadFunc      func() error
+	runCancel       context.CancelFunc
 }
 
 // processOptions configures how a message is processed
@@ -3945,10 +3946,16 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 	}
 	if agent != nil {
 		rt.GetModelInfo = func() (string, string) {
+			if al.hasSavedRouting() {
+				return al.savedModelInfo(agent)
+			}
 			return agent.Model, resolvedCandidateProvider(agent.Candidates, cfg.Agents.Defaults.Provider)
 		}
 		rt.SwitchModel = func(value string) (string, error) {
 			value = strings.TrimSpace(value)
+			if al.hasSavedRouting() {
+				return al.switchSavedModel(agent, value)
+			}
 			modelCfg, err := resolvedModelConfig(cfg, value, agent.Workspace)
 			if err != nil {
 				return "", err
