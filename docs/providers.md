@@ -453,3 +453,49 @@ OpenAI and Anthropic SDK retries are disabled so hidden SDK attempts do not mult
 <div align="center">
   <img src="assets/logo.jpg" alt="PicoClaw Meme" width="512">
 </div>
+
+### Context and tool compatibility during failover
+
+Each attempt prepares its own model options and tool definitions. A provider with
+native search can use it when `tools.web.prefer_native` is enabled; a reserve
+without native search receives the existing `web_search` tool instead. Completed
+tool calls and their results stay in the same conversation and accompany the
+reserve request. Recovery repeats the model operation, so it does not execute
+previous tool actions again. A replacement model can still request a new action;
+this is not a general tool deduplication guarantee.
+
+Declare known limits on each `model_list` entry when mixing model families:
+
+```json
+{
+  "model_name": "backup",
+  "model": "openai/example-model",
+  "api_base": "https://provider.example/v1",
+  "capabilities": {
+    "images": true,
+    "tools": true,
+    "context_window": 128000
+  }
+}
+```
+
+`images: false` excludes that candidate when Active context contains images.
+`tools: false` excludes it when the request needs tool definitions, native search,
+or recorded tool calls/results. `context_window` includes estimated input and
+reserved output tokens; a smaller reserve is skipped without truncating history.
+The existing ContextManager and compaction settings still manage Active context.
+Text-only CLI, Copilot, Antigravity, and the legacy Codex Responses adapter are
+skipped for image requests, including images retained from earlier turns.
+
+Omitted capabilities preserve existing adapter behavior and the agent's configured
+context window. Picoclaw does not infer a model's actual limits or entitlement
+from its name or endpoint; configure known limits explicitly. Skipped candidates
+appear in agent logs and `llm_retry` events with reason `incompatible` and an
+explanation. Compatibility failures do not mean the credentials are invalid.
+
+An SSE stream must report completion before its answer is accepted. A truncated
+OpenAI-compatible stream, or a Codex stream ending without a completed response,
+is a recoverable network failure. Its preview is canceled, and a reserve starts a
+fresh preview and final answer. Inline conversations retain their separate scope
+and response quote; Conversation reset still excludes earlier dialog while
+retaining Saved facts only where that conversation normally permits them.

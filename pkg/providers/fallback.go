@@ -49,7 +49,7 @@ type FallbackAttempt struct {
 	Error     error
 	Reason    FailoverReason
 	Duration  time.Duration
-	Skipped   bool // true if skipped due to cooldown
+	Skipped   bool // true if cooldown or candidate eligibility prevented an outbound request
 	Candidate FallbackCandidate
 }
 
@@ -231,6 +231,15 @@ func (fc *FallbackChain) execute(
 			return nil, ctx.Err()
 		}
 
+		var incompatible *IncompatibleCandidateError
+		if errors.As(err, &incompatible) {
+			result.Attempts = append(result.Attempts, FallbackAttempt{
+				Candidate: candidate, Provider: candidate.Provider, Model: candidate.Model,
+				Skipped: true, Reason: FailoverIncompatible, Error: err, Duration: elapsed,
+			})
+			continue
+		}
+
 		var unavailable *CandidateUnavailableError
 		if errors.As(err, &unavailable) {
 			result.Attempts = append(result.Attempts, FallbackAttempt{
@@ -395,7 +404,7 @@ func (e *FallbackExhaustedError) Error() string {
 	sb.WriteString(fmt.Sprintf("fallback: all %d candidates failed:", len(e.Attempts)))
 	for i, a := range e.Attempts {
 		if a.Skipped {
-			sb.WriteString(fmt.Sprintf("\n  [%d] %s/%s: skipped (cooldown)", i+1, a.Provider, a.Model))
+			sb.WriteString(fmt.Sprintf("\n  [%d] %s/%s: skipped (%s): %v", i+1, a.Provider, a.Model, a.Reason, a.Error))
 		} else {
 			sb.WriteString(fmt.Sprintf("\n  [%d] %s/%s: %v (reason=%s, %s)",
 				i+1, a.Provider, a.Model, a.Error, a.Reason, a.Duration.Round(time.Millisecond)))

@@ -271,11 +271,16 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 	var reasoningDetails []ReasoningDetail
 	var toolCalls []streamedToolCall
 	var finishReason string
+	completed := false
 	var usage *UsageInfo
 
 	processEvent := func(raw string) error {
 		raw = strings.TrimSpace(raw)
-		if raw == "" || raw == "[DONE]" {
+		if raw == "" {
+			return nil
+		}
+		if raw == "[DONE]" {
+			completed = true
 			return nil
 		}
 
@@ -353,6 +358,7 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 				}
 			}
 			if choice.FinishReason != "" {
+				completed = true
 				finishReason = choice.FinishReason
 			}
 		}
@@ -382,6 +388,10 @@ func parseStreamingResponse(body io.Reader, onUpdate func(content string)) (*LLM
 		if err := processEvent(strings.Join(dataLines, "\n")); err != nil {
 			return nil, err
 		}
+	}
+
+	if !completed {
+		return nil, fmt.Errorf("stream ended without completion: %w", io.ErrUnexpectedEOF)
 	}
 
 	normalizedToolCalls := make([]ToolCall, 0, len(toolCalls))
