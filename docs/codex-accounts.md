@@ -152,3 +152,5 @@ A late refresh, reconnect or test result cannot recreate a deleted connection.
 Tests use authenticated dashboard sessions, temporary stores and fake
 OAuth/inference endpoints. Run `go test ./pkg/auth ./web/backend/api` and
 `pnpm --dir web/frontend test:models`; no personal tokens or paid calls are needed.
+
+Token failures use their OAuth machine codes. A rejected client configuration (`invalid_client`) permits a configured reserve without deleting the saved tokens; repair the client configuration. Temporary service codes preserve tokens and use service recovery even if the token endpoint returns HTTP400. Malformed-request codes remain terminal.

@@ -69,6 +69,21 @@ func createCodexAuthProvider(accountIDs ...string) (LLMProvider, error) {
 				status := tokenError.StatusCode
 				if tokenError.ReauthorizationRequired {
 					status = 401
+				} else {
+					// OAuth token endpoints may use HTTP400 for operational failures.
+					// Client configuration failures permit fallback without revoking tokens.
+					switch tokenError.Code {
+					case "invalid_client":
+						status = 403
+					case "temporarily_unavailable",
+						"server_error",
+						"usage_unavailable",
+						"user_unavailable",
+						"subscription_sharing_usage_unavailable":
+						status = 503
+					case "subscription_sharing_usage_limit_exceeded", "rate_limit_exceeded":
+						status = 429
+					}
 				}
 				err = &protocoltypes.HTTPError{
 					StatusCode: status,
