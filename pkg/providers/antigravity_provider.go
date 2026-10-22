@@ -14,6 +14,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
 const (
@@ -28,7 +29,7 @@ const (
 // This provider authenticates via Google OAuth and provides access to models like Claude and Gemini
 // through Google's infrastructure.
 type AntigravityProvider struct {
-	tokenSource func() (string, string, error) // Returns (accessToken, projectID, error)
+	tokenSource func(context.Context) (string, string, error) // Returns (accessToken, projectID, error)
 	httpClient  *http.Client
 }
 
@@ -52,7 +53,7 @@ func (p *AntigravityProvider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
-	accessToken, projectID, err := p.tokenSource()
+	accessToken, projectID, err := p.tokenSource(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("antigravity auth: %w", err)
 	}
@@ -115,12 +116,11 @@ func (p *AntigravityProvider) Chat(
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("reading response: %w", readErr)
+		}
 		logger.ErrorCF("provider.antigravity", "API call failed", map[string]any{
 			"status_code": resp.StatusCode,
 			"response":    string(respBody),
@@ -132,7 +132,7 @@ func (p *AntigravityProvider) Chat(
 
 	// Response is always SSE from streamGenerateContent — each line is "data: {...}"
 	// with a "response" wrapper containing the standard Gemini response
-	llmResp, err := p.parseSSEResponse(string(respBody))
+	llmResp, err := p.parseSSEResponse(ctx, resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -404,13 +404,15 @@ type antigravityJSONResponse struct {
 	} `json:"usageMetadata"`
 }
 
-func (p *AntigravityProvider) parseSSEResponse(body string) (*LLMResponse, error) {
+func (p *AntigravityProvider) parseSSEResponse(ctx context.Context, body io.Reader) (*LLMResponse, error) {
 	var contentParts []string
 	var toolCalls []ToolCall
 	var usage *UsageInfo
 	var finishReason string
+	completed := false
 
-	scanner := bufio.NewScanner(strings.NewReader(body))
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -418,6 +420,7 @@ func (p *AntigravityProvider) parseSSEResponse(body string) (*LLMResponse, error
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			completed = true
 			break
 		}
 
@@ -432,6 +435,10 @@ func (p *AntigravityProvider) parseSSEResponse(body string) (*LLMResponse, error
 
 		for _, candidate := range resp.Candidates {
 			for _, part := range candidate.Content.Parts {
+				if part.Text != "" ||
+					(part.FunctionCall != nil && (part.FunctionCall.Name != "" || len(part.FunctionCall.Args) > 0)) {
+					protocoltypes.ReportModelProgress(ctx)
+				}
 				if part.Text != "" {
 					contentParts = append(contentParts, part.Text)
 				}
@@ -452,7 +459,8 @@ func (p *AntigravityProvider) parseSSEResponse(body string) (*LLMResponse, error
 					})
 				}
 			}
-			if candidate.FinishReason != "" {
+			if candidate.FinishReason != "" && candidate.FinishReason != "FINISH_REASON_UNSPECIFIED" {
+				completed = true
 				finishReason = candidate.FinishReason
 			}
 		}
@@ -464,8 +472,17 @@ func (p *AntigravityProvider) parseSSEResponse(body string) (*LLMResponse, error
 				TotalTokens:      resp.UsageMetadata.TotalTokenCount,
 			}
 		}
+		if completed {
+			break
+		}
 	}
 
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading antigravity stream: %w", err)
+	}
+	if !completed {
+		return nil, fmt.Errorf("antigravity stream ended before completion: %w", io.ErrUnexpectedEOF)
+	}
 	mappedFinish := "stop"
 	if len(toolCalls) > 0 {
 		mappedFinish = "tool_calls"
@@ -559,8 +576,8 @@ func sanitizeSchemaForGemini(schema map[string]any) map[string]any {
 
 // --- Token source ---
 
-func createAntigravityTokenSource() func() (string, string, error) {
-	return func() (string, string, error) {
+func createAntigravityTokenSource() func(context.Context) (string, string, error) {
+	return func(ctx context.Context) (string, string, error) {
 		cred, err := auth.GetCredential("google-antigravity")
 		if err != nil {
 			return "", "", fmt.Errorf("loading auth credentials: %w", err)
@@ -574,7 +591,7 @@ func createAntigravityTokenSource() func() (string, string, error) {
 		// Refresh if needed
 		if cred.NeedsRefresh() && cred.RefreshToken != "" {
 			oauthCfg := auth.GoogleAntigravityOAuthConfig()
-			refreshed, err := auth.RefreshAccessToken(cred, oauthCfg)
+			refreshed, err := auth.RefreshAccessTokenContext(ctx, cred, oauthCfg)
 			if err != nil {
 				return "", "", fmt.Errorf("refreshing token: %w", err)
 			}
@@ -597,8 +614,11 @@ func createAntigravityTokenSource() func() (string, string, error) {
 		projectID := cred.ProjectID
 		if projectID == "" {
 			// Try to fetch project ID from API
-			fetchedID, err := FetchAntigravityProjectID(cred.AccessToken)
+			fetchedID, err := fetchAntigravityProjectIDContext(ctx, cred.AccessToken)
 			if err != nil {
+				if ctx.Err() != nil {
+					return "", "", ctx.Err()
+				}
 				logger.WarnCF("provider.antigravity", "Could not fetch project ID, using fallback", map[string]any{
 					"error": err.Error(),
 				})
@@ -616,6 +636,10 @@ func createAntigravityTokenSource() func() (string, string, error) {
 
 // FetchAntigravityProjectID retrieves the Google Cloud project ID from the loadCodeAssist endpoint.
 func FetchAntigravityProjectID(accessToken string) (string, error) {
+	return fetchAntigravityProjectIDContext(context.Background(), accessToken)
+}
+
+func fetchAntigravityProjectIDContext(ctx context.Context, accessToken string) (string, error) {
 	reqBody, _ := json.Marshal(map[string]any{
 		"metadata": map[string]any{
 			"ideType":    "IDE_UNSPECIFIED",
@@ -624,7 +648,12 @@ func FetchAntigravityProjectID(accessToken string) (string, error) {
 		},
 	})
 
-	req, err := http.NewRequest("POST", antigravityBaseURL+"/v1internal:loadCodeAssist", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		"POST",
+		antigravityBaseURL+"/v1internal:loadCodeAssist",
+		bytes.NewReader(reqBody),
+	)
 	if err != nil {
 		return "", err
 	}

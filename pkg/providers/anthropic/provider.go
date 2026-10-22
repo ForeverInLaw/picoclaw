@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 
@@ -147,23 +148,43 @@ func (p *Provider) chatStreaming(
 
 	var msg anthropic.Message
 	var partial strings.Builder
+	completed := false
 	for stream.Next() {
 		event := stream.Current()
 		if event.Type == "content_block_delta" {
 			delta := event.AsContentBlockDelta().Delta
+			if (delta.Type == "text_delta" && delta.Text != "") ||
+				(delta.Type == "thinking_delta" && delta.Thinking != "") ||
+				(delta.Type == "input_json_delta" && delta.PartialJSON != "") {
+				protocoltypes.ReportModelProgress(ctx)
+			}
 			if delta.Type == "text_delta" && delta.Text != "" && onUpdate != nil {
 				partial.WriteString(delta.Text)
 				onUpdate(partial.String())
 			}
 		}
+		if event.Type == "content_block_start" {
+			block := event.AsContentBlockStart().ContentBlock
+			if block.Text != "" || block.Thinking != "" ||
+				((block.Type == "tool_use" || block.Type == "server_tool_use") && (block.ID != "" || block.Name != "")) {
+				protocoltypes.ReportModelProgress(ctx)
+			}
+		}
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
+		}
+		if event.Type == "message_stop" {
+			completed = true
+			break
 		}
 	}
 	if err := stream.Err(); err != nil {
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
+	if !completed {
+		return nil, fmt.Errorf("claude stream ended before message_stop: %w", io.ErrUnexpectedEOF)
+	}
 	return parseResponse(&msg), nil
 }
 

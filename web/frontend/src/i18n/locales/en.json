@@ -271,7 +271,9 @@
       "thinkingLevel": "Thinking Level",
       "thinkingLevelHint": "Extended thinking budget: off, low, medium, high, xhigh, adaptive.",
       "maxTokensField": "Max Tokens Field",
-      "maxTokensFieldHint": "Override the request field name for max tokens, e.g. max_completion_tokens."
+      "maxTokensFieldHint": "Override the request field name for max tokens, e.g. max_completion_tokens.",
+      "inactivityTimeout": "Model inactivity limit (seconds)",
+      "inactivityTimeoutHint": "Default: 60 seconds. Text, reasoning and tool generation reset this wait. Local tools do not use it. Empty or 0 uses the default; changes apply to the next request."
     },
     "edit": {
       "title": "Configure {{name}}",

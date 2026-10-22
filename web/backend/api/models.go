@@ -43,13 +43,14 @@ type modelResponse struct {
 	AccountID    string                    `json:"account_id,omitempty"`
 	Capabilities *config.ModelCapabilities `json:"capabilities,omitempty"`
 	// Advanced fields
-	ConnectMode    string         `json:"connect_mode,omitempty"`
-	Workspace      string         `json:"workspace,omitempty"`
-	RPM            int            `json:"rpm,omitempty"`
-	MaxTokensField string         `json:"max_tokens_field,omitempty"`
-	RequestTimeout int            `json:"request_timeout,omitempty"`
-	ThinkingLevel  string         `json:"thinking_level,omitempty"`
-	ExtraBody      map[string]any `json:"extra_body,omitempty"`
+	ConnectMode              string         `json:"connect_mode,omitempty"`
+	Workspace                string         `json:"workspace,omitempty"`
+	RPM                      int            `json:"rpm,omitempty"`
+	MaxTokensField           string         `json:"max_tokens_field,omitempty"`
+	RequestTimeout           int            `json:"request_timeout,omitempty"`
+	InactivityTimeoutSeconds int            `json:"inactivity_timeout_seconds"`
+	ThinkingLevel            string         `json:"thinking_level,omitempty"`
+	ExtraBody                map[string]any `json:"extra_body,omitempty"`
 	// Meta
 	Configured bool `json:"configured"`
 	IsDefault  bool `json:"is_default"`
@@ -88,26 +89,27 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			m.APIKey = keys[0]
 		}
 		models = append(models, modelResponse{
-			ID:             m.ID,
-			Fallbacks:      m.Fallbacks,
-			Index:          i,
-			ModelName:      m.ModelName,
-			Model:          m.Model,
-			APIBase:        m.APIBase,
-			APIKey:         maskAPIKey(m.APIKey),
-			Proxy:          m.Proxy,
-			AuthMethod:     m.AuthMethod,
-			AccountID:      m.AccountID,
-			Capabilities:   m.Capabilities,
-			ConnectMode:    m.ConnectMode,
-			Workspace:      m.Workspace,
-			RPM:            m.RPM,
-			MaxTokensField: m.MaxTokensField,
-			RequestTimeout: m.RequestTimeout,
-			ThinkingLevel:  m.ThinkingLevel,
-			ExtraBody:      m.ExtraBody,
-			Configured:     configured[i],
-			IsDefault:      m.ModelName == defaultModel || config.ModelIDPrefix+m.ID == defaultModel,
+			ID:                       m.ID,
+			Fallbacks:                m.Fallbacks,
+			Index:                    i,
+			ModelName:                m.ModelName,
+			Model:                    m.Model,
+			APIBase:                  m.APIBase,
+			APIKey:                   maskAPIKey(m.APIKey),
+			Proxy:                    m.Proxy,
+			AuthMethod:               m.AuthMethod,
+			AccountID:                m.AccountID,
+			Capabilities:             m.Capabilities,
+			ConnectMode:              m.ConnectMode,
+			Workspace:                m.Workspace,
+			RPM:                      m.RPM,
+			MaxTokensField:           m.MaxTokensField,
+			RequestTimeout:           m.RequestTimeout,
+			InactivityTimeoutSeconds: m.InactivityTimeoutSeconds,
+			ThinkingLevel:            m.ThinkingLevel,
+			ExtraBody:                m.ExtraBody,
+			Configured:               configured[i],
+			IsDefault:                m.ModelName == defaultModel || config.ModelIDPrefix+m.ID == defaultModel,
 		})
 	}
 

@@ -198,8 +198,19 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	started := time.Now()
-	response, err := provider.Chat(ctx, []providers.Message{{Role: "user", Content: "Reply with OK."}}, nil, modelID,
-		map[string]any{"max_tokens": 32})
+	response, err := providers.RunModelAttempt(
+		ctx,
+		mc.InactivityTimeout(),
+		func(attemptCtx context.Context) (*providers.LLMResponse, error) {
+			return provider.Chat(
+				attemptCtx,
+				[]providers.Message{{Role: "user", Content: "Reply with OK."}},
+				nil,
+				modelID,
+				map[string]any{"max_tokens": 32},
+			)
+		},
+	)
 	probe := auth.AccountProbe{
 		At:        time.Now().UTC(),
 		Model:     modelID,
@@ -260,8 +271,11 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 }
 
 func validateModelTestConfiguration(mc config.ModelConfig) error {
-	if mc.Validate() != nil || strings.TrimSpace(mc.ModelName) == "" {
+	if strings.TrimSpace(mc.ModelName) == "" || strings.TrimSpace(mc.Model) == "" {
 		return errors.New("A model name and model identifier are required.")
+	}
+	if err := mc.Validate(); err != nil {
+		return err
 	}
 	_, modelID := providers.ExtractProtocol(mc.Model)
 	if strings.TrimSpace(modelID) == "" {

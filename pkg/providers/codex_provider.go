@@ -204,6 +204,18 @@ func (p *CodexProvider) chat(
 	phases := make(map[int64]ContentPhase)
 	for stream.Next() {
 		evt := stream.Current()
+		switch evt.Type {
+		case "response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta",
+			"response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+			if evt.Delta != "" {
+				protocoltypes.ReportModelProgress(ctx)
+			}
+		case "response.output_item.added":
+			if (evt.Item.Type == "function_call" || evt.Item.Type == "custom_tool_call") &&
+				(evt.Item.CallID != "" || evt.Item.Name != "" || evt.Item.Arguments != "" || evt.Item.Input != "") {
+				protocoltypes.ReportModelProgress(ctx)
+			}
+		}
 		if evt.Type == "response.output_item.added" || evt.Type == "response.output_item.done" {
 			phases[evt.OutputIndex] = codexMessagePhase(evt.Item)
 		}
