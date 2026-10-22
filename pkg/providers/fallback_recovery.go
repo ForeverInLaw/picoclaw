@@ -133,12 +133,48 @@ func (fc *FallbackChain) ExecuteRecoveryCandidate(
 		if onWait != nil {
 			onWait(delay, outstanding503)
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
+		// Retry-After controls outbound calls, but live account removal must
+		// terminate the wait without waiting for that potentially long pause.
+		for {
+			poll := next.Sub(time.Now())
+			for _, candidate := range candidates {
+				if candidate.AccountID != "" {
+					poll = min(poll, time.Second)
+					break
+				}
+			}
+			timer := time.NewTimer(max(time.Duration(0), poll))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+			recoverable := false
+			for _, candidate := range candidates {
+				state := states[candidate.StableKey()]
+				if state.excluded {
+					continue
+				}
+				availability, availabilityErr := fc.cooldown.AccountAvailabilityContext(ctx, candidate.AccountID)
+				if availabilityErr != nil {
+					return nil, availabilityErr
+				}
+				if !availability.Available && availability.NextEligibleAt.IsZero() {
+					state.excluded = true
+					reportRouting(ctx, RoutingEvent{
+						Phase: "skipped", Candidate: candidate.RoutingIdentity(), Reason: string(availability.Reason),
+					})
+					continue
+				}
+				recoverable = recoverable || state.failure != nil && state.failure.Status == 503
+			}
+			if !recoverable {
+				return nil, err
+			}
+			if !time.Now().Before(next) {
+				break
+			}
 		}
 		for _, candidate := range candidates {
 			state := states[candidate.StableKey()]

@@ -10,7 +10,9 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -770,6 +772,75 @@ func Test503RecoveryOutlivesOrdinaryReserveFailures(t *testing.T) {
 						",",
 					) != "primary,backup,primary,backup,primary,primary,primary,primary,primary,backup,primary" {
 					t.Fatalf("answer=%q err=%v models=%v elapsed=%v", answer, err, p.models, time.Since(started))
+				}
+			})
+		})
+	}
+}
+
+func Test503WaitEndsWhenAllConnectionsLoseAuthorization(t *testing.T) {
+	for _, disable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disabled=%t", disable), func(t *testing.T) {
+			t.Setenv(config.EnvHome, t.TempDir())
+			for _, id := range []string{"first", "second"} {
+				if err := auth.SaveAccount(&auth.AccountConnection{
+					ID: id, Provider: "openai", Enabled: true,
+					Credential: &auth.AuthCredential{AccessToken: "fixture", AuthMethod: "oauth"},
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			withRetryLoop(t, func(t *testing.T, al *AgentLoop, mb *bus.MessageBus) {
+				capacity := &protocoltypes.HTTPError{
+					StatusCode: 503,
+					RetryAfter: time.Hour,
+					Wrapped:    errors.New("capacity"),
+				}
+				p := &retryScriptProvider{failures: []error{capacity, capacity}}
+				a := al.registry.GetDefaultAgent()
+				a.Provider = p
+				a.Candidates = []providers.FallbackCandidate{
+					{Provider: "openai", Model: "primary", AccountID: "first"},
+					{Provider: "openai", Model: "backup", AccountID: "second"},
+				}
+				go func() {
+					time.Sleep(2 * time.Second)
+					for _, id := range []string{"first", "second"} {
+						account, err := auth.GetAccount(id)
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						if disable {
+							account.Enabled = false
+						} else {
+							account.Credential = nil
+						}
+						if err := auth.SaveAccount(account); err != nil {
+							t.Error(err)
+							return
+						}
+					}
+				}()
+				started := time.Now()
+				answer, err := al.processMessage(
+					t.Context(),
+					bus.InboundMessage{
+						Channel:  "telegram",
+						ChatID:   "42",
+						SenderID: "telegram:42",
+						Content:  "retain this conversation",
+					},
+				)
+				if err == nil || answer != "" || p.calls != 2 || time.Since(started) > 3*time.Second {
+					t.Fatalf("answer=%q err=%v calls=%d elapsed=%v", answer, err, p.calls, time.Since(started))
+				}
+				var last bus.OutboundMessage
+				for len(mb.OutboundChan()) > 0 {
+					last = <-mb.OutboundChan()
+				}
+				if last.Progress == nil || last.Progress.State != bus.ProgressFailed {
+					t.Fatalf("unfinished wait: %+v", last)
 				}
 			})
 		})
