@@ -188,6 +188,24 @@ func (s *AttachmentStore) Open(scope RequestScope, reference string) (fs.File, e
 	return root.Open(name)
 }
 
+// OpenOriginal authorizes access to retained binary input for tools such as image editing.
+func (s *AttachmentStore) OpenOriginal(scope RequestScope, reference string) (fs.File, error) {
+	if _, err := s.record(scope, reference); err != nil {
+		return nil, err
+	}
+	root, err := openPrivateRoot(s.directory, false)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	name := strings.TrimPrefix(reference, AttachmentPrefix) + ".original"
+	info, err := root.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("attachment original unavailable or unsafe")
+	}
+	return root.Open(name)
+}
+
 func (s *AttachmentStore) ProtectPath(path string) bool {
 	return s != nil && protectStoredPath(path, s.directory)
 }

@@ -144,6 +144,9 @@ func (h *Handler) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 				references = append(references, model.ModelName)
 			}
 		}
+		if cfg.Tools.GenerateImage.AccountID == r.PathValue("id") {
+			references = append(references, "tools.generate_image.account_id")
+		}
 		if len(references) > 0 {
 			return nil
 		}
@@ -161,7 +164,7 @@ func (h *Handler) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if len(references) > 0 {
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).
-			Encode(map[string]any{"status": "in_use", "message": "Replace this account in the listed models before deleting it.", "models": references})
+			Encode(map[string]any{"status": "in_use", "message": "Replace this account in the listed models or tools before deleting it.", "models": references})
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})

@@ -292,6 +292,14 @@ func registerSharedTools(
 			agent.Tools.Register(sendFileTool)
 		}
 
+		if cfg.Tools.IsToolEnabled("generate_image") {
+			agent.Tools.Register(tools.NewGenerateImageTool(
+				agent.Workspace, cfg.Agents.Defaults.RestrictToWorkspace,
+				cfg.Agents.Defaults.GetMaxMediaSize(), cfg.Tools.GenerateImage.AccountID,
+				allowReadPaths, agent.Artifacts, agent.Attachments,
+			))
+		}
+
 		// Skill discovery and installation tools
 		skills_enabled := cfg.Tools.IsToolEnabled("skills")
 		find_skills_enable := cfg.Tools.IsToolEnabled("find_skills")
@@ -1183,13 +1191,15 @@ func (al *AgentLoop) GetConfig() *config.Config {
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	al.mediaStore = s
 
-	// Propagate store to send_file tools in all agents.
+	// Propagate the store to all tools that produce outbound files.
 	registry := al.GetRegistry()
-	registry.ForEachTool("send_file", func(t tools.Tool) {
-		if sf, ok := t.(*tools.SendFileTool); ok {
-			sf.SetMediaStore(s)
-		}
-	})
+	for _, name := range []string{"send_file", "generate_image"} {
+		registry.ForEachTool(name, func(t tools.Tool) {
+			if producer, ok := t.(interface{ SetMediaStore(media.MediaStore) }); ok {
+				producer.SetMediaStore(s)
+			}
+		})
+	}
 }
 
 // SetTranscriber injects a voice transcriber for agent-level audio transcription.

@@ -163,3 +163,53 @@ OAuth/inference endpoints. Run `go test ./pkg/auth ./web/backend/api` and
 Token failures use their OAuth machine codes. A rejected client configuration (`invalid_client`) suspends further calls through every alias of that registration and permits an independent configured reserve without deleting the saved tokens; repair the client configuration. Runtime reports `client_configuration` separately from revoked authorization. Saving a corrected registration clears that session-scoped suspension. Temporary service codes preserve tokens and use service recovery even if the token endpoint returns HTTP400. Malformed-request codes remain terminal.
 
 Legacy CLI-compatible accounts retain their existing model substitution policy. Runtime successful outcomes show the model actually sent on the wire, alongside the unchanged configured-model ID and account; captured routing chains keep the configured model. Exact explicit probes continue to use the selected slug without substitution.
+
+## Native Codex image generation
+
+The optional `generate_image` tool generates one image or edits up to five
+PNG/JPEG/WebP references with `gpt-image-2`. It uses Codex's native
+`https://chatgpt.com/backend-api/codex/images/generations` and `images/edits`
+routes, independently of the primary text model and image-understanding routing.
+Requests consume the selected account's image allowance. Configuration and login
+never generate images.
+
+A native Codex connection is required. Public **Continue with ChatGPT**
+registrations use `api.openai.com/v1`; those tokens are not interchangeable with
+native Codex authorization. On a headless server, connect the native account:
+
+```sh
+picoclaw auth login --provider openai --device-code
+```
+
+Complete the displayed device sign-in. The existing CLI flow saves the separate
+`codex-default` connection without replacing public registrations or the primary
+model. Bind that connection explicitly in `config.json`, then restart the gateway:
+
+```json
+{
+  "tools": {
+    "generate_image": {
+      "enabled": true,
+      "account_id": "codex-default"
+    }
+  }
+}
+```
+
+The tool is disabled by default. It never selects another account or retries an
+image request automatically. Disabled, removed or expired connections use the
+existing account authorization and refresh rules. An image-specific rejection
+does not revoke a working text connection.
+
+Ask for an image in a regular chat. For edits, attach an image and describe the
+changes; retained `attachment://` references remain scoped to their conversation.
+Allowed workspace paths can also be used, with the same read boundaries as
+`read_file`. Reference images total at most 32 MiB; output is bounded by both
+32 MiB and the configured media limit. Files are saved privately under unique
+`generated-image-*` paths in the agent workspace and queued through normal media
+delivery. Keep or remove these workspace files as needed. Inline and no-history
+requests cannot invoke the tool.
+
+The native wire format follows OpenAI Codex revision
+[`5a1c247`](https://github.com/openai/codex/tree/5a1c247dd5fd682c22a34af93df697dd06300a32/codex-rs/ext/image-generation).
+This backend contract can change independently of the public Images API.
