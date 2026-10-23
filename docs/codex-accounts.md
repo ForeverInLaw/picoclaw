@@ -207,9 +207,35 @@ Allowed workspace paths can also be used, with the same read boundaries as
 `read_file`. Reference images total at most 32 MiB; output is bounded by both
 32 MiB and the configured media limit. Files are saved privately under unique
 `generated-image-*` paths in the agent workspace and queued through normal media
-delivery. Keep or remove these workspace files as needed. Inline and no-history
-requests cannot invoke the tool.
+delivery. Keep or remove these workspace files as needed. Ordinary inline and no-history
+requests cannot invoke the tool. Guest mentions support generation as described below.
 
 The native wire format follows OpenAI Codex revision
 [`5a1c247`](https://github.com/openai/codex/tree/5a1c247dd5fd682c22a34af93df697dd06300a32/codex-rs/ext/image-generation).
 This backend contract can change independently of the public Images API.
+
+### Images in guest replies
+
+An allowed user can mention the bot in a chat where it is not a member and ask
+it to generate an image. The bot first publishes its usual guest placeholder.
+After generation, it replaces its own reply with the photo. The user's request
+is never edited. Ordinary guest text replies keep their existing rich text,
+streaming and pagination behavior; selected inline results still cannot generate
+images.
+
+Guest generation creates one new image per request and ends the tool turn after
+queuing the image, without an extra model request. Guest tools cannot read
+workspace image paths or edit private attachments. Text-to-image uses the same
+explicit Codex account and limits as regular chats.
+
+Telegram requires a previously uploaded photo or a public URL when editing an
+inline guest reply. The invoking user must first open the bot's private chat and
+send `/start`. The bot uploads the photo to that user's recorded private chat
+with notifications silenced, reuses its `file_id`, and removes the temporary
+message. It never chooses another user's private chat as an upload destination.
+If cleanup fails, the temporary copy can remain in that user's private chat.
+
+The uploaded photo ID is retained before the guest edit, so delivery retries and
+retained-answer recovery reuse the image without generating it again. Generated
+workspace files keep their existing lifetime. Guest photos are subject to
+Telegram's `sendPhoto` size and dimension limits.

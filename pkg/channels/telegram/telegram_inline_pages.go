@@ -26,10 +26,13 @@ const telegramInlinePagePrefix = "__picoclaw_inline_page__:"
 // Selected result ownership is recorded before generation. Paginated answers
 // retain their complete source so navigation survives bot restarts.
 type telegramInlinePages struct {
-	Content   string `json:"content"`
-	Plain     bool   `json:"plain,omitempty"`
-	OwnerID   int64  `json:"owner_id"`
-	Published bool   `json:"published,omitempty"`
+	Content     string `json:"content"`
+	Plain       bool   `json:"plain,omitempty"`
+	OwnerID     int64  `json:"owner_id"`
+	Published   bool   `json:"published,omitempty"`
+	Guest       bool   `json:"guest,omitempty"`
+	PhotoFileID string `json:"photo_file_id,omitempty"`
+	PhotoRef    string `json:"photo_ref,omitempty"`
 }
 
 const inlinePagesLifetime = 30 * 24 * time.Hour
@@ -61,6 +64,7 @@ func (c *TelegramChannel) saveInlinePages(inlineMessageID string, pages telegram
 			return fmt.Errorf("inline result owner unavailable: %w", err)
 		}
 		pages.OwnerID = previous.OwnerID
+		pages.Guest = previous.Guest
 	}
 	data, err := json.Marshal(pages)
 	if err != nil {
@@ -166,6 +170,9 @@ func inlinePageContent(pages telegramInlinePages, page int) (string, *telego.Inl
 	if pages.Plain {
 		limit = telegramInlineMessageLimit
 	}
+	if pages.PhotoFileID != "" {
+		limit = 1024
+	}
 	chunks := channels.SplitMessage(pages.Content, limit-64)
 	if page < 0 || page >= len(chunks) {
 		return "", nil, fmt.Errorf("inline answer page unavailable")
@@ -211,6 +218,21 @@ func (c *TelegramChannel) editInlinePage(
 	if markup == nil {
 		markup = &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
 	}
+	if pages.PhotoFileID != "" {
+		_, err := c.bot.EditMessageMedia(ctx, &telego.EditMessageMediaParams{
+			InlineMessageID: inlineMessageID, ReplyMarkup: markup,
+			Media: &telego.InputMediaPhoto{
+				Type: "photo", Media: telego.InputFile{FileID: pages.PhotoFileID}, Caption: content,
+			},
+		})
+		if isTelegramMessageNotModified(err) {
+			err = nil
+		}
+		if err == nil {
+			c.inlineReplyLocked(inlineMessageID).markup = markup
+		}
+		return telegramDeliveryError(err)
+	}
 	params := &telego.EditMessageTextParams{InlineMessageID: inlineMessageID, ReplyMarkup: markup}
 	if pages.Plain {
 		params.Text = content
@@ -251,11 +273,13 @@ func (c *TelegramChannel) editInlinePage(
 func (c *TelegramChannel) sendInlineAnswer(ctx context.Context, inlineMessageID, content string) error {
 	c.inlineMu.Lock()
 	defer c.inlineMu.Unlock()
-	pages := telegramInlinePages{Content: normalizeRichMarkdown(content)}
+	pages, ownerErr := c.loadInlinePages(inlineMessageID)
+	pages.Content = normalizeRichMarkdown(content)
+	pages.Plain = false
+	pages.Published = false
 	if strings.TrimSpace(pages.Content) == "" {
 		return nil
 	}
-	_, ownerErr := c.loadInlinePages(inlineMessageID)
 	retained := ownerErr == nil || len([]rune(pages.Content)) > telegramRichMessageLimit-64
 	if retained {
 		if err := c.saveInlinePages(inlineMessageID, pages); err != nil {

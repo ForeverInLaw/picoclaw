@@ -1539,10 +1539,16 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		NoHistory:           false,
 		AllowedTools:        nil,
 		DisableToolFeedback: inlineMode,
-		ConversationContext: ConversationContext{Inline: inlineMode},
+		ConversationContext: ConversationContext{
+			Inline: inlineMode,
+			Guest:  inlineMode && isTelegramMessage(msg) && strings.EqualFold(msg.Metadata[telegramGuestMetadataKey], "true"),
+		},
 	}
 	if inlineMode {
 		opts.AllowedTools = inlineToolAllowlist()
+		if opts.ConversationContext.Guest {
+			opts.AllowedTools = append(opts.AllowedTools, "generate_image")
+		}
 	}
 
 	// context-dependent commands check their own Runtime fields and report

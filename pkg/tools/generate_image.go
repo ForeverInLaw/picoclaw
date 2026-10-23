@@ -65,8 +65,9 @@ func (t *GenerateImageTool) SetMediaStore(store media.MediaStore) {
 
 func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	scope := ToolRequestScope(ctx)
-	if scope.Inline || scope.NoHistory {
-		return ErrorResult("image generation is unavailable in inline or no-history requests; use a regular chat")
+	guest := scope.Inline && scope.Guest
+	if (scope.Inline && !guest) || scope.NoHistory {
+		return ErrorResult("image generation is unavailable in ordinary inline or no-history requests; use a regular chat or guest mention")
 	}
 	if ToolChannel(ctx) == "" || ToolChatID(ctx) == "" || t.sender.mediaStore == nil {
 		return ErrorResult("image delivery requires a current chat and media store")
@@ -88,6 +89,9 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 		references, ok := value.([]any)
 		if !ok || len(references) > providers.MaxCodexImageInputs {
 			return ErrorResult("images must be an array with at most five references")
+		}
+		if guest && len(references) > 0 {
+			return ErrorResult("guest image generation supports new images only; use a regular chat for edits")
 		}
 		total := 0
 		for _, reference := range references {
@@ -140,6 +144,11 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("Image generated and saved at %s, but delivery failed: %s. Use send_file to resend it; do not generate it again.", path, result.ForLLM))
 	}
 	result.ForLLM = fmt.Sprintf("Image generated and queued for delivery to the current chat. Saved at %s. Do not send it again.", path)
+	if guest {
+		result.ForLLM = "Image generated and queued for this guest reply. Do not generate it again."
+		result.Terminal = true
+		result.Silent = true
+	}
 	return result
 }
 

@@ -49,6 +49,7 @@ type ContextBuilder struct {
 // the transcript. Inline replies may be published outside a private chat.
 type ConversationContext struct {
 	Inline  bool
+	Guest   bool
 	Reset   bool
 	ResetAt time.Time
 }

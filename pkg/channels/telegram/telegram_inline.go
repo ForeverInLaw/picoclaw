@@ -222,7 +222,7 @@ func (c *TelegramChannel) handleInlineResult(ctx *th.Context, result telego.Chos
 			c.inlineMu.Unlock()
 			return fmt.Errorf("inline result belongs to another user")
 		}
-		if previous.Content != "" {
+		if previous.Content != "" || previous.PhotoFileID != "" {
 			if !previous.Published {
 				err := c.publishInlinePages(ctx, result.InlineMessageID, previous, true)
 				c.inlineMu.Unlock()
@@ -240,7 +240,7 @@ func (c *TelegramChannel) handleInlineResult(ctx *th.Context, result telego.Chos
 		c.inlineMu.Unlock()
 		return nil
 	}
-	if err := c.saveInlinePages(result.InlineMessageID, telegramInlinePages{OwnerID: result.From.ID}); err != nil {
+	if err := c.saveInlinePages(result.InlineMessageID, telegramInlinePages{OwnerID: result.From.ID, Guest: guest}); err != nil {
 		c.inlineMu.Unlock()
 		return fmt.Errorf("persist selected inline result identity: %w", err)
 	}

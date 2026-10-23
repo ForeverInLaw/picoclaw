@@ -415,6 +415,9 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 		return channels.ErrNotRunning
 	}
 
+	if inlineID, ok := telegramInlineMessageID(msg.ChatID); ok {
+		return c.sendGuestImage(ctx, inlineID, msg)
+	}
 	chatID, threadID, err := parseTelegramChatID(msg.ChatID)
 	if err != nil {
 		return fmt.Errorf("invalid chat ID %s: %w", msg.ChatID, channels.ErrSendFailed)

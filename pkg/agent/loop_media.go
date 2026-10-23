@@ -36,7 +36,7 @@ type attachmentContext struct {
 func (ts *turnState) fileScope(ctx context.Context) tools.RequestScope {
 	scope := tools.RequestScope{
 		AgentID: ts.agent.ID, SessionKey: ts.sessionKey,
-		Inline: ts.opts.ConversationContext.Inline, NoHistory: ts.opts.NoHistory,
+		Inline: ts.opts.ConversationContext.Inline, Guest: ts.opts.ConversationContext.Guest, NoHistory: ts.opts.NoHistory,
 	}
 	if scope.NoHistory {
 		if owner := tools.ToolRequestScope(ctx); owner.AgentID != "" && owner.SessionKey != "" && !owner.NoHistory {

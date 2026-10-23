@@ -40,6 +40,7 @@ type RequestScope struct {
 	AgentID    string
 	SessionKey string
 	Inline     bool
+	Guest      bool
 	NoHistory  bool
 }
 
