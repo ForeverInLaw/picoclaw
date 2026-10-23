@@ -134,11 +134,11 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 	case "image/webp":
 		extension = ".webp"
 	}
+	keep = true
 	result := t.sender.Execute(ctx, map[string]any{"path": path, "filename": filepath.Base(path) + extension})
 	if result.IsError {
-		return result
+		return ErrorResult(fmt.Sprintf("Image generated and saved at %s, but delivery failed: %s. Use send_file to resend it; do not generate it again.", path, result.ForLLM))
 	}
-	keep = true
 	result.ForLLM = fmt.Sprintf("Image generated and queued for delivery to the current chat. Saved at %s. Do not send it again.", path)
 	return result
 }
