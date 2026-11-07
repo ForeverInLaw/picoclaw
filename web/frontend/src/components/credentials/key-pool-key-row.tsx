@@ -55,7 +55,7 @@ export function KeyPoolKeyRow({
         label={t("credentials.keyPools.keyLabel")}
         value={poolKey.label}
         disabled={busy}
-        onSave={(label) => update.mutate({ label })}
+        onSave={(label) => update.mutateAsync({ label })}
       >
         <span className="font-medium">{poolKey.label}</span>
         <code className="text-muted-foreground text-xs">{poolKey.api_key}</code>
@@ -66,7 +66,7 @@ export function KeyPoolKeyRow({
       <KeyBudget
         poolKey={poolKey}
         disabled={busy}
-        onSave={(patch) => update.mutate(patch)}
+        onSave={(patch) => update.mutateAsync(patch)}
       />
       {poolKey.until && (
         <p className="text-muted-foreground text-xs">

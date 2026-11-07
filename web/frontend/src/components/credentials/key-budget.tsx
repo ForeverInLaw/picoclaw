@@ -66,7 +66,7 @@ export function KeyBudget({
 }: {
   poolKey: KeyPoolKey
   disabled: boolean
-  onSave: (patch: KeyPoolKeyPatch) => void
+  onSave: (patch: KeyPoolKeyPatch) => Promise<unknown>
 }) {
   const { t } = useTranslation()
   return (

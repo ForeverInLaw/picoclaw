@@ -9,7 +9,7 @@ interface EditableNameProps {
   label: string
   value: string
   disabled: boolean
-  onSave: (name: string) => void
+  onSave: (name: string) => Promise<unknown>
   children: ReactNode
 }
 
@@ -31,7 +31,7 @@ export function EditableName({
       onSubmit={(form) => {
         const name = form.get("name")
         if (typeof name === "string" && name.trim() && name.trim() !== value)
-          onSave(name.trim())
+          return onSave(name.trim())
       }}
     >
       <Input

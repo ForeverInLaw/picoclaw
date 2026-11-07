@@ -100,7 +100,7 @@ function KeyPoolCard({ pool }: { pool: KeyPool }) {
           label={t("credentials.keyPools.poolName")}
           value={pool.name}
           disabled={rename.isPending || remove.isPending}
-          onSave={(name) => rename.mutate(name)}
+          onSave={(name) => rename.mutateAsync(name)}
         >
           <h3 className="text-base font-semibold">{pool.name}</h3>
         </EditableName>

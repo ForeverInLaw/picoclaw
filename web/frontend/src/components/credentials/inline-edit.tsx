@@ -8,12 +8,15 @@ interface InlineEditProps {
   actionLabel: string
   disabled: boolean
   formClassName: string
-  onSubmit: (form: FormData) => void
+  onSubmit: (form: FormData) => Promise<unknown> | undefined
   children: ReactNode
 }
 
 // Shows view with an action that swaps it in place for a form of children
-// with Save and Cancel. Save hands the form's data to onSubmit.
+// with Save and Cancel. Save hands the form's data to onSubmit, which returns
+// the save's promise, or undefined when there is nothing to save. The form
+// closes once the save succeeds; a failed save keeps it open with its values,
+// and the caller shows the error.
 export function InlineEdit({
   view,
   actionLabel,
@@ -44,8 +47,12 @@ export function InlineEdit({
       className={formClassName}
       onSubmit={(event) => {
         event.preventDefault()
-        onSubmit(new FormData(event.currentTarget))
-        setEditing(false)
+        const saved = onSubmit(new FormData(event.currentTarget))
+        // A failed save leaves the form open; its caller shows the error.
+        void (saved ?? Promise.resolve()).then(
+          () => setEditing(false),
+          () => undefined,
+        )
       }}
     >
       {children}
