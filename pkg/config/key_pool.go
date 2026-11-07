@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // KeyPool is a named, instance-level set of interchangeable Anthropic API keys,
@@ -75,4 +77,42 @@ func (c *Config) ResolveKeyPools() error {
 		m.keyPool = pool
 	}
 	return nil
+}
+
+// migrateAnthropicAPIKeysToPools turns each anthropic/ API-key entry with several
+// api_keys into a Key pool that the entry references, replacing ordered failover
+// for those models (ADR 0004). Entries with the same key list share one pool.
+// IDs derive from the model ID, so an unsaved migration binds conversations
+// identically on every load until the next configuration write persists it.
+func (c *Config) migrateAnthropicAPIKeysToPools() {
+	pools := map[string]string{} // key list -> pool ID
+	for i := range c.ModelList {
+		m := &c.ModelList[i]
+		protocol, _, _ := strings.Cut(m.Model, "/")
+		keys := MergeAPIKeys(m.APIKey, m.APIKeys)
+		if protocol != "anthropic" || m.AuthMethod == "oauth" || m.AuthMethod == "token" ||
+			m.KeyPoolID != "" || len(keys) < 2 {
+			continue
+		}
+		signature := strings.Join(keys, "\x00")
+		if pools[signature] == "" {
+			pool := KeyPool{ID: derivedID("key-pool", m.ID), Name: m.ModelName}
+			for j, key := range keys {
+				pool.Keys = append(pool.Keys, KeyPoolKey{
+					ID:      derivedID("key-pool-key", fmt.Sprintf("%s:%d", pool.ID, j)),
+					Label:   fmt.Sprintf("Key %d", j+1),
+					Enabled: true,
+					APIKey:  key,
+				})
+			}
+			c.KeyPools = append(c.KeyPools, pool)
+			pools[signature] = pool.ID
+		}
+		m.KeyPoolID = pools[signature]
+		m.APIKey, m.APIKeys = "", nil
+	}
+}
+
+func derivedID(kind, seed string) string {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("picoclaw:"+kind+":"+seed)).String()
 }

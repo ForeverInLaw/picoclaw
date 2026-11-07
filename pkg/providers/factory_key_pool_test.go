@@ -3,6 +3,8 @@ package providers
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -141,5 +143,55 @@ func TestModelsSharingAKeyPoolUseTheSameKeyForAConversation(t *testing.T) {
 		if a, b := fake.keyFor(t, opus, opusID, conversation), fake.keyFor(t, haiku, haikuID, conversation); a != b {
 			t.Errorf("%s used %s with opus and %s with haiku", conversation, a, b)
 		}
+	}
+}
+
+// loadConfigFile writes a config.json and loads it the way the gateway does.
+func loadConfigFile(t *testing.T, document string) *config.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	return cfg
+}
+
+func modelNamed(t *testing.T, cfg *config.Config, name string) *config.ModelConfig {
+	t.Helper()
+	model, err := cfg.GetModelConfig(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return model
+}
+
+func TestAnthropicModelWithAPIKeysLoadsAsAKeyPoolModel(t *testing.T) {
+	fake := newAnswering(t)
+	cfg := loadConfigFile(t, `{"version":3,"model_list":[
+		{"model_name":"claude","model":"anthropic/claude-opus-5-5","api_base":"`+fake.URL+`",
+		 "api_keys":["sk-ant-a","sk-ant-b"]}]}`)
+	provider, modelID := createProvider(t, modelNamed(t, cfg, "claude"))
+
+	served := map[string]bool{}
+	for i := range 30 {
+		served[fake.keyFor(t, provider, modelID, fmt.Sprintf("agent:main:telegram:direct:%d", i))] = true
+	}
+	if !served["sk-ant-a"] || !served["sk-ant-b"] {
+		t.Fatalf("conversations were served by %v, want both migrated keys", served)
+	}
+	if _, err := cfg.GetModelConfig("claude__key_1"); err == nil {
+		t.Error("migrated keys still expanded into ordered failover entries")
+	}
+	restarted := loadConfigFile(t, `{"version":3,"model_list":[
+		{"model_name":"claude","model":"anthropic/claude-opus-5-5","api_base":"`+fake.URL+`",
+		 "api_keys":["sk-ant-a","sk-ant-b"]}]}`)
+	again, modelID := createProvider(t, modelNamed(t, restarted, "claude"))
+	first := fake.keyFor(t, provider, modelID, "agent:main:telegram:direct:7")
+	if got := fake.keyFor(t, again, modelID, "agent:main:telegram:direct:7"); got != first {
+		t.Fatalf("after reloading the unsaved migration the conversation moved from %s to %s", first, got)
 	}
 }

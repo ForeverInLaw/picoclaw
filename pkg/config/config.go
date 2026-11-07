@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -1354,11 +1355,19 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// Migration keeps credential references (enc://, file://) intact; they resolve below.
+	cfg.EnsureModelIDs()
+	cfg.migrateAnthropicAPIKeysToPools()
+
 	if err := resolveAPIKeys(cfg.ModelList, filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-
-	cfg.EnsureModelIDs()
+	if err := resolveKeyPoolKeys(cfg.KeyPools, filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	if err := cfg.ResolveKeyPools(); err != nil {
+		return nil, err
+	}
 
 	// Expand multi-key configs into separate entries for key-level failover
 	cfg.configuredModels = cloneModels(cfg.ModelList)
@@ -1400,22 +1409,73 @@ func encryptPlaintextAPIKeys(models []ModelConfig, passphrase string) ([]ModelCo
 		for j := range m.APIKeys {
 			keys = append(keys, &m.APIKeys[j])
 		}
-		for _, key := range keys {
-			if *key == "" || strings.HasPrefix(*key, "enc://") || strings.HasPrefix(*key, "file://") {
-				continue
-			}
-			encrypted, err := credential.Encrypt(passphrase, "", *key)
-			if err != nil {
-				return nil, fmt.Errorf("cannot seal api_key for model %q: %w", m.ModelName, err)
-			}
-			*key = encrypted
-			changed = true
+		sealedAny, err := sealPlaintext(keys, passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("cannot seal api_key for model %q: %w", m.ModelName, err)
 		}
+		changed = changed || sealedAny
 	}
 	if !changed {
 		return nil, nil
 	}
 	return sealed, nil
+}
+
+// encryptPlaintextKeyPoolKeys is encryptPlaintextAPIKeys for Key pool secrets.
+func encryptPlaintextKeyPoolKeys(pools []KeyPool, passphrase string) ([]KeyPool, error) {
+	sealed := make([]KeyPool, len(pools))
+	changed := false
+	for i, pool := range pools {
+		pool.Keys = slices.Clone(pool.Keys)
+		keys := make([]*string, len(pool.Keys))
+		for j := range pool.Keys {
+			keys[j] = &pool.Keys[j].APIKey
+		}
+		sealedAny, err := sealPlaintext(keys, passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("cannot seal api_key for key pool %q: %w", pool.ID, err)
+		}
+		changed = changed || sealedAny
+		sealed[i] = pool
+	}
+	if !changed {
+		return nil, nil
+	}
+	return sealed, nil
+}
+
+// sealPlaintext encrypts each plaintext secret in place, leaving empty, enc://
+// and file:// values unchanged, and reports whether it sealed any.
+func sealPlaintext(secrets []*string, passphrase string) (bool, error) {
+	changed := false
+	for _, secret := range secrets {
+		if *secret == "" || strings.HasPrefix(*secret, "enc://") || strings.HasPrefix(*secret, "file://") {
+			continue
+		}
+		encrypted, err := credential.Encrypt(passphrase, "", *secret)
+		if err != nil {
+			return false, err
+		}
+		*secret = encrypted
+		changed = true
+	}
+	return changed, nil
+}
+
+// resolveKeyPoolKeys decrypts or dereferences each Key pool secret in place,
+// like resolveAPIKeys does for model keys.
+func resolveKeyPoolKeys(pools []KeyPool, configDir string) error {
+	cr := credential.NewResolver(configDir)
+	for i := range pools {
+		for j := range pools[i].Keys {
+			resolved, err := cr.Resolve(pools[i].Keys[j].APIKey)
+			if err != nil {
+				return fmt.Errorf("key pool %q: keys[%d]: %w", pools[i].ID, j, err)
+			}
+			pools[i].Keys[j].APIKey = resolved
+		}
+	}
+	return nil
 }
 
 // resolveAPIKeys decrypts or dereferences each api_key in models in-place.
@@ -1490,6 +1550,15 @@ func saveConfig(path string, cfg *Config, syncSidecar bool) error {
 		if sealed != nil {
 			tmp := *cfg
 			tmp.ModelList = sealed
+			cfg = &tmp
+		}
+		sealedPools, err := encryptPlaintextKeyPoolKeys(cfg.KeyPools, passphrase)
+		if err != nil {
+			return err
+		}
+		if sealedPools != nil {
+			tmp := *cfg
+			tmp.KeyPools = sealedPools
 			cfg = &tmp
 		}
 	}
