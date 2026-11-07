@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -112,5 +114,86 @@ func TestParseResponse_NoThinkingBlock(t *testing.T) {
 	}
 	if result.Content != "Just a normal response." {
 		t.Errorf("Content = %q, want text content", result.Content)
+	}
+}
+
+// capabilityServer answers the Models API for claude-sonnet-4-6, which accepts
+// disabled thinking, with status for every key but goodKey. It counts lookups.
+func capabilityServer(t *testing.T, goodKey string, status *int) (*httptest.Server, *int) {
+	t.Helper()
+	lookups := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/v1/models/") {
+			lookups++
+			if r.Header.Get("X-Api-Key") != goodKey {
+				w.WriteHeader(*status)
+				io.WriteString(w, `{"type":"error","error":{"type":"error","message":"no"}}`)
+				return
+			}
+			io.WriteString(w, `{"type":"model","id":"claude-sonnet-4-6","display_name":"Sonnet","created_at":"2026-01-01T00:00:00Z",
+				"capabilities":{"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},
+					"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":true}},
+				"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"between_tools":{"supported":false},
+					"disabled":{"supported":true},"enabled":{"supported":true}}}}}`)
+			return
+		}
+		io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude-sonnet-4-6","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	t.Cleanup(server.Close)
+	return server, &lookups
+}
+
+// useCapabilityCache gives the test its own capability cache on a clock it moves.
+func useCapabilityCache(t *testing.T) *time.Time {
+	t.Helper()
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	previous := modelCapabilities
+	modelCapabilities = newCapabilityCache(func() time.Time { return now })
+	t.Cleanup(func() { modelCapabilities = previous })
+	return &now
+}
+
+func thinkingOf(t *testing.T, p *Provider) anthropic.ThinkingConfigParamUnion {
+	t.Helper()
+	params, err := p.requestParams(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "claude-sonnet-4-6",
+		map[string]any{"thinking_level": "off"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return params.Thinking
+}
+
+func TestCapabilityLookupFailureIsRetriedAfterAWhile(t *testing.T) {
+	now := useCapabilityCache(t)
+	status := http.StatusInternalServerError
+	server, lookups := capabilityServer(t, "", &status)
+	p := NewProviderWithAPIKey("sk-ant-key", server.URL, "", 0)
+
+	thinkingOf(t, p)
+	thinkingOf(t, p)
+	if *lookups != 1 {
+		t.Fatalf("lookups within the retry interval = %d, want 1", *lookups)
+	}
+	*now = now.Add(capabilityRetryAfter)
+	thinkingOf(t, p)
+	if *lookups != 2 {
+		t.Fatalf("lookups after the retry interval = %d, want 2", *lookups)
+	}
+}
+
+func TestCapabilityLookupRejectedByOneKeyDoesNotDecideForOthers(t *testing.T) {
+	useCapabilityCache(t)
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server, _ := capabilityServer(t, "sk-ant-good", &status)
+			if thinking := thinkingOf(t, NewProviderWithAPIKey("sk-ant-bad", server.URL, "", 0)); thinking.OfAdaptive == nil {
+				t.Fatalf("rejected lookup: thinking = %+v, want adaptive with the lowest effort", thinking)
+			}
+			if thinking := thinkingOf(t, NewProviderWithAPIKey("sk-ant-good", server.URL, "", 0)); thinking.OfDisabled == nil {
+				t.Fatalf("other key after a rejected lookup: thinking = %+v, want disabled", thinking)
+			}
+		})
 	}
 }

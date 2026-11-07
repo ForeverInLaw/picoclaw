@@ -3,6 +3,7 @@ package anthropicprovider
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -15,6 +16,10 @@ import (
 
 // capabilityLookupTimeout bounds the one Models API request made per model.
 const capabilityLookupTimeout = 10 * time.Second
+
+// capabilityRetryAfter is how long a failed lookup is remembered before the
+// next answer tries again.
+const capabilityRetryAfter = 10 * time.Minute
 
 var errMissingCapabilities = errors.New("models API returned no capabilities")
 
@@ -29,19 +34,21 @@ var efforts = []anthropic.OutputConfigEffort{
 
 // modelCapabilities is shared by every provider in the process, so pool keys
 // and rebuilt providers do not repeat a model's lookup.
-var modelCapabilities capabilityCache
+var modelCapabilities = newCapabilityCache(time.Now)
 
 // applyThinking maps the agent's thinking_level onto adaptive thinking and
 // output_config.effort, within what the model's capabilities allow:
 //
 //   - "low" … "max": adaptive thinking with that effort, or the nearest effort
 //     the model supports.
-//   - "adaptive": adaptive thinking with high effort.
+//   - "adaptive": adaptive thinking with no explicit effort, so the model's
+//     default applies.
 //   - "off": disabled thinking where the model accepts it, otherwise adaptive
 //     thinking with the lowest effort.
 //
-// budget_tokens is never sent. When the capabilities cannot be read, the
-// requested effort is sent as is and "off" uses the lowest effort.
+// budget_tokens is never sent. When the capabilities cannot be read, every
+// level but "adaptive" sends adaptive thinking with the lowest effort, which
+// every model with effort accepts.
 func (p *Provider) applyThinking(
 	ctx context.Context,
 	params *anthropic.MessageNewParams,
@@ -49,34 +56,42 @@ func (p *Provider) applyThinking(
 	opts []option.RequestOption,
 ) {
 	level, _ := options["thinking_level"].(string)
-	effort, ok := levelEffort(level)
+	want, ok := levelEffort(level)
 	if !ok {
 		return
 	}
 	caps := modelCapabilities.get(ctx, p.client, p.baseURL, params.Model, opts)
-	if level == "off" && caps != nil && caps.Thinking.Types.Disabled.Supported {
+	if caps == nil {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
+		if want != "" {
+			params.OutputConfig.Effort = anthropic.OutputConfigEffortLow
+		}
+		return
+	}
+	if level == "off" && caps.Thinking.Types.Disabled.Supported {
 		disabled := anthropic.NewThinkingConfigDisabledParam()
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
 		return
 	}
-	if caps == nil || caps.Thinking.Types.Adaptive.Supported {
+	if caps.Thinking.Types.Adaptive.Supported {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
 	}
-	if caps != nil {
-		effort, ok = nearestEffort(caps.Effort, effort)
+	if want == "" {
+		return
 	}
-	if ok {
+	if effort, supported := nearestEffort(caps.Effort, want); supported {
 		params.OutputConfig.Effort = effort
 	}
 }
 
-// levelEffort is the effort a thinking_level asks for; "off" asks for the lowest.
+// levelEffort is the effort a thinking_level asks for: "off" asks for the
+// lowest and "adaptive" for none ("").
 func levelEffort(level string) (anthropic.OutputConfigEffort, bool) {
 	switch level {
 	case "off":
 		return anthropic.OutputConfigEffortLow, true
 	case "adaptive":
-		return anthropic.OutputConfigEffortHigh, true
+		return "", true
 	}
 	effort := anthropic.OutputConfigEffort(level)
 	return effort, slices.Contains(efforts, effort)
@@ -108,21 +123,31 @@ func nearestEffort(
 	return "", false
 }
 
-// capabilityCache remembers each model's Models API capabilities for the life
-// of the process, so a model costs one lookup rather than one per answer. A
-// failed lookup is remembered as unknown (nil) capabilities.
+// capabilityCache remembers each model's Models API capabilities: a success
+// for the life of the process, a failure for capabilityRetryAfter. A lookup
+// whose credential Anthropic rejected is not remembered, so one bad key of a
+// pool does not decide the model for the others.
 type capabilityCache struct {
+	now     func() time.Time
 	mu      sync.Mutex
 	entries map[string]*capabilityEntry
 }
 
+// capabilityEntry is one model's lookup; its mutex lets a single lookup run
+// while concurrent answers for the model wait for it.
 type capabilityEntry struct {
-	once sync.Once
-	caps *anthropic.ModelCapabilities
+	mu      sync.Mutex
+	caps    *anthropic.ModelCapabilities
+	retryAt time.Time // after a remembered failure, the next lookup's earliest time
 }
 
-// get returns the model's capabilities, looking them up on first use with the
-// caller's request options (so setup-token requests carry their credentials).
+func newCapabilityCache(now func() time.Time) *capabilityCache {
+	return &capabilityCache{now: now, entries: map[string]*capabilityEntry{}}
+}
+
+// get returns the model's capabilities, or nil when they are unknown, looking
+// them up with the caller's request options (so setup-token requests carry
+// their credentials) unless the entry already decides.
 func (c *capabilityCache) get(
 	ctx context.Context,
 	client *anthropic.Client,
@@ -131,9 +156,6 @@ func (c *capabilityCache) get(
 ) *anthropic.ModelCapabilities {
 	key := baseURL + "\x00" + model
 	c.mu.Lock()
-	if c.entries == nil {
-		c.entries = make(map[string]*capabilityEntry)
-	}
 	entry, ok := c.entries[key]
 	if !ok {
 		entry = &capabilityEntry{}
@@ -141,8 +163,22 @@ func (c *capabilityCache) get(
 	}
 	c.mu.Unlock()
 
-	entry.once.Do(func() { entry.caps = lookupCapabilities(ctx, client, model, opts) })
-	return entry.caps
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.caps != nil || c.now().Before(entry.retryAt) {
+		return entry.caps
+	}
+	caps, err := lookupCapabilities(ctx, client, model, opts)
+	var apiErr *anthropic.Error
+	switch {
+	case err == nil:
+		entry.caps = caps
+	case errors.As(err, &apiErr) &&
+		(apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden):
+	default:
+		entry.retryAt = c.now().Add(capabilityRetryAfter)
+	}
+	return caps
 }
 
 func lookupCapabilities(
@@ -150,8 +186,8 @@ func lookupCapabilities(
 	client *anthropic.Client,
 	model string,
 	opts []option.RequestOption,
-) *anthropic.ModelCapabilities {
-	// The result is kept for the process, so one answer's cancellation must not decide it.
+) (*anthropic.ModelCapabilities, error) {
+	// The result is shared by other answers, so one answer's cancellation must not decide it.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), capabilityLookupTimeout)
 	defer cancel()
 	info, err := client.Models.Get(ctx, model, anthropic.ModelGetParams{}, opts...)
@@ -159,9 +195,9 @@ func lookupCapabilities(
 		err = errMissingCapabilities
 	}
 	if err != nil {
-		logger.WarnCF("provider.anthropic", "Model capabilities unavailable; thinking uses the requested effort",
+		logger.WarnCF("provider.anthropic", "Model capabilities unavailable; thinking uses the lowest effort",
 			map[string]any{"model": model, "error": err.Error()})
-		return nil
+		return nil, err
 	}
-	return &info.Capabilities
+	return &info.Capabilities, nil
 }

@@ -125,7 +125,8 @@ func TestAnthropicThinkingLevelMapsToAdaptiveThinkingWithEffort(t *testing.T) {
 		{"claude-opus-5-5", "high", `{"type":"adaptive"}`, "high"},
 		{"claude-opus-5-5", "xhigh", `{"type":"adaptive"}`, "xhigh"},
 		{"claude-opus-5-5", "max", `{"type":"adaptive"}`, "max"},
-		{"claude-opus-5-5", "adaptive", `{"type":"adaptive"}`, "high"},
+		// adaptive keeps the model's default effort.
+		{"claude-opus-5-5", "adaptive", `{"type":"adaptive"}`, ""},
 		// off: disabled where the model allows it, the lowest effort elsewhere.
 		{"claude-opus-5-5", "off", `{"type":"adaptive"}`, "low"},
 		{"claude-sonnet-4-6", "off", `{"type":"disabled"}`, ""},
@@ -193,13 +194,14 @@ func TestAnthropicCapabilityLookupFailureFallsBackToLowestEffort(t *testing.T) {
 	fake := newFakeAnthropicModels(t, nil) // every lookup fails
 	provider, _ := anthropicModelProvider(t, fake.URL, "claude-opus-5-5")
 
-	chatWithThinking(t, provider, "claude-opus-5-5", "off")
-	body := fake.lastBody(t)
-	assertJSON(t, "thinking", body["thinking"], `{"type":"adaptive"}`)
-	assertJSON(t, "output_config", body["output_config"], `{"effort":"low"}`)
-
-	chatWithThinking(t, provider, "claude-opus-5-5", "max")
-	assertJSON(t, "output_config", fake.lastBody(t)["output_config"], `{"effort":"max"}`)
+	for _, level := range []string{"off", "medium", "max"} {
+		chatWithThinking(t, provider, "claude-opus-5-5", level)
+		body := fake.lastBody(t)
+		assertJSON(t, "thinking", body["thinking"], `{"type":"adaptive"}`)
+		assertJSON(t, "output_config", body["output_config"], `{"effort":"low"}`)
+	}
+	chatWithThinking(t, provider, "claude-opus-5-5", "adaptive")
+	assertOptionalJSON(t, "output_config", fake.lastBody(t)["output_config"], "")
 
 	if got := fake.lookupCount("claude-opus-5-5"); got != 1 {
 		t.Errorf("capability lookups = %d, want 1 (a failure is not retried per answer)", got)
