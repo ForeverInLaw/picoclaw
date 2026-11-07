@@ -32,6 +32,18 @@ func routingOnlyChange(current, next *config.Config) bool {
 				}
 			}
 		}
+		// Each request builds its Key pool providers from its own configuration,
+		// so pool and key names, returns to service and budgets apply at once.
+		// Keys, secrets and enabled states stay compared: long-lived clients,
+		// such as the startup provider, hold them until a reload.
+		copyCfg.KeyPools = make([]config.KeyPool, 0, len(cfg.KeyPools))
+		for _, pool := range cfg.KeyPools {
+			keys := make([]config.KeyPoolKey, 0, len(pool.Keys))
+			for _, key := range pool.Keys {
+				keys = append(keys, config.KeyPoolKey{ID: key.ID, Enabled: key.Enabled, APIKey: key.APIKey})
+			}
+			copyCfg.KeyPools = append(copyCfg.KeyPools, config.KeyPool{ID: pool.ID, Keys: keys})
+		}
 		defaults := &copyCfg.Agents.Defaults
 		defaults.Model = ""
 		defaults.ModelName = ""

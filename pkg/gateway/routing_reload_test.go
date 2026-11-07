@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -42,6 +43,38 @@ func TestRoutingOnlyChangeRetainsTranscriberDependencies(t *testing.T) {
 				require.Equal(t, field == "chat", routingOnlyChange(cfg, &next), field)
 			}
 		})
+	}
+}
+
+// Key pools are read per request, so their metadata needs no reload; their
+// keys and secrets still do.
+func TestRoutingOnlyChangeTreatsKeyPoolMetadataAsRouting(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.KeyPools = []config.KeyPool{{ID: "orgs", Name: "Orgs", Keys: []config.KeyPoolKey{
+		{ID: "a", Label: "First", Enabled: true, APIKey: "sk-ant-a"},
+	}}}
+	edits := map[string]struct {
+		edit    func(*config.KeyPool)
+		routing bool
+	}{
+		"pool name":         {func(p *config.KeyPool) { p.Name = "Organizations" }, true},
+		"label":             {func(p *config.KeyPool) { p.Keys[0].Label = "Main" }, true},
+		"return to service": {func(p *config.KeyPool) { p.Keys[0].ReturnedAt = time.Now() }, true},
+		"budget":            {func(p *config.KeyPool) { p.Keys[0].MonthlyBudgetUSD = 200 }, true},
+		"reset day":         {func(p *config.KeyPool) { p.Keys[0].ResetDay = 15 }, true},
+		"secret":            {func(p *config.KeyPool) { p.Keys[0].APIKey = "sk-ant-new" }, false},
+		"enabled":           {func(p *config.KeyPool) { p.Keys[0].Enabled = false }, false},
+		"added key": {func(p *config.KeyPool) {
+			p.Keys = append(p.Keys, config.KeyPoolKey{ID: "b", Enabled: true, APIKey: "sk-ant-b"})
+		}, false},
+		"removed key": {func(p *config.KeyPool) { p.Keys = nil }, false},
+	}
+	for name, tc := range edits {
+		next := *cfg
+		next.KeyPools = []config.KeyPool{cfg.KeyPools[0]}
+		next.KeyPools[0].Keys = append([]config.KeyPoolKey(nil), cfg.KeyPools[0].Keys...)
+		tc.edit(&next.KeyPools[0])
+		require.Equal(t, tc.routing, routingOnlyChange(cfg, &next), name)
 	}
 }
 
