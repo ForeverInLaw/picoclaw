@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -193,5 +194,17 @@ func TestAnthropicModelWithAPIKeysLoadsAsAKeyPoolModel(t *testing.T) {
 	first := fake.keyFor(t, provider, modelID, "agent:main:telegram:direct:7")
 	if got := fake.keyFor(t, again, modelID, "agent:main:telegram:direct:7"); got != first {
 		t.Fatalf("after reloading the unsaved migration the conversation moved from %s to %s", first, got)
+	}
+}
+
+func TestKeyPoolWithoutEnabledKeysLeavesTheCandidateUnavailable(t *testing.T) {
+	cfg := keyPoolConfig(t, "http://127.0.0.1:1", "sk-ant-a")
+	cfg.KeyPools[0].Keys[0].Enabled = false
+
+	_, _, err := CreateProviderFromConfig(&cfg.ModelList[0])
+
+	var unavailable *CandidateUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("CreateProviderFromConfig() error = %v, want an unavailable candidate for the Routing chain", err)
 	}
 }
