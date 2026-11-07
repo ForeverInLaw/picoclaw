@@ -106,7 +106,10 @@ func testPoolKey(
 	started := time.Now()
 	response, err := providers.RunModelAttempt(ctx, mc.InactivityTimeout(),
 		func(attemptCtx context.Context) (*providers.LLMResponse, error) {
-			return sendModelTest(attemptCtx, provider, modelID)
+			// Models that always think, such as Opus 5.5, think at the lowest
+			// effort with room left for the reply.
+			return sendModelTest(attemptCtx, provider, modelID,
+				map[string]any{"max_tokens": 1024, "thinking_level": "off"})
 		})
 	result := keyTestResult{
 		Label:     key.Label,

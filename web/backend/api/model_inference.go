@@ -215,7 +215,7 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 				setupMessage = "This test requires an OpenAI-compatible HTTP provider."
 				return nil, errors.New(setupMessage)
 			}
-			return sendModelTest(attemptCtx, provider, modelID)
+			return sendModelTest(attemptCtx, provider, modelID, map[string]any{"max_tokens": 32})
 		},
 	)
 	if setupMessage != "" {
@@ -279,18 +279,19 @@ func modelTestTimeout(mc config.ModelConfig) time.Duration {
 	return 15 * time.Second
 }
 
-// sendModelTest sends Test model's one short request.
+// sendModelTest sends Test model's one short request with options.
 func sendModelTest(
 	ctx context.Context,
 	provider providers.LLMProvider,
 	modelID string,
+	options map[string]any,
 ) (*providers.LLMResponse, error) {
 	return provider.Chat(
 		ctx,
 		[]providers.Message{{Role: "user", Content: "Reply with OK."}},
 		nil,
 		modelID,
-		map[string]any{"max_tokens": 32},
+		options,
 	)
 }
 

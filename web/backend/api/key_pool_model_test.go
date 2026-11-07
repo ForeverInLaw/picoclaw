@@ -76,14 +76,27 @@ type keyPoolTestResult struct {
 	} `json:"keys"`
 }
 
-// fakeAnthropicMessages plays Anthropic's Messages API: the third key is out
-// of credit and every other key answers. It records each request's key, model,
+// opus55Capabilities is the Models API entry of Opus 5.5, which cannot disable thinking.
+const opus55Capabilities = `{"type":"model","id":"claude-opus-5-5","display_name":"Claude Opus 5.5",
+	"created_at":"2026-09-21T00:00:00Z","capabilities":{
+	"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},
+		"xhigh":{"supported":true},"max":{"supported":true}},
+	"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"between_tools":{"supported":false},
+		"disabled":{"supported":false},"enabled":{"supported":false}}}}}`
+
+// fakeAnthropicMessages plays Anthropic's Messages API for a model that always
+// thinks: the third key is out of credit and every other key answers. It records each request's key, model,
 // beta header and whether it asked for server-side fallbacks.
 func fakeAnthropicMessages(t *testing.T) (string, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/models/") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, opus55Capabilities)
+			return
+		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		_, fallbacks := body["fallbacks"]
@@ -97,6 +110,14 @@ func fakeAnthropicMessages(t *testing.T) (string, func() []string) {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":`+
 				`"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}`)
+			return
+		}
+		// Opus 5.5 always thinks: above the lowest effort, or without room for
+		// thinking, its thinking uses up max_tokens before any text.
+		outputConfig, _ := body["output_config"].(map[string]any)
+		if maxTokens, _ := body["max_tokens"].(float64); outputConfig["effort"] != "low" || maxTokens < 512 {
+			_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5-5",`+
+				`"content":[],"stop_reason":"max_tokens","usage":{"input_tokens":1,"output_tokens":32}}`)
 			return
 		}
 		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5-5",`+
