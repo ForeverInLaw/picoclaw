@@ -199,10 +199,8 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 		modelTestError(w, http.StatusBadRequest, "Use a key label between 1 and 200 characters.")
 		return
 	}
-	if request.APIKey = strings.TrimSpace(
-		request.APIKey,
-	); request.APIKey == "" ||
-		modelCredentialPlaceholder(request.APIKey) {
+	request.APIKey = strings.TrimSpace(request.APIKey)
+	if request.APIKey == "" || modelCredentialPlaceholder(request.APIKey) {
 		modelTestError(w, http.StatusBadRequest, "Paste the complete Anthropic API key.")
 		return
 	}
