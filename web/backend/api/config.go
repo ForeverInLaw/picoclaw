@@ -35,6 +35,12 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg.Tools.Skills.Github.Token != "" {
 		cfg.Tools.Skills.Github.Token = registryCredentialMask
 	}
+	for i := range cfg.KeyPools {
+		for j := range cfg.KeyPools[i].Keys {
+			key := &cfg.KeyPools[i].Keys[j]
+			key.APIKey = maskAPIKey(key.APIKey)
+		}
+	}
 	if err := json.NewEncoder(w).Encode(cfg); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
@@ -65,6 +71,7 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	preserveRegistryCredentials(&cfg, current, body)
+	preserveKeyPoolSecrets(&cfg, current)
 
 	if errs := validateConfig(&cfg); len(errs) > 0 {
 		w.Header().Set("Content-Type", "application/json")
@@ -190,6 +197,7 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	preserveRegistryCredentials(&newCfg, cfg, patchBody)
+	preserveKeyPoolSecrets(&newCfg, cfg)
 	if errs := validateConfig(&newCfg); len(errs) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -249,6 +257,26 @@ func preserveRegistryCredentials(next, current *config.Config, body []byte) {
 	}
 	if preserve(fields.Tools.Skills.Github.Token) {
 		next.Tools.Skills.Github.Token = current.Tools.Skills.Github.Token
+	}
+}
+
+// Public config masks Key pool secrets. A masked or omitted secret keeps the
+// stored one of the same pool and key; any other value replaces it.
+func preserveKeyPoolSecrets(next, current *config.Config) {
+	stored := map[[2]string]string{}
+	for _, pool := range current.KeyPools {
+		for _, key := range pool.Keys {
+			stored[[2]string{pool.ID, key.ID}] = key.APIKey
+		}
+	}
+	for i := range next.KeyPools {
+		pool := &next.KeyPools[i]
+		for j := range pool.Keys {
+			key := &pool.Keys[j]
+			if key.APIKey == "" || modelCredentialPlaceholder(key.APIKey) {
+				key.APIKey = stored[[2]string{pool.ID, key.ID}]
+			}
+		}
 	}
 }
 

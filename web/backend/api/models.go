@@ -42,6 +42,7 @@ type modelResponse struct {
 	Proxy        string                    `json:"proxy,omitempty"`
 	AuthMethod   string                    `json:"auth_method,omitempty"`
 	AccountID    string                    `json:"account_id,omitempty"`
+	KeyPoolID    string                    `json:"key_pool_id,omitempty"`
 	Capabilities *config.ModelCapabilities `json:"capabilities,omitempty"`
 	// Advanced fields
 	ConnectMode              string         `json:"connect_mode,omitempty"`
@@ -100,6 +101,7 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			Proxy:                    m.Proxy,
 			AuthMethod:               m.AuthMethod,
 			AccountID:                m.AccountID,
+			KeyPoolID:                m.KeyPoolID,
 			Capabilities:             m.Capabilities,
 			ConnectMode:              m.ConnectMode,
 			Workspace:                m.Workspace,

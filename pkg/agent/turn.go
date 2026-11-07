@@ -57,6 +57,9 @@ type turnState struct {
 	turnID     string
 	agentID    string
 	sessionKey string
+	// conversationIdentity is the session key of the conversation this turn
+	// serves; SubTurns inherit their parent's so they share its pool key.
+	conversationIdentity string
 
 	channel     string
 	chatID      string
@@ -125,6 +128,7 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		phase:       TurnPhaseSetup,
 		startedAt:   time.Now(),
 	}
+	ts.conversationIdentity = opts.SessionKey
 
 	// Bind session store and capture initial history length for rollback logic
 	if agent != nil && agent.Sessions != nil {

@@ -45,6 +45,8 @@ type Provider struct {
 	promptCache *promptCache
 	// serverFallback opts supporting models into Anthropic's server-side refusal fallback.
 	serverFallback bool
+	// keyLabel names the Key pool key in usage logs; empty outside pools.
+	keyLabel string
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -101,6 +103,13 @@ func (p *Provider) WithPromptCacheTTL(ttl string) *Provider {
 	if p.promptCache != nil {
 		p.promptCache.ttl = anthropic.CacheControlEphemeralTTL(ttl)
 	}
+	return p
+}
+
+// WithKeyLabel names the Key pool key this provider authenticates with in its
+// usage logs. The label is never the secret.
+func (p *Provider) WithKeyLabel(label string) *Provider {
+	p.keyLabel = label
 	return p
 }
 
@@ -170,7 +179,7 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return completeResponse(params.Model, resp), nil
+	return p.completeResponse(params.Model, resp), nil
 }
 
 func (p *Provider) ChatStream(
@@ -253,7 +262,7 @@ func (p *Provider) chatStreaming(
 	if !completed {
 		return nil, fmt.Errorf("claude stream ended before message_stop: %w", io.ErrUnexpectedEOF)
 	}
-	return completeResponse(params.Model, &msg), nil
+	return p.completeResponse(params.Model, &msg), nil
 }
 
 // mergeDeltaUsage applies the cumulative counts of a message_delta event. The
@@ -274,7 +283,7 @@ func mergeDeltaUsage(usage *anthropic.Usage, delta anthropic.MessageDeltaUsage) 
 // completeResponse logs a finished message's usage against the model that
 // served it, naming the requested model too when they differ (for example after
 // a server-side fallback), and maps the message to an LLMResponse.
-func completeResponse(requested anthropic.Model, msg *anthropic.Message) *LLMResponse {
+func (p *Provider) completeResponse(requested anthropic.Model, msg *anthropic.Message) *LLMResponse {
 	served := servedModel(msg)
 	fields := map[string]any{
 		"model":                       string(served),
@@ -282,6 +291,9 @@ func completeResponse(requested anthropic.Model, msg *anthropic.Message) *LLMRes
 		"output_tokens":               msg.Usage.OutputTokens,
 		"cache_creation_input_tokens": msg.Usage.CacheCreationInputTokens,
 		"cache_read_input_tokens":     msg.Usage.CacheReadInputTokens,
+	}
+	if p.keyLabel != "" {
+		fields["key"] = p.keyLabel
 	}
 	resp := parseResponse(msg)
 	if served != requested {

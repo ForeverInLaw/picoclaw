@@ -159,6 +159,33 @@ On Claude Fable 5.1, Fable 5, Opus 5.5, Opus 5 and Sonnet 5.5, requests also opt
 
 > Run `picoclaw auth login --provider anthropic` to paste your API token.
 
+**Anthropic Key pools (several organizations)**
+
+A Key pool groups API keys from separate Anthropic organizations, each with its own credit and prompt cache. Define it once under `key_pools` and reference it from any number of `anthropic/` models with `key_pool_id` instead of `api_key`:
+
+```json
+{
+  "key_pools": [
+    {
+      "id": "anthropic-orgs",
+      "name": "Anthropic organizations",
+      "keys": [
+        { "id": "org-a", "label": "Org A", "enabled": true, "api_key": "sk-ant-org-a" },
+        { "id": "org-b", "label": "Org B", "enabled": true, "api_key": "sk-ant-org-b" }
+      ]
+    }
+  ],
+  "model_list": [
+    { "model_name": "opus", "model": "anthropic/claude-opus-5-5", "key_pool_id": "anthropic-orgs" },
+    { "model_name": "haiku", "model": "anthropic/claude-haiku-4-5", "key_pool_id": "anthropic-orgs" }
+  ]
+}
+```
+
+Each conversation stays on one enabled key, chosen by hashing its session key, so its prompt cache keeps being read; new conversations spread across the keys. Spawned tasks, subturns and summaries use the key of the conversation they belong to. The binding is not stored: it survives restarts, and disabling a key moves only the conversations that were on it. Keys of a pool are not reserves of the Routing chain.
+
+Pool secrets are protected like model keys: `enc://` and `file://` references work, plaintext keys are sealed on save when a passphrase is set, and the dashboard shows them masked. When a `.security.yml` sidecar exists, it holds the pool secrets under `key_pools` and `config.json` keeps only the pools' ids, labels and enabled flags. An existing `anthropic/` entry with several `api_keys` is loaded as a pool referenced by that entry, and the migration is saved on the next configuration write. `api_keys` on other providers keep their ordered failover.
+
 **Anthropic Messages API (native format)**
 
 For third-party proxies and custom endpoints that implement Anthropic's native message format:

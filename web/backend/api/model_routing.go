@@ -161,6 +161,9 @@ func saveValidatedModels(path string, cfg *config.Config) error {
 	if err := cfg.ValidateRoutingReferences(); err != nil {
 		return err
 	}
+	if err := cfg.ResolveKeyPools(); err != nil {
+		return err
+	}
 	for _, m := range cfg.ModelList {
 		if m.AccountID != "" {
 			if _, err := auth.GetAccount(m.AccountID); err != nil {

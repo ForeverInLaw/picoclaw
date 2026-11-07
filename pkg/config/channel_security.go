@@ -61,6 +61,14 @@ func (c *Config) applySecurity(sec *SecurityConfig) error {
 			m.APIKeys = append([]string(nil), entry.APIKeys...)
 		}
 	}
+	for i := range c.KeyPools {
+		secrets := sec.KeyPools[c.KeyPools[i].ID].APIKeys
+		for j := range c.KeyPools[i].Keys {
+			if secret := secrets[c.KeyPools[i].Keys[j].ID]; secret != "" {
+				c.KeyPools[i].Keys[j].APIKey = secret
+			}
+		}
+	}
 	// Web and Skill credentials use the established separate security sections.
 	if sec.Web.Parallel != nil {
 		c.Tools.Web.Parallel.APIKey = ""
@@ -230,16 +238,17 @@ func isSecretField(name string) bool {
 
 // An existing security sidecar stays authoritative on load. Update its values
 // on an explicit save so it cannot restore an old credential over a user's edit.
-func saveExistingSecurityConfig(path string, cfg *Config) error {
+// It reports whether a sidecar exists and now holds the Key pool secrets.
+func saveExistingSecurityConfig(path string, cfg *Config) (bool, error) {
 	secPath := securityPath(path)
 	if _, err := os.Stat(secPath); os.IsNotExist(err) {
-		return nil
+		return false, nil
 	} else if err != nil {
-		return err
+		return false, err
 	}
 	sec, err := loadSecurityConfig(secPath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	sec.ModelList = map[string]ModelSecurityEntry{}
 	counts := map[string]int{}
@@ -252,6 +261,18 @@ func saveExistingSecurityConfig(path string, cfg *Config) error {
 		}
 		sec.ModelList[name] = ModelSecurityEntry{APIKeys: MergeAPIKeys(model.APIKey, model.APIKeys)}
 	}
+	sec.KeyPools = map[string]KeyPoolSecurityEntry{}
+	for _, pool := range cfg.KeyPools {
+		secrets := map[string]string{}
+		for _, key := range pool.Keys {
+			if key.APIKey != "" {
+				secrets[key.ID] = key.APIKey
+			}
+		}
+		if len(secrets) > 0 {
+			sec.KeyPools[pool.ID] = KeyPoolSecurityEntry{APIKeys: secrets}
+		}
+	}
 	sec.ChannelList = map[string]ChannelSecurityEntry{}
 	for name, ch := range cfg.EffectiveChannelList() {
 		if len(ch.Settings) == 0 {
@@ -259,7 +280,7 @@ func saveExistingSecurityConfig(path string, cfg *Config) error {
 		}
 		var raw map[string]any
 		if decodeErr := json.Unmarshal(ch.Settings, &raw); decodeErr != nil {
-			return decodeErr
+			return false, decodeErr
 		}
 		secrets := map[string]any{}
 		for key, value := range raw {
@@ -298,9 +319,9 @@ func saveExistingSecurityConfig(path string, cfg *Config) error {
 	}
 	data, err := yaml.Marshal(sec)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return fileutil.WriteFileAtomic(secPath, data, 0o600)
+	return true, fileutil.WriteFileAtomic(secPath, data, 0o600)
 }
 
 func (c *Config) cacheRuntimeSecrets() {
