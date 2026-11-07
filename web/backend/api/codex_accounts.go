@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -77,27 +76,22 @@ func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 		Label   *string `json:"label"`
 		Enabled *bool   `json:"enabled"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(
-		&patch,
-	); err != nil || decoder.Decode(&struct{}{}) != io.EOF ||
-		(patch.Label == nil && patch.Enabled == nil) {
-		modelTestError(w, http.StatusBadRequest, "Provide a label or enabled state.")
+	if !decodeJSONObject(r, &patch) || (patch.Label == nil && patch.Enabled == nil) {
+		writeAPIError(w, http.StatusBadRequest, "Provide a label or enabled state.")
 		return
 	}
 	if patch.Label != nil {
 		*patch.Label = strings.TrimSpace(*patch.Label)
 		if *patch.Label == "" || len(*patch.Label) > 200 {
-			modelTestError(w, 400, "Use an account name between 1 and 200 characters.")
+			writeAPIError(w, 400, "Use an account name between 1 and 200 characters.")
 			return
 		}
 	}
 	if err := auth.PatchAccount(r.PathValue("id"), patch.Label, patch.Enabled); err != nil {
 		if errors.Is(err, auth.ErrAccountNotFound) {
-			modelTestError(w, 404, "Account connection no longer exists.")
+			writeAPIError(w, 404, "Account connection no longer exists.")
 		} else {
-			modelTestError(w, 500, "Could not update account connection.")
+			writeAPIError(w, 500, "Could not update account connection.")
 		}
 		return
 	}
@@ -109,13 +103,9 @@ func (h *Handler) handleTestAccount(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Model string `json:"model"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(
-		&request,
-	); err != nil || decoder.Decode(&struct{}{}) != io.EOF || strings.TrimSpace(request.Model) == "" || len(request.Model) > 200 ||
+	if !decodeJSONObject(r, &request) || strings.TrimSpace(request.Model) == "" || len(request.Model) > 200 ||
 		strings.ContainsAny(request.Model, "/ \t\n\r") {
-		modelTestError(w, 400, "Enter the exact OpenAI model identifier.")
+		writeAPIError(w, 400, "Enter the exact OpenAI model identifier.")
 		return
 	}
 	h.runModelInference(
@@ -154,9 +144,9 @@ func (h *Handler) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, auth.ErrAccountNotFound) {
-			modelTestError(w, 404, "Account connection no longer exists.")
+			writeAPIError(w, 404, "Account connection no longer exists.")
 		} else {
-			modelTestError(w, 500, "Could not delete account connection.")
+			writeAPIError(w, 500, "Could not delete account connection.")
 		}
 		return
 	}

@@ -230,7 +230,7 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	saved.ModelName = mc.ModelName // Renaming the selected saved entry keeps its credential destination.
 	if err = retainModelCredential(&mc, saved); err != nil {
-		modelTestError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if mc.AccountID == "" && mc.AuthMethod == cfg.ModelList[idx].AuthMethod && mc.Model == cfg.ModelList[idx].Model {

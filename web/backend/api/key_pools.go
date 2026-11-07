@@ -3,10 +3,8 @@ package api
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -156,7 +154,7 @@ func reportedKeyStates(snapshot modelruntime.Snapshot) map[string]map[string]pro
 func (h *Handler) handleListKeyPools(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
-		modelTestError(w, http.StatusInternalServerError, "Could not load configuration.")
+		writeAPIError(w, http.StatusInternalServerError, "Could not load configuration.")
 		return
 	}
 	snapshot, runtime := h.gatewayRuntime()
@@ -178,7 +176,7 @@ func (h *Handler) handleCreateKeyPool(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if !decodeJSONObject(r, &request) || !validDisplayName(&request.Name) {
-		modelTestError(w, http.StatusBadRequest, "Use a pool name between 1 and 200 characters.")
+		writeAPIError(w, http.StatusBadRequest, "Use a pool name between 1 and 200 characters.")
 		return
 	}
 	pool := config.KeyPool{ID: uuid.NewString(), Name: request.Name, Keys: []config.KeyPoolKey{}}
@@ -193,7 +191,7 @@ func (h *Handler) handlePatchKeyPool(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if !decodeJSONObject(r, &request) || !validDisplayName(&request.Name) {
-		modelTestError(w, http.StatusBadRequest, "Use a pool name between 1 and 200 characters.")
+		writeAPIError(w, http.StatusBadRequest, "Use a pool name between 1 and 200 characters.")
 		return
 	}
 	h.respondKeyPoolEdit(w, r, http.StatusOK, func(cfg *config.Config) (any, error) {
@@ -232,21 +230,21 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 		APIKey string `json:"api_key"`
 	}
 	if !decodeJSONObject(r, &request) || !validDisplayName(&request.Label) {
-		modelTestError(w, http.StatusBadRequest, "Use a key label between 1 and 200 characters.")
+		writeAPIError(w, http.StatusBadRequest, "Use a key label between 1 and 200 characters.")
 		return
 	}
 	request.APIKey = strings.TrimSpace(request.APIKey)
 	if request.APIKey == "" || modelCredentialPlaceholder(request.APIKey) {
-		modelTestError(w, http.StatusBadRequest, "Paste the complete Anthropic API key.")
+		writeAPIError(w, http.StatusBadRequest, "Paste the complete Anthropic API key.")
 		return
 	}
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
-		modelTestError(w, http.StatusInternalServerError, "Could not load configuration.")
+		writeAPIError(w, http.StatusInternalServerError, "Could not load configuration.")
 		return
 	}
 	if status, message := keyPoolEndpoint(cfg, r.PathValue("pool")).checkKey(r.Context(), request.APIKey); status != 0 {
-		modelTestError(w, status, message)
+		writeAPIError(w, status, message)
 		return
 	}
 	key := config.KeyPoolKey{ID: uuid.NewString(), Label: request.Label, Enabled: true, APIKey: request.APIKey}
@@ -325,17 +323,17 @@ func checkNewKeyPoolSecrets(ctx context.Context, next, current *config.Config) (
 func (h *Handler) handleListPoolModels(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
-		modelTestError(w, http.StatusInternalServerError, "Could not load configuration.")
+		writeAPIError(w, http.StatusInternalServerError, "Could not load configuration.")
 		return
 	}
 	pool, err := findKeyPool(cfg, r.PathValue("pool"))
 	if err != nil {
-		modelTestError(w, errPoolNotFound.status, errPoolNotFound.message)
+		writeAPIError(w, errPoolNotFound.status, errPoolNotFound.message)
 		return
 	}
 	keys := pool.EnabledKeys()
 	if len(keys) == 0 {
-		modelTestError(w, http.StatusConflict, "Enable a key in this pool to list its models.")
+		writeAPIError(w, http.StatusConflict, "Enable a key in this pool to list its models.")
 		return
 	}
 	endpoint := keyPoolEndpoint(cfg, pool.ID)
@@ -346,7 +344,7 @@ func (h *Handler) handleListPoolModels(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	modelTestError(w, http.StatusBadGateway, "Anthropic did not list models for any enabled key of this pool.")
+	writeAPIError(w, http.StatusBadGateway, "Anthropic did not list models for any enabled key of this pool.")
 }
 
 func (h *Handler) handlePatchPoolKey(w http.ResponseWriter, r *http.Request) {
@@ -358,11 +356,11 @@ func (h *Handler) handlePatchPoolKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if !decodeJSONObject(r, &patch) ||
 		(patch.Label == nil && patch.Enabled == nil && patch.MonthlyBudgetUSD == nil && patch.ResetDay == nil) {
-		modelTestError(w, http.StatusBadRequest, "Provide a label, enabled state, monthly budget or reset day.")
+		writeAPIError(w, http.StatusBadRequest, "Provide a label, enabled state, monthly budget or reset day.")
 		return
 	}
 	if patch.Label != nil && !validDisplayName(patch.Label) {
-		modelTestError(w, http.StatusBadRequest, "Use a key label between 1 and 200 characters.")
+		writeAPIError(w, http.StatusBadRequest, "Use a key label between 1 and 200 characters.")
 		return
 	}
 	requested := config.KeyPoolKey{ResetDay: 1}
@@ -373,7 +371,7 @@ func (h *Handler) handlePatchPoolKey(w http.ResponseWriter, r *http.Request) {
 		requested.ResetDay = *patch.ResetDay
 	}
 	if !requested.ValidBudget() {
-		modelTestError(w, http.StatusBadRequest, "Use "+config.KeyBudgetRange+".")
+		writeAPIError(w, http.StatusBadRequest, "Use "+config.KeyBudgetRange+".")
 		return
 	}
 	h.editPoolKey(w, r, func(key *config.KeyPoolKey) {
@@ -483,9 +481,9 @@ func (h *Handler) respondKeyPoolEdit(
 			map[string]any{"status": "in_use", "message": refused.message, "models": refused.models},
 		)
 	case errors.As(err, &refused):
-		modelTestError(w, refused.status, refused.message)
+		writeAPIError(w, refused.status, refused.message)
 	case err != nil:
-		modelTestError(w, http.StatusInternalServerError, "Could not save Key pools.")
+		writeAPIError(w, http.StatusInternalServerError, "Could not save Key pools.")
 	default:
 		writeJSON(w, status, result)
 	}
@@ -496,17 +494,4 @@ func (h *Handler) respondKeyPoolEdit(
 func validDisplayName(name *string) bool {
 	*name = strings.TrimSpace(*name)
 	return *name != "" && len([]rune(*name)) <= 200
-}
-
-// decodeJSONObject decodes exactly one JSON object with known fields only.
-func decodeJSONObject(r *http.Request, into any) bool {
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	return decoder.Decode(into) == nil && decoder.Decode(&struct{}{}) == io.EOF
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
 }

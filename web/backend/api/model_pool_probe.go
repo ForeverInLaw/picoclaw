@@ -29,22 +29,22 @@ type keyTestResult struct {
 func (h *Handler) runKeyPoolModelTest(w http.ResponseWriter, r *http.Request, mc config.ModelConfig) {
 	_, modelID := providers.ExtractProtocol(mc.Model)
 	if !mc.IsAnthropicAPIKeyModel() {
-		modelTestError(w, http.StatusBadRequest, "Key pools serve anthropic/ models with API keys only.")
+		writeAPIError(w, http.StatusBadRequest, "Key pools serve anthropic/ models with API keys only.")
 		return
 	}
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
-		modelTestError(w, http.StatusInternalServerError, "Could not load configuration.")
+		writeAPIError(w, http.StatusInternalServerError, "Could not load configuration.")
 		return
 	}
 	pool, err := findKeyPool(cfg, mc.KeyPoolID)
 	if err != nil {
-		modelTestError(w, errPoolNotFound.status, errPoolNotFound.message)
+		writeAPIError(w, errPoolNotFound.status, errPoolNotFound.message)
 		return
 	}
 	keys := h.testableKeys(*pool, modelID)
 	if len(keys) == 0 {
-		modelTestError(w, http.StatusConflict,
+		writeAPIError(w, http.StatusConflict,
 			"No key of this pool is available to test. Enable a key or return one to service on the Credentials page.")
 		return
 	}
