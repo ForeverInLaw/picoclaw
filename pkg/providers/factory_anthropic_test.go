@@ -285,3 +285,28 @@ func TestAnthropicAPIKeyModelSendsUserImages(t *testing.T) {
 		{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}},
 		{"type":"image","source":{"type":"url","url":"https://example.com/cat.jpg"}}]}]`)
 }
+
+func TestAnthropicAPIKeyModelIgnoresEnvironmentCredentials(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "token-from-env")
+	fake := newFakeAnthropic(t, func(w http.ResponseWriter) {
+		writeJSON(w, `{"id":"msg_5","type":"message","role":"assistant","model":"claude-sonnet-4-6",
+			"stop_reason":"end_turn","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	})
+	provider, modelID, err := CreateProviderFromConfig(anthropicAPIKeyModel(fake.URL))
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig() error = %v", err)
+	}
+
+	if _, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hi"}}, nil, modelID, nil); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	req := fake.only(t)
+	if got := req.header.Get("X-Api-Key"); got != "sk-ant-test" {
+		t.Errorf("x-api-key = %q, want the configured key", got)
+	}
+	if got := req.header.Get("Authorization"); got != "" {
+		t.Errorf("Authorization = %q, want none", got)
+	}
+}

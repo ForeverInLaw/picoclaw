@@ -73,6 +73,8 @@ func NewProviderWithAPIKey(apiKey, apiBase, proxy string, requestTimeout time.Du
 	httpClient := &http.Client{Transport: common.NewHTTPClient(proxy).Transport}
 	client := anthropic.NewClient(
 		option.WithAPIKey(apiKey),
+		// NewClient also reads ANTHROPIC_AUTH_TOKEN; the configured key alone authenticates.
+		option.WithHeaderDel("Authorization"),
 		option.WithMaxRetries(0),
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(httpClient),
