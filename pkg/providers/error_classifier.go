@@ -64,14 +64,17 @@ var (
 		substr("context deadline exceeded"),
 	}
 
-	billingPatterns = []errorPattern{
-		rxp(`\b402\b`),
+	// billingPhrasePatterns name a billing problem in words, so they also identify
+	// billing errors that arrive with an unrelated status such as Anthropic's 400.
+	billingPhrasePatterns = []errorPattern{
 		substr("payment required"),
 		substr("insufficient credits"),
 		substr("credit balance"),
 		substr("plans & billing"),
 		substr("insufficient balance"),
 	}
+
+	billingPatterns = append([]errorPattern{rxp(`\b402\b`)}, billingPhrasePatterns...)
 
 	authPatterns = []errorPattern{
 		rxp(`invalid[_ ]?api[_ ]?key`),
@@ -192,7 +195,7 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		return &FailoverError{Reason: reason, Provider: provider, Model: model, Wrapped: err}
 	}
 	if status > 0 {
-		if reason := classifyByStatus(status); reason != "" {
+		if reason := classifyByStatusAndMessage(status, msg); reason != "" {
 			return &FailoverError{
 				Reason:     reason,
 				Provider:   provider,
@@ -216,7 +219,7 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 
 	// Try HTTP status code extraction first.
 	if status := extractHTTPStatus(msg); status > 0 {
-		if reason := classifyByStatus(status); reason != "" {
+		if reason := classifyByStatusAndMessage(status, msg); reason != "" {
 			return &FailoverError{
 				Reason:   reason,
 				Provider: provider,
@@ -238,6 +241,16 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	}
 
 	return nil
+}
+
+// classifyByStatusAndMessage maps a status to a FailoverReason, except that a
+// 400 naming a billing problem is billing: Anthropic reports exhausted credit
+// ("Your credit balance is too low") as a 400, which must fail over, not abort.
+func classifyByStatusAndMessage(status int, msg string) FailoverReason {
+	if status == 400 && matchesAny(msg, billingPhrasePatterns) {
+		return FailoverBilling
+	}
+	return classifyByStatus(status)
 }
 
 // classifyByStatus maps HTTP status codes to FailoverReason.
