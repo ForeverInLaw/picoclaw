@@ -2242,6 +2242,12 @@ turnLoop:
 				return al.abortTurn(ts)
 			}
 		}
+		// Hooks may rebuild Options; the conversation identity binds the turn to
+		// its Key pool key, so it is not theirs to change.
+		if llmOpts == nil {
+			llmOpts = map[string]any{}
+		}
+		llmOpts[providers.ConversationIdentityOption] = ts.conversationIdentity
 
 		al.emitEvent(
 			EventKindLLMRequest,

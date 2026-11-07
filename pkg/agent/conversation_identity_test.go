@@ -99,3 +99,30 @@ func TestConversationSummaryCarriesItsConversationsIdentity(t *testing.T) {
 
 	assertIdentities(t, recorder.recorded(), conversation)
 }
+
+// optionsReplacingHook answers every model request with a fresh Options map,
+// as a process hook that rebuilds the request from JSON would.
+type optionsReplacingHook struct{}
+
+func (optionsReplacingHook) BeforeLLM(_ context.Context, req *LLMHookRequest) (*LLMHookRequest, HookDecision, error) {
+	req = req.Clone()
+	req.Options = map[string]any{"max_tokens": 1}
+	return req, HookDecision{Action: HookActionModify}, nil
+}
+
+func (optionsReplacingHook) AfterLLM(_ context.Context, resp *LLMHookResponse) (*LLMHookResponse, HookDecision, error) {
+	return resp, HookDecision{Action: HookActionContinue}, nil
+}
+
+func TestBeforeLLMHookCannotDropTheConversationIdentity(t *testing.T) {
+	al, recorder := newIdentityLoop(t)
+	if err := al.MountHook(NamedHook("options-replacer", optionsReplacingHook{})); err != nil {
+		t.Fatalf("MountHook() error = %v", err)
+	}
+	const conversation = "agent:main:telegram:direct:7"
+	if _, err := al.ProcessDirectWithChannel(t.Context(), "hello", conversation, "telegram", "7"); err != nil {
+		t.Fatalf("ProcessDirectWithChannel() error = %v", err)
+	}
+
+	assertIdentities(t, recorder.recorded(), conversation)
+}
