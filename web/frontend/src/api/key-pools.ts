@@ -55,7 +55,9 @@ export interface KeyPoolListing {
   pools: KeyPool[]
 }
 
-// States a key leaves only through Return to service or a successful recheck.
+// States Return to service clears at once. A rate limit also ends when its
+// time passes; exhausted and rejected keys otherwise wait for a successful
+// recheck.
 export const keyStatesOutOfService: ReadonlySet<KeyPoolKeyState> = new Set([
   "rate_limited",
   "exhausted",
