@@ -1,0 +1,5 @@
+# Instance key pools with conversation affinity
+
+Anthropic API keys are grouped into Key pools owned by the Picoclaw instance and referenced by configured models, because each key usually belongs to a separate organization whose monthly credit, availability and prompt cache are shared by every model using that key. Prompt caches are isolated per organization workspace, so spreading one conversation's requests across keys would pay a cache write on every switch; a conversation is instead bound to one available key by rendezvous hashing of its session key, which needs no stored assignment, survives restarts and moves only the conversations of a key that becomes unavailable. Round-robin per request and the existing ordered `api_keys` failover were rejected: the first destroys cache reuse across organizations, the second never spreads load beyond the first key.
+
+API-key `anthropic/` models are served through the native Messages API rather than the OpenAI-compatible `/chat/completions` endpoint, because only the native API accepts `cache_control` and reports cache usage. The setup-token login path and `api_keys` expansion for other providers are unchanged.
