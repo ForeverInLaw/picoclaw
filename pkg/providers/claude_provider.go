@@ -89,8 +89,9 @@ func (p *ClaudeProvider) ChatStream(
 	})
 }
 
-// SupportsThinking implements ThinkingCapable, so the agent sends thinking_level.
-func (p *ClaudeProvider) SupportsThinking() bool { return p.delegate.SupportsThinking() }
+// SupportsThinking implements ThinkingCapable, so the agent sends thinking_level;
+// every Anthropic delegate, single or pool key, maps it.
+func (p *ClaudeProvider) SupportsThinking() bool { return true }
 
 func (p *ClaudeProvider) GetDefaultModel() string {
 	if p.pool != nil {
