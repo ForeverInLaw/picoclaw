@@ -1376,13 +1376,7 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.EnsureModelIDs()
 	cfg.migrateAnthropicAPIKeysToPools()
 
-	if err := resolveAPIKeys(cfg.ModelList, filepath.Dir(path)); err != nil {
-		return nil, err
-	}
-	if err := resolveKeyPoolKeys(cfg.KeyPools, filepath.Dir(path)); err != nil {
-		return nil, err
-	}
-	if err := cfg.ResolveKeyPools(); err != nil {
+	if err := cfg.resolveCredentials(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 
@@ -1477,6 +1471,18 @@ func sealPlaintext(secrets []*string, passphrase string) (bool, error) {
 		changed = true
 	}
 	return changed, nil
+}
+
+// resolveCredentials dereferences model and Key pool secrets, then attaches
+// each referenced Key pool to its models.
+func (c *Config) resolveCredentials(configDir string) error {
+	if err := resolveAPIKeys(c.ModelList, configDir); err != nil {
+		return err
+	}
+	if err := resolveKeyPoolKeys(c.KeyPools, configDir); err != nil {
+		return err
+	}
+	return c.ResolveKeyPools()
 }
 
 // resolveKeyPoolKeys decrypts or dereferences each Key pool secret in place,
