@@ -66,6 +66,14 @@ func (p *KeyPool) EnabledKeys() []KeyPoolKey {
 	return slices.DeleteFunc(slices.Clone(p.Keys), func(k KeyPoolKey) bool { return !k.Enabled })
 }
 
+// IsAnthropicAPIKeyModel reports whether the model is an anthropic/ model that
+// authenticates with API keys rather than the setup-token login, the only kind
+// a Key pool can serve.
+func (c *ModelConfig) IsAnthropicAPIKeyModel() bool {
+	protocol, _, _ := strings.Cut(strings.TrimSpace(c.Model), "/")
+	return protocol == "anthropic" && c.AuthMethod != "oauth" && c.AuthMethod != "token"
+}
+
 // KeyPool returns the Key pool this model references as Config.ResolveKeyPools
 // last attached it; nil for models with their own credentials. It is a copy,
 // so later edits to Config.KeyPools never reach it until the next resolve.
@@ -121,8 +129,7 @@ func (c *Config) ResolveKeyPools() error {
 		if pool == nil {
 			return fmt.Errorf("model_list[%d] (%s) references unknown key pool %q", i, m.ModelName, m.KeyPoolID)
 		}
-		protocol, _, _ := strings.Cut(m.Model, "/")
-		if protocol != "anthropic" || m.AuthMethod == "oauth" || m.AuthMethod == "token" {
+		if !m.IsAnthropicAPIKeyModel() {
 			return fmt.Errorf("model_list[%d] (%s): key pools serve anthropic/ API-key models only", i, m.ModelName)
 		}
 		if m.APIKey != "" || len(m.APIKeys) > 0 {
@@ -142,10 +149,8 @@ func (c *Config) migrateAnthropicAPIKeysToPools() {
 	pools := map[string]string{} // key list -> pool ID
 	for i := range c.ModelList {
 		m := &c.ModelList[i]
-		protocol, _, _ := strings.Cut(m.Model, "/")
 		keys := MergeAPIKeys(m.APIKey, m.APIKeys)
-		if protocol != "anthropic" || m.AuthMethod == "oauth" || m.AuthMethod == "token" ||
-			m.KeyPoolID != "" || len(keys) < 2 {
+		if !m.IsAnthropicAPIKeyModel() || m.KeyPoolID != "" || len(keys) < 2 {
 			continue
 		}
 		signature := strings.Join(keys, "\x00")

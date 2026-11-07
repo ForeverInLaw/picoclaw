@@ -311,7 +311,7 @@ func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfi
 // a Key pool or a single API key. API keys use the native Messages API, which
 // accepts cache_control (ADR 0004).
 func createAnthropicProvider(ctx context.Context, cfg *config.ModelConfig) (LLMProvider, error) {
-	if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
+	if !cfg.IsAnthropicAPIKeyModel() {
 		return createClaudeAuthProvider(ctx)
 	}
 	if pool := cfg.KeyPool(); pool != nil {

@@ -27,8 +27,8 @@ type keyTestResult struct {
 // server-side refusal fallback can answer for it. The overall status is
 // "success" only when every tested key replied.
 func (h *Handler) runKeyPoolModelTest(w http.ResponseWriter, r *http.Request, mc config.ModelConfig) {
-	protocol, modelID := providers.ExtractProtocol(mc.Model)
-	if protocol != "anthropic" || mc.AuthMethod == "oauth" || mc.AuthMethod == "token" {
+	_, modelID := providers.ExtractProtocol(mc.Model)
+	if !mc.IsAnthropicAPIKeyModel() {
 		modelTestError(w, http.StatusBadRequest, "Key pools serve anthropic/ models with API keys only.")
 		return
 	}
