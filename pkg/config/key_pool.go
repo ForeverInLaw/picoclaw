@@ -24,12 +24,24 @@ type KeyPool struct {
 // ReturnedAt is when an administrator last returned the key to service; the
 // gateway clears the key's exhausted, rejected or rate-limited state once per
 // new value, which carries the request across processes.
+// MonthlyBudgetUSD (0 for none) and ResetDay (1-31, 0 meaning the 1st) only
+// describe the key's credit for the dashboard; they never limit traffic.
 type KeyPoolKey struct {
-	ID         string    `json:"id"`
-	Label      string    `json:"label"`
-	Enabled    bool      `json:"enabled"`
-	APIKey     string    `json:"api_key,omitempty"`
-	ReturnedAt time.Time `json:"returned_at,omitzero"`
+	ID               string    `json:"id"`
+	Label            string    `json:"label"`
+	Enabled          bool      `json:"enabled"`
+	APIKey           string    `json:"api_key,omitempty"`
+	ReturnedAt       time.Time `json:"returned_at,omitzero"`
+	MonthlyBudgetUSD float64   `json:"monthly_budget_usd,omitempty"`
+	ResetDay         int       `json:"reset_day,omitempty"`
+}
+
+// MaxKeyBudgetUSD bounds a key's monthly budget.
+const MaxKeyBudgetUSD = 1_000_000
+
+// ValidBudget reports whether the key's monthly budget and reset day are in range.
+func (k KeyPoolKey) ValidBudget() bool {
+	return k.MonthlyBudgetUSD >= 0 && k.MonthlyBudgetUSD <= MaxKeyBudgetUSD && k.ResetDay >= 0 && k.ResetDay <= 31
 }
 
 // keyPoolsWithoutSecrets copies pools with only their metadata, for a
@@ -81,6 +93,10 @@ func (c *Config) ResolveKeyPools() error {
 		for j, key := range pool.Keys {
 			if key.ID == "" || keyIDs[key.ID] {
 				return fmt.Errorf("key pool %q: keys[%d] needs a unique id", pool.ID, j)
+			}
+			if !key.ValidBudget() {
+				return fmt.Errorf("key pool %q: keys[%d] needs a monthly budget of 0 to %d and a reset day of 1 to 31",
+					pool.ID, j, MaxKeyBudgetUSD)
 			}
 			keyIDs[key.ID] = true
 		}

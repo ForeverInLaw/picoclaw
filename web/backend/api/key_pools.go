@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/keyspend"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/modelruntime"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	anthropicprovider "github.com/sipeed/picoclaw/pkg/providers/anthropic"
@@ -48,8 +50,8 @@ type keyPoolView struct {
 	Keys   []keyPoolKeyView `json:"keys"`
 }
 
-// keyPoolKeyView is one key with its secret masked and its availability as
-// the running gateway reports it.
+// keyPoolKeyView is one key with its secret masked, its availability as the
+// running gateway reports it and its spend in the current budget period.
 type keyPoolKeyView struct {
 	ID                string                     `json:"id"`
 	Label             string                     `json:"label"`
@@ -58,10 +60,31 @@ type keyPoolKeyView struct {
 	State             providers.KeyState         `json:"state"`
 	Until             time.Time                  `json:"until,omitzero"`
 	RateLimitedModels []providers.ModelRateLimit `json:"rate_limited_models,omitempty"`
+	MonthlyBudgetUSD  float64                    `json:"monthly_budget_usd,omitempty"`
+	ResetDay          int                        `json:"reset_day"`
+	Spend             keySpendView               `json:"spend"`
 }
 
-func newKeyPoolKeyView(key config.KeyPoolKey, reported *providers.KeyAvailability) keyPoolKeyView {
-	view := keyPoolKeyView{ID: key.ID, Label: key.Label, Enabled: key.Enabled, APIKey: maskAPIKey(key.APIKey)}
+// keySpendView is a key's usage since the start of its budget period.
+type keySpendView struct {
+	Since time.Time `json:"since"`
+	keyspend.Totals
+	CacheHitRate float64 `json:"cache_hit_rate"`
+}
+
+func newKeyPoolKeyView(
+	poolID string,
+	key config.KeyPoolKey,
+	reported *providers.KeyAvailability,
+	spent keyspend.Ledger,
+) keyPoolKeyView {
+	since := keyspend.PeriodStart(key.ResetDay, time.Now())
+	totals := spent.Since(poolID, key.ID, since)
+	view := keyPoolKeyView{
+		ID: key.ID, Label: key.Label, Enabled: key.Enabled, APIKey: maskAPIKey(key.APIKey),
+		MonthlyBudgetUSD: key.MonthlyBudgetUSD, ResetDay: max(key.ResetDay, 1),
+		Spend: keySpendView{Since: since, Totals: totals, CacheHitRate: totals.CacheHitRate()},
+	}
 	switch {
 	case !key.Enabled:
 		view.State = providers.KeyDisabled
@@ -76,13 +99,14 @@ func newKeyPoolKeyView(key config.KeyPoolKey, reported *providers.KeyAvailabilit
 	return view
 }
 
-// newKeyPoolView shows pool with the key states a running gateway reported;
-// a key it has not reported yet has had no trouble.
+// newKeyPoolView shows pool with the key states a running gateway reported,
+// where a key it has not reported yet has had no trouble, and the keys' spend.
 func newKeyPoolView(
 	cfg *config.Config,
 	pool config.KeyPool,
 	reported map[string]providers.KeyAvailability,
 	running bool,
+	spent keyspend.Ledger,
 ) keyPoolView {
 	view := keyPoolView{ID: pool.ID, Name: pool.Name, Models: keyPoolModels(cfg, pool.ID), Keys: []keyPoolKeyView{}}
 	for _, key := range pool.Keys {
@@ -94,7 +118,7 @@ func newKeyPoolView(
 			}
 			state = &found
 		}
-		view.Keys = append(view.Keys, newKeyPoolKeyView(key, state))
+		view.Keys = append(view.Keys, newKeyPoolKeyView(pool.ID, key, state, spent))
 	}
 	return view
 }
@@ -130,9 +154,13 @@ func (h *Handler) handleListKeyPools(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot, runtime := h.gatewayRuntime()
 	reported := reportedKeyStates(snapshot)
+	spent, err := keyspend.Read()
+	if err != nil {
+		logger.WarnCF("key-pools", "Key pool spend unreadable", map[string]any{"error": err.Error()})
+	}
 	pools := make([]keyPoolView, 0, len(cfg.KeyPools))
 	for _, pool := range cfg.KeyPools {
-		pools = append(pools, newKeyPoolView(cfg, pool, reported[pool.ID], runtime == "running"))
+		pools = append(pools, newKeyPoolView(cfg, pool, reported[pool.ID], runtime == "running", spent))
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "pools": pools})
@@ -149,7 +177,7 @@ func (h *Handler) handleCreateKeyPool(w http.ResponseWriter, r *http.Request) {
 	pool := config.KeyPool{ID: uuid.NewString(), Name: request.Name, Keys: []config.KeyPoolKey{}}
 	h.respondKeyPoolEdit(w, r, http.StatusCreated, func(cfg *config.Config) (any, error) {
 		cfg.KeyPools = append(cfg.KeyPools, pool)
-		return newKeyPoolView(cfg, pool, nil, false), nil
+		return newKeyPoolView(cfg, pool, nil, false, keyspend.Ledger{}), nil
 	})
 }
 
@@ -216,7 +244,7 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		pool.Keys = append(pool.Keys, key)
-		return newKeyPoolKeyView(key, nil), nil
+		return newKeyPoolKeyView(pool.ID, key, nil, keyspend.Ledger{}), nil
 	})
 }
 
@@ -276,15 +304,29 @@ func (h *Handler) handleListPoolModels(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePatchPoolKey(w http.ResponseWriter, r *http.Request) {
 	var patch struct {
-		Label   *string `json:"label"`
-		Enabled *bool   `json:"enabled"`
+		Label            *string  `json:"label"`
+		Enabled          *bool    `json:"enabled"`
+		MonthlyBudgetUSD *float64 `json:"monthly_budget_usd"` // 0 clears the budget
+		ResetDay         *int     `json:"reset_day"`
 	}
-	if !decodeJSONObject(r, &patch) || (patch.Label == nil && patch.Enabled == nil) {
-		modelTestError(w, http.StatusBadRequest, "Provide a label or enabled state.")
+	if !decodeJSONObject(r, &patch) ||
+		(patch.Label == nil && patch.Enabled == nil && patch.MonthlyBudgetUSD == nil && patch.ResetDay == nil) {
+		modelTestError(w, http.StatusBadRequest, "Provide a label, enabled state, monthly budget or reset day.")
 		return
 	}
 	if patch.Label != nil && !validDisplayName(patch.Label) {
 		modelTestError(w, http.StatusBadRequest, "Use a key label between 1 and 200 characters.")
+		return
+	}
+	requested := config.KeyPoolKey{ResetDay: 1}
+	if patch.MonthlyBudgetUSD != nil {
+		requested.MonthlyBudgetUSD = *patch.MonthlyBudgetUSD
+	}
+	if patch.ResetDay != nil {
+		requested.ResetDay = *patch.ResetDay
+	}
+	if !requested.ValidBudget() || requested.ResetDay < 1 {
+		modelTestError(w, http.StatusBadRequest, "Use a monthly budget of $0 to $1,000,000 and a reset day of 1 to 31.")
 		return
 	}
 	h.editPoolKey(w, r, func(key *config.KeyPoolKey) {
@@ -293,6 +335,12 @@ func (h *Handler) handlePatchPoolKey(w http.ResponseWriter, r *http.Request) {
 		}
 		if patch.Enabled != nil {
 			key.Enabled = *patch.Enabled
+		}
+		if patch.MonthlyBudgetUSD != nil {
+			key.MonthlyBudgetUSD = *patch.MonthlyBudgetUSD
+		}
+		if patch.ResetDay != nil {
+			key.ResetDay = *patch.ResetDay
 		}
 	})
 }

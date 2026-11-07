@@ -188,6 +188,8 @@ Each conversation stays on one enabled key, chosen by hashing its session key, s
 
 Pool secrets are protected like model keys: `enc://` and `file://` references work, plaintext keys are sealed on save when a passphrase is set, and the dashboard shows them masked. When a `.security.yml` sidecar exists, it holds the pool secrets under `key_pools` and `config.json` keeps only the pools' ids, labels and enabled flags. An existing `anthropic/` entry with several `api_keys` is loaded as a pool referenced by that entry, and the migration is saved on the next configuration write. `api_keys` on other providers keep their ordered failover.
 
+Every answer a pool key serves adds its input, output, cache-write and cache-read tokens to that key's totals in `key-pool-spend.json` under the Picoclaw home, which is kept apart from configuration. Dollar figures are estimates from a built-in price table for the model that actually answered. Answers from a model missing from the table count tokens only and are never given a guessed amount. A key can have a `monthly_budget_usd` and a `reset_day` (1 to 31, default 1). A new period starts at midnight UTC on the reset day, or on the last day of a month shorter than that. The Credentials page shows each key's estimated spend since its most recent reset day against its budget, along with its cache hit rate. Neither field ever limits traffic.
+
 **Anthropic Messages API (native format)**
 
 For third-party proxies and custom endpoints that implement Anthropic's native message format:

@@ -13,9 +13,10 @@ import (
 )
 
 // keyPoolConfig defines one Key pool with the given keys, all enabled, and two
-// configured models (Opus and Haiku) that reference it.
+// configured models (Opus and Haiku) that reference it, in a fresh Picoclaw home.
 func keyPoolConfig(t *testing.T, apiBase string, keys ...string) *config.Config {
 	t.Helper()
+	t.Setenv(config.EnvHome, t.TempDir()) // each test keeps its own Key pool spend
 	pool := config.KeyPool{ID: "orgs", Name: "Anthropic organizations"}
 	for i, key := range keys {
 		pool.Keys = append(pool.Keys, config.KeyPoolKey{
