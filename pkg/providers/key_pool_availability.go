@@ -38,11 +38,13 @@ const (
 // KeyAvailability is one key's state. Until is the next recheck of an
 // exhausted or rejected key, zero otherwise. Anthropic rate-limits each model
 // separately, so RateLimitedModels lists the models the key cannot serve now.
+// ReturnedAt is the latest config.KeyPoolKey.ReturnedAt this process applied.
 type KeyAvailability struct {
 	KeyID             string           `json:"key_id"`
 	State             KeyState         `json:"state"`
 	Until             time.Time        `json:"until,omitzero"`
 	RateLimitedModels []ModelRateLimit `json:"rate_limited_models,omitempty"`
+	ReturnedAt        time.Time        `json:"returned_at,omitzero"`
 }
 
 // ModelRateLimit is a rate limit of one key for one model id, ending at Until.
@@ -52,9 +54,10 @@ type ModelRateLimit struct {
 }
 
 // KeyPoolAvailability reports the state of each key of pool in configured
-// order. States are held in memory for the process and shared by every
-// configured model using the pool.
+// order, after applying the pool's returns to service. States are held in
+// memory for the process and shared by every configured model using the pool.
 func KeyPoolAvailability(pool *config.KeyPool) []KeyAvailability {
+	keyAvailability.applyReturns(pool)
 	states := make([]KeyAvailability, 0, len(pool.Keys))
 	for _, key := range pool.Keys {
 		if !key.Enabled {
@@ -64,12 +67,6 @@ func KeyPoolAvailability(pool *config.KeyPool) []KeyAvailability {
 		states = append(states, keyAvailability.report(keyRef{pool: pool.ID, key: key.ID}))
 	}
 	return states
-}
-
-// ReturnKeyToService makes a key available at once, clearing exhaustion,
-// rejection and rate limits, for an administrator who has fixed its account.
-func ReturnKeyToService(poolID, keyID string) {
-	keyAvailability.clear(keyRef{pool: poolID, key: keyID})
 }
 
 // clock is the time source of key availability; tests replace it so that
@@ -98,13 +95,29 @@ type keyHealth struct {
 }
 
 type keyAvailabilityRegistry struct {
-	clock clock
-	mu    sync.Mutex
-	keys  map[keyRef]*keyHealth
+	clock    clock
+	mu       sync.Mutex
+	keys     map[keyRef]*keyHealth
+	returned map[keyRef]time.Time // latest applied return to service per key
 }
 
 func newKeyAvailabilityRegistry(clock clock) *keyAvailabilityRegistry {
-	return &keyAvailabilityRegistry{clock: clock, keys: map[keyRef]*keyHealth{}}
+	return &keyAvailabilityRegistry{clock: clock, keys: map[keyRef]*keyHealth{}, returned: map[keyRef]time.Time{}}
+}
+
+// applyReturns clears the recorded trouble of each key whose saved return to
+// service is new to this process, making it available at once. A value is
+// applied only once, so trouble recorded after it stays.
+func (r *keyAvailabilityRegistry) applyReturns(pool *config.KeyPool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, key := range pool.Keys {
+		ref := keyRef{pool: pool.ID, key: key.ID}
+		if !key.ReturnedAt.IsZero() && !key.ReturnedAt.Equal(r.returned[ref]) {
+			delete(r.keys, ref)
+			r.returned[ref] = key.ReturnedAt
+		}
+	}
 }
 
 // health returns the key's entry, creating it; callers hold mu.
@@ -184,16 +197,10 @@ func (r *keyAvailabilityRegistry) rateLimit(ref keyRef, model string, d time.Dur
 	health.limits[model] = latest(health.limits[model], r.clock.Now().Add(d))
 }
 
-func (r *keyAvailabilityRegistry) clear(ref keyRef) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.keys, ref)
-}
-
 func (r *keyAvailabilityRegistry) report(ref keyRef) KeyAvailability {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	report := KeyAvailability{KeyID: ref.key, State: KeyAvailable}
+	report := KeyAvailability{KeyID: ref.key, State: KeyAvailable, ReturnedAt: r.returned[ref]}
 	health := r.keys[ref]
 	if health == nil {
 		return report

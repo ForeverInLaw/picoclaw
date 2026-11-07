@@ -388,9 +388,23 @@ func TestKeyPoolAvailabilityReportsKeyStatesAndReturnsAKeyToService(t *testing.T
 		t.Fatalf("KeyPoolAvailability() = %+v, want %+v", got, want)
 	}
 
-	ReturnKeyToService("orgs", "org-1")
+	// The dashboard returns a key to service by saving the time it did so; the
+	// next provider built from that configuration applies it once.
+	cfg.KeyPools[0].Keys[0].ReturnedAt = time.Date(2026, 11, 7, 13, 0, 0, 0, time.UTC)
+	provider, modelID = createProvider(t, &cfg.ModelList[0])
 	if got := fake.keyFor(t, provider, modelID, exhaustedConversation); got != "sk-ant-a" {
 		t.Fatalf("returned key did not get its conversation back; it went to %s", got)
+	}
+	if got := KeyPoolAvailability(&cfg.KeyPools[0])[0]; got.State != KeyAvailable ||
+		!got.ReturnedAt.Equal(cfg.KeyPools[0].Keys[0].ReturnedAt) {
+		t.Fatalf("returned key reports %+v, want available with the applied return", got)
+	}
+
+	fake.fail("sk-ant-a", 1, downForms["credit balance 400"])
+	fake.keyFor(t, provider, modelID, exhaustedConversation)
+	provider, modelID = createProvider(t, &cfg.ModelList[0])
+	if got := fake.keyFor(t, provider, modelID, exhaustedConversation); got == "sk-ant-a" {
+		t.Fatal("an already applied return put the newly exhausted key back in service")
 	}
 }
 

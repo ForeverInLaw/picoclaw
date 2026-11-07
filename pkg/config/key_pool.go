@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -20,11 +21,15 @@ type KeyPool struct {
 // KeyPoolKey is one API key of a Key pool. Its ID is stable across label and
 // secret edits, so conversation bindings follow the key rather than its value.
 // When a .security.yml sidecar exists, it holds APIKey and config.json does not.
+// ReturnedAt is when an administrator last returned the key to service; the
+// gateway clears the key's exhausted, rejected or rate-limited state once per
+// new value, which carries the request across processes.
 type KeyPoolKey struct {
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	Enabled bool   `json:"enabled"`
-	APIKey  string `json:"api_key,omitempty"`
+	ID         string    `json:"id"`
+	Label      string    `json:"label"`
+	Enabled    bool      `json:"enabled"`
+	APIKey     string    `json:"api_key,omitempty"`
+	ReturnedAt time.Time `json:"returned_at,omitzero"`
 }
 
 // keyPoolsWithoutSecrets copies pools with only their metadata, for a

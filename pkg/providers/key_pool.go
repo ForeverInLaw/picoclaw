@@ -37,9 +37,11 @@ type pooledKey struct {
 }
 
 // newKeyPool builds clients for the pool's enabled keys against the model's
-// endpoint. A pool without enabled keys leaves the candidate unavailable, so
-// the Routing chain moves to its reserves.
+// endpoint, after applying the pool's returns to service. A pool without
+// enabled keys leaves the candidate unavailable, so the Routing chain moves to
+// its reserves.
 func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig) (*keyPool, error) {
+	keyAvailability.applyReturns(pool)
 	enabled := pool.EnabledKeys()
 	if len(enabled) == 0 {
 		return nil, &CandidateUnavailableError{
