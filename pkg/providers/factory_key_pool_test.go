@@ -232,3 +232,51 @@ func TestKeyPoolModelCachesAndLogsUsageByKeyLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestMigratedSidecarKeysStayInTheSidecar(t *testing.T) {
+	fake := newAnswering(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	sidecar := filepath.Join(dir, config.SecurityConfigFile)
+	document := `{"version":3,"model_list":[
+		{"model_name":"claude","model":"anthropic/claude-opus-5-5","api_base":"` + fake.URL + `"}]}`
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sidecar,
+		[]byte("model_list:\n  claude:\n    api_keys: [sk-ant-sidecar-a, sk-ant-sidecar-b]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	saved, _ := os.ReadFile(path)
+	if strings.Contains(string(saved), "sk-ant-sidecar") {
+		t.Fatalf("config.json received a sidecar secret:\n%s", saved)
+	}
+	if !strings.Contains(string(saved), `"key_pool_id"`) {
+		t.Fatalf("config.json does not reference the migrated pool:\n%s", saved)
+	}
+	secrets, _ := os.ReadFile(sidecar)
+	if !strings.Contains(string(secrets), "sk-ant-sidecar-a") || !strings.Contains(string(secrets), "sk-ant-sidecar-b") {
+		t.Fatalf("sidecar lost the pool keys:\n%s", secrets)
+	}
+	reloaded, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("reloading the migrated config: %v", err)
+	}
+	provider, modelID := createProvider(t, modelNamed(t, reloaded, "claude"))
+	served := map[string]bool{}
+	for i := range 30 {
+		served[fake.keyFor(t, provider, modelID, fmt.Sprintf("agent:main:telegram:direct:%d", i))] = true
+	}
+	if !served["sk-ant-sidecar-a"] || !served["sk-ant-sidecar-b"] || len(served) != 2 {
+		t.Fatalf("reloaded model was served by %v, want both sidecar keys", served)
+	}
+}

@@ -29,6 +29,8 @@ type SecurityConfig struct {
 	// for load balancing with same model_name. The suffix ":N" is used to distinguish
 	// multiple configs that share the same base model_name.
 	ModelList map[string]ModelSecurityEntry `yaml:"model_list,omitempty"`
+	// Key pool secrets by pool ID; config.json keeps only the pools' metadata.
+	KeyPools map[string]KeyPoolSecurityEntry `yaml:"key_pools,omitempty"`
 
 	// Channel tokens/secrets
 	Channels    ChannelsSecurity                `yaml:"channels,omitempty"`
@@ -49,6 +51,11 @@ type ChannelSecurityEntry struct {
 // ModelSecurityEntry stores security data for a model
 type ModelSecurityEntry struct {
 	APIKeys []string `yaml:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
+}
+
+// KeyPoolSecurityEntry stores the secrets of one Key pool by key ID.
+type KeyPoolSecurityEntry struct {
+	APIKeys map[string]string `yaml:"api_keys,omitempty"`
 }
 
 // ChannelsSecurity stores channel-related security data

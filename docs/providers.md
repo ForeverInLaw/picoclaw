@@ -182,7 +182,7 @@ A Key pool groups API keys from separate Anthropic organizations, each with its 
 
 Each conversation stays on one enabled key, chosen by hashing its session key, so its prompt cache keeps being read; new conversations spread across the keys. Spawned tasks, subturns and summaries use the key of the conversation they belong to. The binding is not stored: it survives restarts, and disabling a key moves only the conversations that were on it. Keys of a pool are not reserves of the Routing chain.
 
-Pool secrets are protected like model keys: `enc://` and `file://` references work, plaintext keys are sealed on save when a passphrase is set, and the dashboard shows them masked. An existing `anthropic/` entry with several `api_keys` is loaded as a pool referenced by that entry, and the migration is saved on the next configuration write. `api_keys` on other providers keep their ordered failover.
+Pool secrets are protected like model keys: `enc://` and `file://` references work, plaintext keys are sealed on save when a passphrase is set, and the dashboard shows them masked. When a `.security.yml` sidecar exists, it holds the pool secrets under `key_pools` and `config.json` keeps only the pools' ids, labels and enabled flags. An existing `anthropic/` entry with several `api_keys` is loaded as a pool referenced by that entry, and the migration is saved on the next configuration write. `api_keys` on other providers keep their ordered failover.
 
 **Anthropic Messages API (native format)**
 

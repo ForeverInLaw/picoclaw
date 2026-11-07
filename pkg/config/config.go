@@ -1586,14 +1586,20 @@ func saveConfig(path string, cfg *Config, syncSidecar bool) error {
 		}
 	}
 
+	if syncSidecar {
+		inSidecar, err := saveExistingSecurityConfig(path, cfg)
+		if err != nil {
+			return err
+		}
+		if inSidecar {
+			tmp := *cfg
+			tmp.KeyPools = keyPoolsWithoutSecrets(cfg.KeyPools)
+			cfg = &tmp
+		}
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
-	}
-	if syncSidecar {
-		if err := saveExistingSecurityConfig(path, cfg); err != nil {
-			return err
-		}
 	}
 	return fileutil.WriteFileAtomic(path, data, 0o600)
 }

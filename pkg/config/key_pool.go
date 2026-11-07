@@ -19,11 +19,25 @@ type KeyPool struct {
 
 // KeyPoolKey is one API key of a Key pool. Its ID is stable across label and
 // secret edits, so conversation bindings follow the key rather than its value.
+// When a .security.yml sidecar exists, it holds APIKey and config.json does not.
 type KeyPoolKey struct {
 	ID      string `json:"id"`
 	Label   string `json:"label"`
 	Enabled bool   `json:"enabled"`
-	APIKey  string `json:"api_key"`
+	APIKey  string `json:"api_key,omitempty"`
+}
+
+// keyPoolsWithoutSecrets copies pools with only their metadata, for a
+// config.json whose security sidecar holds the secrets.
+func keyPoolsWithoutSecrets(pools []KeyPool) []KeyPool {
+	stripped := slices.Clone(pools)
+	for i := range stripped {
+		stripped[i].Keys = slices.Clone(stripped[i].Keys)
+		for j := range stripped[i].Keys {
+			stripped[i].Keys[j].APIKey = ""
+		}
+	}
+	return stripped
 }
 
 // EnabledKeys returns the keys that may serve requests, in configured order.
