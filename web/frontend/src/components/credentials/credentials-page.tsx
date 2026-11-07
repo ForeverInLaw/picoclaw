@@ -7,6 +7,7 @@ import { useCredentialsPage } from "@/hooks/use-credentials-page"
 import { AnthropicCredentialCard } from "./anthropic-credential-card"
 import { AntigravityCredentialCard } from "./antigravity-credential-card"
 import { DeviceCodeSheet } from "./device-code-sheet"
+import { KeyPools } from "./key-pools"
 import { LogoutConfirmDialog } from "./logout-confirm-dialog"
 import { OpenAICredentialCard } from "./openai-credential-card"
 
@@ -97,6 +98,8 @@ export function CredentialsPage() {
             />
           </div>
         )}
+
+        <KeyPools />
       </div>
 
       <LogoutConfirmDialog

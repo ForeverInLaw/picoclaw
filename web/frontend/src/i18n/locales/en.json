@@ -205,6 +205,38 @@
       "callbackLabel": "Complete callback URL",
       "complete": "Connect account",
       "success": "Account connected. Choose it in Models to use it."
+    },
+    "keyPools": {
+      "title": "Anthropic Key pools",
+      "description": "Each pool holds API keys from separate Anthropic organizations. Models that use a pool keep each conversation on one available key.",
+      "loading": "Loading Key pools…",
+      "poolName": "Pool name",
+      "rename": "Rename",
+      "createPool": "Create pool",
+      "deletePool": "Delete pool",
+      "deletePoolTitle": "Delete {{name}}?",
+      "deletePoolDescription": "This removes the pool and its saved keys.",
+      "models": "Models",
+      "keyLabel": "Key label",
+      "apiKey": "Anthropic API key",
+      "addKey": "Add key",
+      "checkingKey": "Checking key…",
+      "enable": "Enable",
+      "disable": "Disable",
+      "returnToService": "Return to service",
+      "removeKey": "Remove key",
+      "removeKeyTitle": "Remove {{name}}?",
+      "removeKeyDescription": "Conversations on this key move to the other keys in the pool.",
+      "nextCheck": "Next check {{time}}",
+      "rateLimitedUntil": "{{model}} rate limited until {{time}}",
+      "state": {
+        "available": "Available",
+        "rate_limited": "Rate limited",
+        "exhausted": "Out of credit",
+        "rejected": "Rejected by Anthropic",
+        "disabled": "Disabled",
+        "unknown": "Gateway not running"
+      }
     }
   },
   "models": {
