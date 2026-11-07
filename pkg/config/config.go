@@ -951,7 +951,7 @@ type ModelConfig struct {
 	MaxTokensField           string             `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
 	RequestTimeout           int                `json:"request_timeout,omitempty"`
 	InactivityTimeoutSeconds int                `json:"inactivity_timeout_seconds,omitempty"`
-	ThinkingLevel            string             `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
+	ThinkingLevel            string             `json:"thinking_level,omitempty"` // Thinking effort: off|low|medium|high|xhigh|max|adaptive
 	CacheTTL                 string             `json:"cache_ttl,omitempty"`      // Anthropic prompt cache lifetime: 5m (default) or 1h
 	ExtraBody                map[string]any     `json:"extra_body,omitempty"`     // Additional fields to inject into request body
 

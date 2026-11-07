@@ -155,6 +155,8 @@ This design also enables **multi-agent support** with flexible provider selectio
 
 With an API key, requests use prompt caching: the tool definitions and the static part of the system prompt are cached, and so is the growing conversation. Cached entries live for 5 minutes by default. Set `"cache_ttl": "1h"` on the model to keep them for an hour, which costs more per cache write but avoids rewrites after longer pauses.
 
+`thinking_level` sets adaptive thinking with the matching effort: `low`, `medium`, `high`, `xhigh` or `max`, and `adaptive` means high effort. When a model lacks the chosen effort, the nearest one it supports is used. `off` turns thinking off on models that allow it; models that always think, such as Claude Opus 5.5, use the lowest effort instead. Picoclaw reads each model's capabilities from Anthropic's Models API once per run. Leave `thinking_level` unset to keep the model's own default.
+
 > Run `picoclaw auth login --provider anthropic` to paste your API token.
 
 **Anthropic Messages API (native format)**
