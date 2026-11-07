@@ -11,6 +11,19 @@ export interface ModelRateLimit {
   until: string
 }
 
+// A key's usage since the start of its budget period. estimated_usd covers
+// models with a known price; unpriced_tokens counts the tokens of the others.
+export interface KeySpend {
+  since: string
+  input_tokens: number
+  output_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  estimated_usd: number
+  unpriced_tokens: number
+  cache_hit_rate: number
+}
+
 // One key of a Key pool. api_key is always masked by the server.
 export interface KeyPoolKey {
   id: string
@@ -20,7 +33,15 @@ export interface KeyPoolKey {
   state: KeyPoolKeyState
   until?: string
   rate_limited_models?: ModelRateLimit[]
+  monthly_budget_usd?: number
+  reset_day: number
+  spend: KeySpend
 }
+
+// A key edit; a monthly_budget_usd of 0 clears the budget.
+export type KeyPoolKeyPatch = Partial<
+  Pick<KeyPoolKey, "label" | "enabled" | "monthly_budget_usd" | "reset_day">
+>
 
 export interface KeyPool {
   id: string
@@ -102,7 +123,7 @@ export function addPoolKey(poolID: string, label: string, apiKey: string) {
 export function updatePoolKey(
   poolID: string,
   keyID: string,
-  patch: { label?: string; enabled?: boolean },
+  patch: KeyPoolKeyPatch,
 ) {
   return request(keyPath(poolID, keyID), "PATCH", patch)
 }

@@ -22,6 +22,10 @@ test("Key pool management addresses the exact pool and key", async () => {
     await renameKeyPool("orgs/1", "Work organizations")
     await addPoolKey("orgs/1", "First org", "sk-ant-api03-secret")
     await updatePoolKey("orgs/1", "first", { enabled: false })
+    await updatePoolKey("orgs/1", "first", {
+      monthly_budget_usd: 200,
+      reset_day: 15,
+    })
     await returnPoolKeyToService("orgs/1", "first")
     await removePoolKey("orgs/1", "first")
     await deleteKeyPool("orgs/1")
@@ -47,6 +51,11 @@ test("Key pool management addresses the exact pool and key", async () => {
           path: "/api/key-pools/orgs%2F1/keys/first",
           method: "PATCH",
           body: '{"enabled":false}',
+        },
+        {
+          path: "/api/key-pools/orgs%2F1/keys/first",
+          method: "PATCH",
+          body: '{"monthly_budget_usd":200,"reset_day":15}',
         },
         {
           path: "/api/key-pools/orgs%2F1/keys/first/return",

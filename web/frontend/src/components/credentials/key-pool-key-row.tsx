@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import {
   type KeyPoolKey,
+  type KeyPoolKeyPatch,
   keyStatesOutOfService,
   removePoolKey,
   returnPoolKeyToService,
@@ -14,6 +15,7 @@ import { useKeyPoolMutation } from "@/hooks/use-key-pools"
 
 import { ConfirmRemovalDialog } from "./confirm-removal-dialog"
 import { EditableName } from "./editable-name"
+import { KeyBudget } from "./key-budget"
 
 const stateBadge = {
   available: "secondary",
@@ -26,7 +28,8 @@ const stateBadge = {
 
 const formatTime = (value: string) => new Date(value).toLocaleString()
 
-// One key of a Key pool: its availability in the gateway and its actions.
+// One key of a Key pool: its availability in the gateway, its spend against
+// its budget and its actions.
 export function KeyPoolKeyRow({
   poolID,
   poolKey,
@@ -36,9 +39,8 @@ export function KeyPoolKeyRow({
 }) {
   const { t } = useTranslation()
   const [removeOpen, setRemoveOpen] = useState(false)
-  const update = useKeyPoolMutation(
-    (patch: { label?: string; enabled?: boolean }) =>
-      updatePoolKey(poolID, poolKey.id, patch),
+  const update = useKeyPoolMutation((patch: KeyPoolKeyPatch) =>
+    updatePoolKey(poolID, poolKey.id, patch),
   )
   const giveBack = useKeyPoolMutation(() =>
     returnPoolKeyToService(poolID, poolKey.id),
@@ -61,6 +63,11 @@ export function KeyPoolKeyRow({
           {t(`credentials.keyPools.state.${poolKey.state}`)}
         </Badge>
       </EditableName>
+      <KeyBudget
+        poolKey={poolKey}
+        disabled={busy}
+        onSave={(patch) => update.mutate(patch)}
+      />
       {poolKey.until && (
         <p className="text-muted-foreground text-xs">
           {t("credentials.keyPools.nextCheck", {
