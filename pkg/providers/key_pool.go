@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/keyspend"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	anthropicprovider "github.com/sipeed/picoclaw/pkg/providers/anthropic"
 )
@@ -26,6 +27,7 @@ type keyPool struct {
 	name         string
 	keys         []pooledKey
 	availability *keyAvailabilityRegistry
+	cacheTTL     string // prices this model's cache writes
 }
 
 // pooledKey is one enabled key: its pool and stable key ID, which rendezvous
@@ -57,7 +59,7 @@ func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig) (*keyPool, error) 
 			client: newAnthropicAPIKeyClient(key.APIKey, mc).WithKeyLabel(key.Label),
 		})
 	}
-	return &keyPool{name: pool.Name, keys: keys, availability: keyAvailability}, nil
+	return &keyPool{name: pool.Name, keys: keys, availability: keyAvailability, cacheTTL: mc.CacheTTL}, nil
 }
 
 // rank orders the keys for a conversation by rendezvous (highest random weight)
@@ -109,6 +111,7 @@ func (p *keyPool) attempt(
 		response, err = call(key.client)
 		if err == nil {
 			p.availability.served(key.ref)
+			p.recordSpend(key, model, response)
 			return response, false, nil
 		}
 		failure := ClassifyError(err, "anthropic", model)
@@ -136,6 +139,32 @@ func (p *keyPool) attempt(
 		default:
 			return nil, false, err
 		}
+	}
+}
+
+// recordSpend adds an answer's usage to the key's monthly totals, priced for
+// the model that served it. Every configured model using the pool adds to the
+// same totals. A failed write is logged and never fails the answer.
+func (p *keyPool) recordSpend(key pooledKey, model string, response *LLMResponse) {
+	usage := response.Usage
+	if usage == nil {
+		return
+	}
+	spend := keyspend.Totals{
+		InputTokens:      int64(usage.PromptTokens - usage.CacheCreationTokens - usage.CacheReadTokens),
+		OutputTokens:     int64(usage.CompletionTokens),
+		CacheWriteTokens: int64(usage.CacheCreationTokens),
+		CacheReadTokens:  int64(usage.CacheReadTokens),
+	}
+	served := cmp.Or(response.ServedModel, model)
+	if usd, priced := anthropicprovider.EstimateCost(served, *usage, p.cacheTTL); priced {
+		spend.EstimatedUSD = usd
+	} else {
+		spend.UnpricedTokens = int64(usage.TotalTokens)
+	}
+	if err := keyspend.Record(key.ref.pool, key.ref.key, p.availability.clock.Now(), spend); err != nil {
+		logger.WarnCF("provider.anthropic", "Key pool spend not recorded",
+			map[string]any{"pool": p.name, "key": key.label, "error": err.Error()})
 	}
 }
 
