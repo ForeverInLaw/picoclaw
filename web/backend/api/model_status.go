@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -43,9 +42,7 @@ func hasModelConfiguration(m config.ModelConfig) bool {
 
 	if m.KeyPoolID != "" {
 		pool := m.KeyPool()
-		return pool != nil && slices.ContainsFunc(pool.EnabledKeys(), func(key config.KeyPoolKey) bool {
-			return strings.TrimSpace(key.APIKey) != ""
-		})
+		return pool != nil && len(pool.ServingKeys()) > 0
 	}
 
 	if requiresRuntimeProbe(m) {

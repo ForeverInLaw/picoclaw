@@ -63,9 +63,13 @@ func keyPoolsWithoutSecrets(pools []KeyPool) []KeyPool {
 	return stripped
 }
 
-// EnabledKeys returns the keys that may serve requests, in configured order.
-func (p *KeyPool) EnabledKeys() []KeyPoolKey {
-	return slices.DeleteFunc(slices.Clone(p.Keys), func(k KeyPoolKey) bool { return !k.Enabled })
+// ServingKeys returns the keys that may serve requests, in configured order:
+// enabled keys that have a secret. A key whose secret is missing (for example
+// from the security sidecar) would only send unauthenticated requests.
+func (p *KeyPool) ServingKeys() []KeyPoolKey {
+	return slices.DeleteFunc(slices.Clone(p.Keys), func(k KeyPoolKey) bool {
+		return !k.Enabled || strings.TrimSpace(k.APIKey) == ""
+	})
 }
 
 // IsAnthropicAPIKeyModel reports whether the model is an anthropic/ model that

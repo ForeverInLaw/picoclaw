@@ -350,7 +350,7 @@ func (h *Handler) handleListPoolModels(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errPoolNotFound.status, errPoolNotFound.message)
 		return
 	}
-	keys := pool.EnabledKeys()
+	keys := pool.ServingKeys()
 	if len(keys) == 0 {
 		writeAPIError(w, http.StatusConflict, "Enable a key in this pool to list its models.")
 		return

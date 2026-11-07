@@ -32,7 +32,7 @@ type keyPoolRuntime struct {
 // Key pool provider; tests replace it.
 var keyPools = keyPoolRuntime{availability: newKeyAvailabilityRegistry(systemClock{})}
 
-// keyPool serves a Key pool model with one Messages API client per enabled key.
+// keyPool serves a Key pool model with one Messages API client per serving key.
 // Key availability lives in a registry shared by every model using the pool.
 type keyPool struct {
 	name         string
@@ -42,7 +42,7 @@ type keyPool struct {
 	cacheTTL     string // prices this model's cache writes
 }
 
-// pooledKey is one enabled key: its pool and stable key ID, which rendezvous
+// pooledKey is one serving key: its pool and stable key ID, which rendezvous
 // hashing and availability use, its label and a client that logs usage under it.
 type pooledKey struct {
 	ref    keyRef
@@ -50,21 +50,21 @@ type pooledKey struct {
 	client *anthropicprovider.Provider
 }
 
-// newKeyPool builds clients for the pool's enabled keys against the model's
+// newKeyPool builds clients for the pool's serving keys against the model's
 // endpoint, after applying the pool's returns to service. A pool without
-// enabled keys leaves the candidate unavailable, so the Routing chain moves to
+// serving keys leaves the candidate unavailable, so the Routing chain moves to
 // its reserves.
 func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig, runtime keyPoolRuntime) (*keyPool, error) {
 	runtime.availability.applyReturns(pool)
-	enabled := pool.EnabledKeys()
-	if len(enabled) == 0 {
+	serving := pool.ServingKeys()
+	if len(serving) == 0 {
 		return nil, &CandidateUnavailableError{
 			Reason:  FailoverAuth,
-			Message: fmt.Sprintf("Key pool %q has no enabled keys", pool.Name),
+			Message: fmt.Sprintf("Key pool %q has no enabled keys with a secret", pool.Name),
 		}
 	}
-	keys := make([]pooledKey, 0, len(enabled))
-	for _, key := range enabled {
+	keys := make([]pooledKey, 0, len(serving))
+	for _, key := range serving {
 		keys = append(keys, pooledKey{
 			ref:    keyRef{pool: pool.ID, key: key.ID},
 			label:  key.Label,

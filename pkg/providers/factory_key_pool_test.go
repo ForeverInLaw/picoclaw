@@ -215,6 +215,19 @@ func TestKeyPoolWithoutEnabledKeysLeavesTheCandidateUnavailable(t *testing.T) {
 	}
 }
 
+func TestKeyPoolKeyWithoutASecretNeverServes(t *testing.T) {
+	fake := newAnswering(t)
+	cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", " ")
+	provider, modelID := createProvider(t, &cfg.ModelList[0])
+
+	for i := range 20 {
+		conversation := fmt.Sprintf("agent:main:telegram:direct:%d", i)
+		if got := fake.keyFor(t, provider, modelID, conversation); got != "sk-ant-a" {
+			t.Fatalf("conversation %d was sent with key %q, want only the key that has a secret", i, got)
+		}
+	}
+}
+
 func TestKeyPoolModelCachesAndLogsUsageByKeyLabel(t *testing.T) {
 	fake := newAnswering(t)
 	cfg := keyPoolConfig(t, fake.URL, "sk-ant-secret-a", "sk-ant-secret-b")
