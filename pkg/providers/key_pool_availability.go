@@ -20,7 +20,7 @@ const (
 	// defaultRateLimitPause applies to a 429 that names no time.
 	defaultRateLimitPause = time.Minute
 	// downRecheckInterval spaces the single attempts that recheck whether an
-	// exhausted key serves again.
+	// exhausted or rejected key serves again.
 	downRecheckInterval = 6 * time.Hour
 )
 
@@ -31,11 +31,12 @@ const (
 	KeyAvailable   KeyState = "available"
 	KeyRateLimited KeyState = "rate_limited" // for at least one model
 	KeyExhausted   KeyState = "exhausted"    // out of credit
+	KeyRejected    KeyState = "rejected"     // Anthropic refused the key itself (401/403)
 	KeyDisabled    KeyState = "disabled"
 )
 
 // KeyAvailability is one key's state. Until is the next recheck of an
-// exhausted key, zero otherwise. Anthropic rate-limits each model
+// exhausted or rejected key, zero otherwise. Anthropic rate-limits each model
 // separately, so RateLimitedModels lists the models the key cannot serve now.
 type KeyAvailability struct {
 	KeyID             string           `json:"key_id"`
@@ -65,8 +66,8 @@ func KeyPoolAvailability(pool *config.KeyPool) []KeyAvailability {
 	return states
 }
 
-// ReturnKeyToService makes a key available at once, clearing exhaustion and
-// rate limits, for an administrator who knows its credit is renewed.
+// ReturnKeyToService makes a key available at once, clearing exhaustion,
+// rejection and rate limits, for an administrator who has fixed its account.
 func ReturnKeyToService(poolID, keyID string) {
 	keyAvailability.clear(keyRef{pool: poolID, key: keyID})
 }
@@ -91,7 +92,7 @@ type keyRef struct{ pool, key string }
 
 // keyHealth is a key's recorded trouble; a key without an entry is available.
 type keyHealth struct {
-	down    KeyState             // KeyExhausted, or empty while the key itself is fine
+	down    KeyState             // KeyExhausted or KeyRejected; empty while the key itself is fine
 	recheck time.Time            // next single attempt on a down key
 	limits  map[string]time.Time // model id → end of its rate limit
 }
@@ -166,7 +167,7 @@ func (r *keyAvailabilityRegistry) served(ref keyRef) {
 	}
 }
 
-// takeDown marks the key down in state until a recheck succeeds.
+// takeDown marks the key exhausted or rejected until a recheck succeeds.
 func (r *keyAvailabilityRegistry) takeDown(ref keyRef, state KeyState) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

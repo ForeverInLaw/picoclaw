@@ -267,7 +267,8 @@ const anthropicSpendCapBody = `{"type":"error","error":{"type":"rate_limit_error
 	`"message":"You have reached your API usage limits: Your organization has reached its monthly spend limit. ` +
 	`You will regain access on 2026-12-01 at 00:00 UTC.","details":{"error_code":"enforced_spend_limit_reached"}}}`
 
-// downForms are the ways Anthropic says a key's organization is out of money.
+// downForms are the ways Anthropic says a key's organization is out of money
+// or refuses the key itself.
 var downForms = map[string]func(http.ResponseWriter){
 	"credit balance 400": anthropicStatus(http.StatusBadRequest, anthropicErrorBody(anthropicCreditBalanceMessage)),
 	"billing 402": anthropicStatus(http.StatusPaymentRequired,
@@ -275,9 +276,13 @@ var downForms = map[string]func(http.ResponseWriter){
 	"spend cap 429": anthropicStatus(http.StatusTooManyRequests, anthropicSpendCapBody),
 	"specified usage limit 400": anthropicStatus(http.StatusBadRequest, anthropicErrorBody(
 		"You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC.")),
+	"revoked key 401": anthropicStatus(http.StatusUnauthorized,
+		`{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`),
+	"permission 403": anthropicStatus(http.StatusForbidden,
+		`{"type":"error","error":{"type":"permission_error","message":"Your API key does not have permission."}}`),
 }
 
-func TestKeyPoolKeepsAKeyOutOfCreditOutUntilARecheckSucceeds(t *testing.T) {
+func TestKeyPoolKeepsAKeyOutOfCreditOrRejectedOutUntilARecheckSucceeds(t *testing.T) {
 	for name, down := range downForms {
 		t.Run(name, func(t *testing.T) {
 			clock := useKeyPoolClock(t)
@@ -351,8 +356,8 @@ func TestKeyPoolRateLimitsAKeyOnlyForTheLimitedModel(t *testing.T) {
 func TestKeyPoolAvailabilityReportsKeyStatesAndReturnsAKeyToService(t *testing.T) {
 	clock := useKeyPoolClock(t)
 	fake := newPoolAnthropic(t)
-	cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b", "sk-ant-c", "sk-ant-d")
-	cfg.KeyPools[0].Keys[3].Enabled = false
+	cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b", "sk-ant-c", "sk-ant-d", "sk-ant-e")
+	cfg.KeyPools[0].Keys[4].Enabled = false
 	if err := cfg.ResolveKeyPools(); err != nil {
 		t.Fatal(err)
 	}
@@ -360,6 +365,7 @@ func TestKeyPoolAvailabilityReportsKeyStatesAndReturnsAKeyToService(t *testing.T
 	failures := map[string]func(http.ResponseWriter){
 		"sk-ant-a": downForms["credit balance 400"],
 		"sk-ant-b": rateLimitedFor("60"),
+		"sk-ant-c": downForms["revoked key 401"],
 	}
 	exhaustedConversation := fake.conversationOn(t, provider, modelID, "sk-ant-a")
 	for key, respond := range failures {
@@ -374,8 +380,9 @@ func TestKeyPoolAvailabilityReportsKeyStatesAndReturnsAKeyToService(t *testing.T
 		{KeyID: "org-2", State: KeyRateLimited, RateLimitedModels: []ModelRateLimit{
 			{Model: modelID, Until: now.Add(time.Minute)},
 		}},
-		{KeyID: "org-3", State: KeyAvailable},
-		{KeyID: "org-4", State: KeyDisabled},
+		{KeyID: "org-3", State: KeyRejected, Until: now.Add(downRecheckInterval)},
+		{KeyID: "org-4", State: KeyAvailable},
+		{KeyID: "org-5", State: KeyDisabled},
 	}
 	if got := KeyPoolAvailability(&cfg.KeyPools[0]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("KeyPoolAvailability() = %+v, want %+v", got, want)
@@ -393,6 +400,7 @@ func TestKeyPoolWithNoAvailableKeyLetsTheRoutingChainAnswerFromItsReserve(t *tes
 		reason FailoverReason
 	}{
 		"exhausted and rate limited": {downForms["credit balance 400"], rateLimitedFor("60"), FailoverRateLimit},
+		"all rejected":               {downForms["revoked key 401"], downForms["permission 403"], FailoverAuth},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
