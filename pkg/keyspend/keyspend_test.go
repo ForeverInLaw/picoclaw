@@ -2,6 +2,7 @@ package keyspend
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -36,14 +37,15 @@ func TestPeriodStartsOnTheMostRecentResetDay(t *testing.T) {
 
 func TestRecordedTotalsCountUntilTheNextResetDay(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	var store Store // the Picoclaw home's spend file
 	answer := Totals{InputTokens: 10, CacheReadTokens: 30, OutputTokens: 5, EstimatedUSD: 0.5}
 	for _, at := range []time.Time{day(2026, 10, 14), day(2026, 10, 15), day(2026, 11, 7)} {
-		if err := Record("orgs", "first", at, answer); err != nil {
+		if err := store.Record("orgs", "first", at, answer); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	ledger, err := Read()
+	ledger, err := store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +57,40 @@ func TestRecordedTotalsCountUntilTheNextResetDay(t *testing.T) {
 	if got := ledger.Since("orgs", "first", PeriodStart(15, day(2026, 11, 15))); got != (Totals{}) {
 		t.Errorf("new period on Nov 15 = %+v, want empty", got)
 	}
-	if info, err := os.Stat(Path()); err != nil || info.Mode().Perm() != 0o600 {
+	if store.Path() != filepath.Join(config.HomeDir(), "key-pool-spend.json") {
+		t.Errorf("default spend file = %s, want it in the Picoclaw home", store.Path())
+	}
+	if info, err := os.Stat(store.Path()); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("spend file = %v, %v; want owner-only permissions", info, err)
+	}
+}
+
+func TestACorruptSpendFileIsMovedAsideAndRecordingStartsAfresh(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(filepath.Join(dir, "spend.json"))
+	if err := os.WriteFile(store.Path(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	answer := Totals{InputTokens: 10, EstimatedUSD: 0.5}
+	for range 2 {
+		if err := store.Record("orgs", "first", day(2026, 11, 7), answer); err != nil {
+			t.Fatalf("Record() over a corrupt file error = %v", err)
+		}
+	}
+
+	ledger, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ledger.Since("orgs", "first", day(2026, 11, 1)); got != (Totals{InputTokens: 20, EstimatedUSD: 1}) {
+		t.Errorf("totals after recovery = %+v, want only the two new answers", got)
+	}
+	aside, _ := filepath.Glob(store.Path() + ".corrupt-*")
+	if len(aside) != 1 {
+		t.Fatalf("corrupt copies = %q, want one", aside)
+	}
+	if data, _ := os.ReadFile(aside[0]); string(data) != "{not json" {
+		t.Errorf("corrupt copy holds %q, want the original bytes", data)
 	}
 }

@@ -154,7 +154,7 @@ func (h *Handler) handleListKeyPools(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot, runtime := h.gatewayRuntime()
 	reported := reportedKeyStates(snapshot)
-	spent, err := keyspend.Read()
+	spent, err := keyspend.Store{}.Read()
 	if err != nil {
 		logger.WarnCF("key-pools", "Key pool spend unreadable", map[string]any{"error": err.Error()})
 	}

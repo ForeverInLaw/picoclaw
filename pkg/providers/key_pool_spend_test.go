@@ -24,9 +24,9 @@ var keyIDs = map[string]string{"sk-ant-a": "org-1", "sk-ant-b": "org-2", "sk-ant
 // spendOf reads the current monthly totals of a key of keyPoolConfig's pool.
 func spendOf(t *testing.T, clock *fakeClock, apiKey string) keyspend.Totals {
 	t.Helper()
-	ledger, err := keyspend.Read()
+	ledger, err := keyspend.Store{}.Read()
 	if err != nil {
-		t.Fatalf("keyspend.Read() error = %v", err)
+		t.Fatalf("keyspend.Store{}.Read() error = %v", err)
 	}
 	return ledger.Since("orgs", keyIDs[apiKey], keyspend.PeriodStart(1, clock.Now()))
 }

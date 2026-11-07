@@ -184,7 +184,7 @@ func (p *keyPool) recordSpend(key pooledKey, model string, response *LLMResponse
 	} else {
 		spend.UnpricedTokens = int64(usage.TotalTokens)
 	}
-	if err := keyspend.Record(key.ref.pool, key.ref.key, p.availability.clock.Now(), spend); err != nil {
+	if err := (keyspend.Store{}).Record(key.ref.pool, key.ref.key, p.availability.clock.Now(), spend); err != nil {
 		logger.WarnCF("provider.anthropic", "Key pool spend not recorded",
 			map[string]any{"pool": p.name, "key": key.label, "error": err.Error()})
 	}

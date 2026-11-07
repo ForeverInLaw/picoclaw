@@ -54,7 +54,7 @@ func TestKeyPoolKeysShowSpendSinceTheirResetDayAgainstTheirBudget(t *testing.T) 
 	now := time.Now().UTC()
 	record := func(key string, at time.Time, totals keyspend.Totals) {
 		t.Helper()
-		if err := keyspend.Record("orgs", key, at, totals); err != nil {
+		if err := (keyspend.Store{}).Record("orgs", key, at, totals); err != nil {
 			t.Fatal(err)
 		}
 	}

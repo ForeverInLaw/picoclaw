@@ -16,6 +16,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 const (
@@ -95,13 +96,32 @@ func monthDay(year int, month time.Month, day int) time.Time {
 	return first.AddDate(0, 0, min(day, last)-1)
 }
 
-// Path is the spend state file, separate from configuration.
-func Path() string { return filepath.Join(config.HomeDir(), "key-pool-spend.json") }
+// fileName is the spend state file in the Picoclaw home, separate from
+// configuration.
+const fileName = "key-pool-spend.json"
+
+// errCorrupt marks a spend file that is not a ledger.
+var errCorrupt = errors.New("spend file is not a ledger")
+
+// Store is one spend state file. The zero Store is the file in the Picoclaw
+// home as it is when each call runs; NewStore names another file.
+type Store struct{ path string }
+
+// NewStore is the spend state file at path.
+func NewStore(path string) Store { return Store{path: path} }
+
+// Path is the store's file.
+func (s Store) Path() string {
+	if s.path != "" {
+		return s.path
+	}
+	return filepath.Join(config.HomeDir(), fileName)
+}
 
 // Read loads the ledger; no file yet is an empty ledger.
-func Read() (Ledger, error) {
+func (s Store) Read() (Ledger, error) {
 	ledger := Ledger{Version: 1, Pools: map[string]map[string]map[string]Totals{}}
-	data, err := os.ReadFile(Path())
+	data, err := os.ReadFile(s.Path())
 	if errors.Is(err, fs.ErrNotExist) {
 		return ledger, nil
 	}
@@ -109,7 +129,7 @@ func Read() (Ledger, error) {
 		return ledger, err
 	}
 	if err := json.Unmarshal(data, &ledger); err != nil {
-		return ledger, fmt.Errorf("parse %s: %w", Path(), err)
+		return ledger, fmt.Errorf("parse %s: %w: %w", s.Path(), errCorrupt, err)
 	}
 	if ledger.Pools == nil {
 		ledger.Pools = map[string]map[string]map[string]Totals{}
@@ -122,17 +142,28 @@ func Read() (Ledger, error) {
 var recordMu sync.Mutex
 
 // Record adds usage to the key's totals for the UTC day of at and drops days
-// older than any period could reach.
-func Record(poolID, keyID string, at time.Time, usage Totals) error {
+// older than any period could reach. A corrupt file is moved aside to
+// <file>.corrupt-<timestamp> and recording starts from an empty ledger.
+func (s Store) Record(poolID, keyID string, at time.Time, usage Totals) error {
 	recordMu.Lock()
 	defer recordMu.Unlock()
-	lock, err := fileutil.LockFile(context.Background(), Path()+".lock")
+	path := s.Path()
+	lock, err := fileutil.LockFile(context.Background(), path+".lock")
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
 
-	ledger, err := Read()
+	ledger, err := s.Read()
+	if errors.Is(err, errCorrupt) {
+		aside := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+		if renameErr := os.Rename(path, aside); renameErr != nil {
+			return renameErr
+		}
+		logger.WarnCF("key-pools", "Key pool spend file was corrupt; moved it aside and started afresh",
+			map[string]any{"path": aside, "error": err.Error()})
+		err = nil
+	}
 	if err != nil {
 		return err
 	}
@@ -154,7 +185,7 @@ func Record(poolID, keyID string, at time.Time, usage Totals) error {
 	if err != nil {
 		return err
 	}
-	return fileutil.WriteFileAtomic(Path(), data, 0o600)
+	return fileutil.WriteFileAtomic(path, data, 0o600)
 }
 
 // prune drops days before oldest and keys left without days.
