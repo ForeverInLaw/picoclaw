@@ -333,6 +333,41 @@ func TestKeyPoolKeepsAKeyOutOfCreditOrRejectedOutUntilARecheckSucceeds(t *testin
 	}
 }
 
+func TestKeyPoolRecheckThatMeetsAnotherErrorLeavesTheNextRequestToRecheck(t *testing.T) {
+	cases := map[string]struct {
+		respond func(http.ResponseWriter)
+		wait    time.Duration // until the outcome stops blocking the key
+	}{
+		"server error": {anthropicStatus(http.StatusInternalServerError,
+			`{"type":"error","error":{"type":"api_error","message":"Internal server error"}}`), 0},
+		"rate limit": {rateLimitedFor("30"), 30 * time.Second},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			clock := useKeyPoolClock(t)
+			fake := newPoolAnthropic(t)
+			cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b")
+			provider, modelID := createProvider(t, &cfg.ModelList[0])
+			conversation := fake.conversationOn(t, provider, modelID, "sk-ant-a")
+
+			fake.fail("sk-ant-a", 1, downForms["credit balance 400"])
+			fake.keyFor(t, provider, modelID, conversation)
+			clock.advance(downRecheckInterval)
+			fake.fail("sk-ant-a", 1, tc.respond)
+			_, _ = provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hi"}}, nil, modelID,
+				map[string]any{"max_tokens": 64, ConversationIdentityOption: conversation})
+
+			clock.advance(tc.wait)
+			if got := fake.keyFor(t, provider, modelID, conversation); got != "sk-ant-a" {
+				t.Fatalf("after a recheck that met a %s the next request used %s, want a recheck of the key", name, got)
+			}
+			if state := KeyPoolAvailability(&cfg.KeyPools[0])[0].State; state != KeyAvailable {
+				t.Errorf("rechecked key state = %s, want available", state)
+			}
+		})
+	}
+}
+
 func TestKeyPoolRateLimitsAKeyOnlyForTheLimitedModel(t *testing.T) {
 	useKeyPoolClock(t)
 	fake := newPoolAnthropic(t)

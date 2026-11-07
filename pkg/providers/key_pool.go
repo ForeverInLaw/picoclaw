@@ -96,56 +96,70 @@ func (p *keyPool) serve(
 ) (*LLMResponse, error) {
 	conversation, _ := options[ConversationIdentityOption].(string)
 	for _, key := range p.rank(conversation) {
-		if !p.availability.claim(key.ref, model) {
+		ok, recheck := p.availability.claim(key.ref, model)
+		if !ok {
 			continue
 		}
-		if response, keyDown, err := p.attempt(ctx, key, model, call); !keyDown {
+		response, outcome, err := p.attempt(ctx, key, model, call)
+		if recheck && outcome != keyTakenDown {
+			// Only an out-of-credit or rejected answer keeps a down key down.
+			p.availability.releaseRecheck(key.ref)
+		}
+		if outcome == keyKept {
 			return response, err
 		}
 	}
 	return nil, p.unavailable(model)
 }
 
+// attemptOutcome is what one key's attempt means for the request.
+type attemptOutcome int
+
+const (
+	keyKept      attemptOutcome = iota // the key answered or the error belongs to the request
+	keyLimited                         // the key is rate limited for the model; move on
+	keyTakenDown                       // the key is out of credit or rejected; move on
+)
+
 // attempt runs call on key. One rate limit of at most shortRateLimitWait is
-// waited out on the same key to keep its prompt cache. keyDown reports that
-// the key was marked unavailable and the request should move on.
+// waited out on the same key to keep its prompt cache.
 func (p *keyPool) attempt(
 	ctx context.Context,
 	key pooledKey,
 	model string,
 	call func(*anthropicprovider.Provider) (*LLMResponse, error),
-) (response *LLMResponse, keyDown bool, err error) {
+) (response *LLMResponse, outcome attemptOutcome, err error) {
 	for waited := false; ; waited = true {
 		response, err = call(key.client)
 		if err == nil {
 			p.availability.served(key.ref)
 			p.recordSpend(key, model, response)
-			return response, false, nil
+			return response, keyKept, nil
 		}
 		failure := ClassifyError(err, "anthropic", model)
 		switch {
 		case failure == nil:
-			return nil, false, err
+			return nil, keyKept, err
 		case failure.Reason == FailoverBilling:
 			p.takeDown(key, KeyExhausted, err)
-			return nil, true, err
+			return nil, keyTakenDown, err
 		case failure.Reason == FailoverAuth &&
 			(failure.Status == http.StatusUnauthorized || failure.Status == http.StatusForbidden):
 			p.takeDown(key, KeyRejected, err)
-			return nil, true, err
+			return nil, keyTakenDown, err
 		case failure.Reason == FailoverRateLimit && failure.Status == http.StatusTooManyRequests:
 			pause := rateLimitPause(err, failure, p.availability.clock.Now())
 			if !waited && pause <= shortRateLimitWait {
 				if waitErr := p.availability.wait(ctx, pause); waitErr != nil {
-					return nil, false, waitErr
+					return nil, keyKept, waitErr
 				}
 				continue
 			}
 			p.availability.rateLimit(key.ref, model, pause)
 			p.logKeyDown(key, KeyRateLimited, model, err)
-			return nil, true, err
+			return nil, keyLimited, err
 		default:
-			return nil, false, err
+			return nil, keyKept, err
 		}
 	}
 }

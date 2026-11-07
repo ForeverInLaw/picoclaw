@@ -154,20 +154,32 @@ func (r *keyAvailabilityRegistry) blockedNow(ref keyRef, model string) (KeyState
 	return r.blocked(ref, model, r.clock.Now())
 }
 
-// claim reports whether the key may serve model now. A due recheck of a down
-// key goes to this one request: the next recheck moves an interval ahead, and
-// only a success makes the key available again.
-func (r *keyAvailabilityRegistry) claim(ref keyRef, model string) bool {
+// claim reports whether the key may serve model now, and whether this request
+// is the recheck of a down key. A due recheck goes to this one request: the
+// next recheck moves an interval ahead, and only a success makes the key
+// available again.
+func (r *keyAvailabilityRegistry) claim(ref keyRef, model string) (ok, recheck bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.clock.Now()
 	if state, _ := r.blocked(ref, model, now); state != KeyAvailable {
-		return false
+		return false, false
 	}
 	if health := r.keys[ref]; health != nil && health.down != "" {
 		health.recheck = now.Add(downRecheckInterval)
+		return true, true
 	}
-	return true
+	return true, false
+}
+
+// releaseRecheck hands a down key's recheck back after an outcome that says
+// nothing about its credit or credentials, so the next request rechecks it.
+func (r *keyAvailabilityRegistry) releaseRecheck(ref keyRef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if health := r.keys[ref]; health != nil && health.down != "" {
+		health.recheck = r.clock.Now()
+	}
 }
 
 // served records a success, which returns a rechecked key to service. Active
