@@ -175,7 +175,7 @@ func (h *Handler) handleCreateKeyPool(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Name string `json:"name"`
 	}
-	if !decodeJSONObject(r, &request) || !validDisplayName(&request.Name) {
+	if !decodeJSONObject(w, r, &request) || !validDisplayName(&request.Name) {
 		writeAPIError(w, http.StatusBadRequest, "Use a pool name between 1 and 200 characters.")
 		return
 	}
@@ -190,7 +190,7 @@ func (h *Handler) handlePatchKeyPool(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Name string `json:"name"`
 	}
-	if !decodeJSONObject(r, &request) || !validDisplayName(&request.Name) {
+	if !decodeJSONObject(w, r, &request) || !validDisplayName(&request.Name) {
 		writeAPIError(w, http.StatusBadRequest, "Use a pool name between 1 and 200 characters.")
 		return
 	}
@@ -229,7 +229,7 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 		Label  string `json:"label"`
 		APIKey string `json:"api_key"`
 	}
-	if !decodeJSONObject(r, &request) || !validDisplayName(&request.Label) {
+	if !decodeJSONObject(w, r, &request) || !validDisplayName(&request.Label) {
 		writeAPIError(w, http.StatusBadRequest, "Use a key label between 1 and 200 characters.")
 		return
 	}
@@ -373,7 +373,7 @@ func (h *Handler) handlePatchPoolKey(w http.ResponseWriter, r *http.Request) {
 		MonthlyBudgetUSD *float64 `json:"monthly_budget_usd"` // 0 clears the budget
 		ResetDay         *int     `json:"reset_day"`
 	}
-	if !decodeJSONObject(r, &patch) ||
+	if !decodeJSONObject(w, r, &patch) ||
 		(patch.Label == nil && patch.Enabled == nil && patch.MonthlyBudgetUSD == nil && patch.ResetDay == nil) {
 		writeAPIError(w, http.StatusBadRequest, "Provide a label, enabled state, monthly budget or reset day.")
 		return

@@ -61,7 +61,7 @@ func (h *Handler) handleGetModelRouting(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) handlePutModelRouting(w http.ResponseWriter, r *http.Request) {
 	var input modelRouting
-	if !decodeJSONObject(r, &input) {
+	if !decodeJSONObject(w, r, &input) {
 		http.Error(w, "invalid routing configuration", http.StatusBadRequest)
 		return
 	}

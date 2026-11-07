@@ -7,9 +7,10 @@ import (
 )
 
 // decodeJSONObject decodes a request body of exactly one JSON value, at most
-// 1 MiB, into into, refusing unknown fields.
-func decodeJSONObject(r *http.Request, into any) bool {
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+// 1 MiB in all, into into, refusing unknown fields. A larger body fails the
+// read, so nothing past the limit is ever ignored.
+func decodeJSONObject(w http.ResponseWriter, r *http.Request, into any) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(into) == nil && decoder.Decode(&struct{}{}) == io.EOF
 }

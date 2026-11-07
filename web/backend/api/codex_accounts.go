@@ -76,7 +76,7 @@ func (h *Handler) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 		Label   *string `json:"label"`
 		Enabled *bool   `json:"enabled"`
 	}
-	if !decodeJSONObject(r, &patch) || (patch.Label == nil && patch.Enabled == nil) {
+	if !decodeJSONObject(w, r, &patch) || (patch.Label == nil && patch.Enabled == nil) {
 		writeAPIError(w, http.StatusBadRequest, "Provide a label or enabled state.")
 		return
 	}
@@ -103,7 +103,7 @@ func (h *Handler) handleTestAccount(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Model string `json:"model"`
 	}
-	if !decodeJSONObject(r, &request) || strings.TrimSpace(request.Model) == "" || len(request.Model) > 200 ||
+	if !decodeJSONObject(w, r, &request) || strings.TrimSpace(request.Model) == "" || len(request.Model) > 200 ||
 		strings.ContainsAny(request.Model, "/ \t\n\r") {
 		writeAPIError(w, 400, "Enter the exact OpenAI model identifier.")
 		return
