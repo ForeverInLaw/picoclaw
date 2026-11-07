@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -206,5 +207,28 @@ func TestKeyPoolWithoutEnabledKeysLeavesTheCandidateUnavailable(t *testing.T) {
 	var unavailable *CandidateUnavailableError
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("CreateProviderFromConfig() error = %v, want an unavailable candidate for the Routing chain", err)
+	}
+}
+
+func TestKeyPoolModelCachesAndLogsUsageByKeyLabel(t *testing.T) {
+	fake := newAnswering(t)
+	cfg := keyPoolConfig(t, fake.URL, "sk-ant-secret-a", "sk-ant-secret-b")
+	cfg.ModelList[0].CacheTTL = "1h"
+	provider, modelID := createProvider(t, &cfg.ModelList[0])
+
+	var key string
+	logged := usageLog(t, func() { key = fake.keyFor(t, provider, modelID, "agent:main:telegram:direct:42") })
+
+	assertJSON(t, "cache_control", fake.only(t).body["cache_control"], `{"type":"ephemeral","ttl":"1h"}`)
+	wantLabel := map[string]string{"sk-ant-secret-a": "Org 1", "sk-ant-secret-b": "Org 2"}[key]
+	if len(logged) != 1 || logged[0]["key"] != wantLabel {
+		t.Fatalf("usage lines = %v, want one labelled %q", logged, wantLabel)
+	}
+	for _, line := range logged {
+		for _, value := range line {
+			if s, _ := value.(string); strings.Contains(s, "sk-ant-secret") {
+				t.Fatalf("usage line reveals a key secret: %v", line)
+			}
+		}
 	}
 }

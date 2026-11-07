@@ -256,12 +256,7 @@ func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfi
 		if cfg.APIKey == "" {
 			return nil, "", fmt.Errorf("api_key is required for anthropic protocol (model: %s)", cfg.Model)
 		}
-		return newClaudeProviderWithDelegate(anthropicprovider.NewProviderWithAPIKey(
-			cfg.APIKey,
-			cfg.APIBase,
-			cfg.Proxy,
-			time.Duration(cfg.RequestTimeout)*time.Second,
-		).WithPromptCacheTTL(cfg.CacheTTL)).withModelConfig(cfg), modelID, nil
+		return newClaudeProviderWithDelegate(newAnthropicAPIKeyClient(cfg.APIKey, cfg)).withModelConfig(cfg), modelID, nil
 
 	case "anthropic-messages":
 		// Anthropic Messages API with native format (HTTP-based, no SDK)
@@ -328,6 +323,17 @@ func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfi
 	default:
 		return nil, "", fmt.Errorf("unknown protocol %q in model %q", protocol, cfg.Model)
 	}
+}
+
+// newAnthropicAPIKeyClient builds a Messages API client for one API key with
+// the model's endpoint, timeout and prompt-cache settings.
+func newAnthropicAPIKeyClient(apiKey string, cfg *config.ModelConfig) *anthropicprovider.Provider {
+	return anthropicprovider.NewProviderWithAPIKey(
+		apiKey,
+		cfg.APIBase,
+		cfg.Proxy,
+		time.Duration(cfg.RequestTimeout)*time.Second,
+	).WithPromptCacheTTL(cfg.CacheTTL)
 }
 
 // getDefaultAPIBase returns the default API base URL for a given protocol.

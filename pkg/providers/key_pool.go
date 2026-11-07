@@ -6,10 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/logger"
 	anthropicprovider "github.com/sipeed/picoclaw/pkg/providers/anthropic"
 )
 
@@ -21,13 +19,13 @@ const ConversationIdentityOption = "conversation_identity"
 
 // keyPool serves a Key pool model with one Messages API client per enabled key.
 type keyPool struct {
-	id   string
 	keys []pooledKey
 }
 
+// pooledKey is one enabled key: its stable ID, which rendezvous hashing uses,
+// and a client that logs usage under the key's label.
 type pooledKey struct {
 	id     string
-	label  string
 	client *anthropicprovider.Provider
 }
 
@@ -45,14 +43,11 @@ func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig) (*keyPool, error) 
 	keys := make([]pooledKey, 0, len(enabled))
 	for _, key := range enabled {
 		keys = append(keys, pooledKey{
-			id:    key.ID,
-			label: key.Label,
-			client: anthropicprovider.NewProviderWithAPIKey(
-				key.APIKey, mc.APIBase, mc.Proxy, time.Duration(mc.RequestTimeout)*time.Second,
-			),
+			id:     key.ID,
+			client: newAnthropicAPIKeyClient(key.APIKey, mc).WithKeyLabel(key.Label),
 		})
 	}
-	return &keyPool{id: pool.ID, keys: keys}, nil
+	return &keyPool{keys: keys}, nil
 }
 
 // rank orders the keys for a conversation by rendezvous (highest random weight)
@@ -74,11 +69,5 @@ func (p *keyPool) serve(
 	call func(*anthropicprovider.Provider) (*LLMResponse, error),
 ) (*LLMResponse, error) {
 	conversation, _ := options[ConversationIdentityOption].(string)
-	key := p.rank(conversation)[0]
-	// Keys are identified by label in logs; the secret never leaves the client.
-	logger.DebugCF("provider.anthropic", "Key pool key selected", map[string]any{
-		"key_pool": p.id,
-		"key":      key.label,
-	})
-	return call(key.client)
+	return call(p.rank(conversation)[0].client)
 }
