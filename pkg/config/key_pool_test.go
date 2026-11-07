@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/credential"
 )
 
 const migratableAnthropicConfig = `{"version":3,"model_list":[
@@ -146,5 +149,78 @@ func TestAModelHoldsItsKeyPoolAsResolved(t *testing.T) {
 	}
 	if got := cfg.ModelList[0].KeyPool().Keys[0].APIKey; got != "sk-edited" {
 		t.Fatalf("pool after resolving again = %q, want the edited key", got)
+	}
+}
+
+func TestSeparatelyEncryptedEqualKeyListsMigrateIntoOneSealedPool(t *testing.T) {
+	t.Setenv("PICOCLAW_KEY_PASSPHRASE", "test-passphrase")
+	mustSetupSSHKey(t)
+	secrets := []string{"sk-ant-first-org", "sk-ant-second-org"}
+	// Each model's key list is encrypted on its own, so equal keys differ on disk.
+	sealedList := func() []string {
+		sealed := make([]string, len(secrets))
+		for i, secret := range secrets {
+			value, err := credential.Encrypt("test-passphrase", "", secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sealed[i] = value
+		}
+		return sealed
+	}
+	opusKeys, haikuKeys := sealedList(), sealedList()
+	if opusKeys[0] == haikuKeys[0] {
+		t.Fatal("setup: the two encryptions of one key are identical")
+	}
+	models := []ModelConfig{
+		{ModelName: "opus", Model: "anthropic/claude-opus-5-5", APIKeys: opusKeys},
+		{ModelName: "haiku", Model: "anthropic/claude-haiku-4-5", APIKeys: haikuKeys},
+	}
+
+	// Migration matches the lists by value but keeps the references themselves.
+	migrated := &Config{ModelList: slices.Clone(models)}
+	migrated.migrateAnthropicAPIKeysToPools(t.TempDir())
+	if len(migrated.KeyPools) != 1 {
+		t.Fatalf("migrated into %d key pools, want one shared by opus and haiku", len(migrated.KeyPools))
+	}
+	for i, key := range migrated.KeyPools[0].Keys {
+		if key.APIKey != opusKeys[i] {
+			t.Errorf("pool key %d = %q, want the first model's enc:// reference", i, key.APIKey)
+		}
+	}
+
+	// Loading and saving that configuration writes one pool and no plaintext.
+	document, err := json.Marshal(map[string]any{"version": 3, "model_list": models})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeConfig(t, string(document))
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if err = SaveConfig(path, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+	raw, doc := savedDocument(t, path)
+	if len(doc.KeyPools) != 1 {
+		t.Fatalf("saved %d key pools, want one", len(doc.KeyPools))
+	}
+	for i, secret := range secrets {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("saved config contains the plaintext secret %q", secret)
+		}
+		if key := doc.KeyPools[0].Keys[i].APIKey; !strings.HasPrefix(key, "enc://") {
+			t.Errorf("saved pool key %d = %q, want an enc:// credential", i, key)
+		}
+	}
+	reloaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, secret := range secrets {
+		if got := reloaded.KeyPools[0].Keys[i].APIKey; got != secret {
+			t.Errorf("reloaded pool key %d = %q, want %q", i, got, secret)
+		}
 	}
 }
