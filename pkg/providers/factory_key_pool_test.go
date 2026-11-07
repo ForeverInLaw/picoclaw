@@ -223,7 +223,7 @@ func TestKeyPoolModelCachesAndLogsUsageByKeyLabel(t *testing.T) {
 	assertJSON(t, "cache_control", fake.only(t).body["cache_control"], `{"type":"ephemeral","ttl":"1h"}`)
 	wantLabel := map[string]string{"sk-ant-secret-a": "Org 1", "sk-ant-secret-b": "Org 2"}[key]
 	if len(logged) != 1 || logged[0]["key"] != wantLabel {
-		t.Fatalf("usage lines = %v, want one labelled %q", logged, wantLabel)
+		t.Fatalf("usage lines = %v, want one labeled %q", logged, wantLabel)
 	}
 	for _, line := range logged {
 		for _, value := range line {
@@ -253,7 +253,7 @@ func TestMigratedSidecarKeysStayInTheSidecar(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	if err := config.SaveConfig(path, cfg); err != nil {
+	if err = config.SaveConfig(path, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
 
@@ -265,7 +265,8 @@ func TestMigratedSidecarKeysStayInTheSidecar(t *testing.T) {
 		t.Fatalf("config.json does not reference the migrated pool:\n%s", saved)
 	}
 	secrets, _ := os.ReadFile(sidecar)
-	if !strings.Contains(string(secrets), "sk-ant-sidecar-a") || !strings.Contains(string(secrets), "sk-ant-sidecar-b") {
+	if !strings.Contains(string(secrets), "sk-ant-sidecar-a") ||
+		!strings.Contains(string(secrets), "sk-ant-sidecar-b") {
 		t.Fatalf("sidecar lost the pool keys:\n%s", secrets)
 	}
 	reloaded, err := config.LoadConfig(path)
