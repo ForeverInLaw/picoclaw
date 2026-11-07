@@ -98,6 +98,13 @@ func (f *fakeAnthropicModels) lookupCount(model string) int {
 	return f.lookups[model]
 }
 
+// lookupCredentials returns the credentials each capability lookup carried.
+func (f *fakeAnthropicModels) lookupCredentials() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.lookupAuth)
+}
+
 // chatWithThinking sends one answer request for model with the given thinking_level.
 func chatWithThinking(t *testing.T, provider LLMProvider, model, level string) {
 	t.Helper()
@@ -185,7 +192,7 @@ func TestAnthropicCapabilitiesAreLookedUpOncePerModel(t *testing.T) {
 	if got := fake.lookupCount("claude-opus-5-5"); got != 1 {
 		t.Errorf("capability lookups = %d, want 1", got)
 	}
-	if got := fake.lookupAuth[0]; got != "sk-ant-test" {
+	if got := fake.lookupCredentials(); !slices.Equal(got, []string{"sk-ant-test"}) {
 		t.Errorf("capability lookup credentials = %q, want the model's API key", got)
 	}
 }
