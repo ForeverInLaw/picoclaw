@@ -251,7 +251,7 @@ func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfi
 			cfg.APIBase,
 			cfg.Proxy,
 			time.Duration(cfg.RequestTimeout)*time.Second,
-		)).withModelConfig(cfg), modelID, nil
+		).WithPromptCacheTTL(cfg.CacheTTL)).withModelConfig(cfg), modelID, nil
 
 	case "anthropic-messages":
 		// Anthropic Messages API with native format (HTTP-based, no SDK)

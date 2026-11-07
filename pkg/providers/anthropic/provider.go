@@ -40,6 +40,8 @@ type Provider struct {
 	// requestTimeout bounds non-streaming requests; streams rely on the
 	// caller's context and inactivity tracking instead.
 	requestTimeout time.Duration
+	// promptCache is nil for setup-token providers, whose requests stay as they were.
+	promptCache *promptCache
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -83,7 +85,17 @@ func NewProviderWithAPIKey(apiKey, apiBase, proxy string, requestTimeout time.Du
 		client:         &client,
 		baseURL:        baseURL,
 		requestTimeout: requestTimeout,
+		promptCache:    &promptCache{},
 	}
+}
+
+// WithPromptCacheTTL sets the lifetime of both prompt-cache points: "1h", or
+// "5m"/"" for Anthropic's 5-minute default. Providers that do not cache ignore it.
+func (p *Provider) WithPromptCacheTTL(ttl string) *Provider {
+	if p.promptCache != nil {
+		p.promptCache.ttl = anthropic.CacheControlEphemeralTTL(ttl)
+	}
+	return p
 }
 
 func NewProviderWithClient(client *anthropic.Client) *Provider {
@@ -133,7 +145,7 @@ func (p *Provider) Chat(
 		)
 	}
 
-	params, err := buildParams(messages, tools, model, options)
+	params, err := p.requestParams(messages, tools, model, options)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +186,7 @@ func (p *Provider) ChatStream(
 		)
 	}
 
-	params, err := buildParams(messages, tools, model, options)
+	params, err := p.requestParams(messages, tools, model, options)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +251,22 @@ func (p *Provider) GetDefaultModel() string {
 
 func (p *Provider) BaseURL() string {
 	return p.baseURL
+}
+
+// requestParams builds the Messages API request and, for providers that cache,
+// places the prompt-cache points on it.
+func (p *Provider) requestParams(
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+) (anthropic.MessageNewParams, error) {
+	params, err := buildParams(messages, tools, model, options)
+	if err != nil || p.promptCache == nil {
+		return params, err
+	}
+	p.promptCache.apply(&params)
+	return params, nil
 }
 
 func buildParams(
