@@ -604,19 +604,27 @@ func TestRunFallbackUsesConfiguredProviderEndpointAndCredentials(t *testing.T) {
 						Model string `json:"model"`
 					}
 					_ = json.NewDecoder(r.Body).Decode(&body)
-					if body.Model != "claude-backup" || r.Header.Get("Authorization") != "Bearer backup-key" {
-						t.Errorf("fallback model/auth=%s/%s", body.Model, r.Header.Get("Authorization"))
+					// anthropic/ API keys speak the native Messages API; the others are OpenAI-compatible.
+					native := protocol == "anthropic"
+					auth := r.Header.Get("Authorization")
+					if native {
+						auth = "Bearer " + r.Header.Get("X-Api-Key")
+					}
+					if body.Model != "claude-backup" || auth != "Bearer backup-key" {
+						t.Errorf("fallback model/auth=%s/%s", body.Model, auth)
 					}
 					if n == 1 {
 						w.WriteHeader(http.StatusServiceUnavailable)
 						_, _ = w.Write([]byte(`{"error":{"message":"temporary unavailable"}}`))
 						return
 					}
-					_, _ = w.Write(
-						[]byte(
-							`{"choices":[{"message":{"role":"assistant","content":"cross-provider recovered"},"finish_reason":"stop"}]}`,
-						),
-					)
+					reply := `{"choices":[{"message":{"role":"assistant","content":"cross-provider recovered"},"finish_reason":"stop"}]}`
+					if native {
+						w.Header().Set("Content-Type", "application/json")
+						reply = `{"type":"message","role":"assistant","stop_reason":"end_turn",` +
+							`"content":[{"type":"text","text":"cross-provider recovered"}],"usage":{"input_tokens":1,"output_tokens":1}}`
+					}
+					_, _ = w.Write([]byte(reply))
 				}))
 				defer backup.Close()
 				initial, cfg, _, _, cleanup := newTestAgentLoop(t)
@@ -804,7 +812,7 @@ func TestRunDuplicateFallbackAliasPreservesSelectedProviderModelAndRetryClient(t
 		cfg.Agents.Defaults.ModelFallbacks = []string{"duplicated-backup"}
 		cfg.ModelList = []config.ModelConfig{
 			{ModelName: "primary", Model: "openai/gpt-primary", APIKey: "primary-key", APIBase: primary.URL},
-			{ModelName: "duplicated-backup", Model: "anthropic/claude-first", APIKey: "first-key", APIBase: first.URL},
+			{ModelName: "duplicated-backup", Model: "litellm/claude-first", APIKey: "first-key", APIBase: first.URL},
 			{ModelName: "duplicated-backup", Model: "openai/gpt-second", APIKey: "second-key", APIBase: second.URL},
 		}
 		provider, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])
@@ -842,7 +850,7 @@ func TestRunDuplicateFallbackAliasPreservesSelectedProviderModelAndRetryClient(t
 }
 
 func TestRunConcreteModelSwitchKeepsExactReferenceWithinDuplicateAlias(t *testing.T) {
-	for _, reference := range []string{"anthropic/claude-first", "claude-first"} {
+	for _, reference := range []string{"litellm/claude-first", "claude-first"} {
 		t.Run(reference, func(t *testing.T) {
 			var firstCalls, wrongCalls atomic.Int32
 			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -876,7 +884,7 @@ func TestRunConcreteModelSwitchKeepsExactReferenceWithinDuplicateAlias(t *testin
 			cfg.Agents.Defaults.Model = "initial"
 			cfg.ModelList = []config.ModelConfig{
 				{ModelName: "initial", Model: "openai/initial", APIBase: wrong.URL, APIKey: "initial-key"},
-				{ModelName: "duplicated", Model: "anthropic/claude-first", APIBase: first.URL, APIKey: "first-key"},
+				{ModelName: "duplicated", Model: "litellm/claude-first", APIBase: first.URL, APIKey: "first-key"},
 				{ModelName: "duplicated", Model: "openai/second", APIBase: wrong.URL, APIKey: "wrong-key"},
 			}
 			p, _, err := providers.CreateProviderFromConfig(&cfg.ModelList[0])

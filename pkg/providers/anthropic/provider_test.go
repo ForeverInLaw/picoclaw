@@ -22,7 +22,7 @@ func TestBuildParams_BasicMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildParams() error: %v", err)
 	}
-	if string(params.Model) != "claude-sonnet-4-6" {
+	if params.Model != "claude-sonnet-4-6" {
 		t.Errorf("Model = %q, want %q", params.Model, "claude-sonnet-4-6")
 	}
 	if params.MaxTokens != 1024 {
@@ -224,6 +224,9 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 
 		var reqBody map[string]any
 		json.NewDecoder(r.Body).Decode(&reqBody)
+		if cacheControl, ok := reqBody["cache_control"]; ok {
+			t.Errorf("setup-token request carried top-level cache_control %v, want none", cacheControl)
+		}
 
 		resp := map[string]any{
 			"id":          "msg_test",

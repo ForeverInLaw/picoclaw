@@ -45,7 +45,13 @@ func (c *Config) EnsureModelIDs() {
 }
 
 // ConfiguredModels removes runtime-only key expansion before model editing.
-func (c *Config) ConfiguredModels() []ModelConfig { return cloneModels(c.modelsForSave()) }
+func (c *Config) ConfiguredModels() []ModelConfig {
+	models := cloneModels(c.modelsForSave())
+	for i := range models {
+		models[i].keyPool = c.keyPoolByID(models[i].KeyPoolID)
+	}
+	return models
+}
 
 // ValidateRoutingReferences rejects dangling explicit entry references. Legacy
 // aliases retain their existing provider/model resolution and round-robin rules.

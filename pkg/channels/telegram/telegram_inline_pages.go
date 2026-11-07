@@ -219,7 +219,7 @@ func (c *TelegramChannel) editInlinePage(
 		markup = &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
 	}
 	if pages.PhotoFileID != "" {
-		_, err := c.bot.EditMessageMedia(ctx, &telego.EditMessageMediaParams{
+		_, err = c.bot.EditMessageMedia(ctx, &telego.EditMessageMediaParams{
 			InlineMessageID: inlineMessageID, ReplyMarkup: markup,
 			Media: &telego.InputMediaPhoto{
 				Type: "photo", Media: telego.InputFile{FileID: pages.PhotoFileID}, Caption: content,

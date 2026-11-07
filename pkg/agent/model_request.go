@@ -32,7 +32,7 @@ func prepareCandidateRequest(
 		thinking = parseThinkingLevel(configured)
 	}
 	delete(candidateOptions, "thinking_level")
-	if thinking != ThinkingOff {
+	if thinking != ThinkingDefault {
 		if capable, ok := client.(providers.ThinkingCapable); ok && capable.SupportsThinking() {
 			candidateOptions["thinking_level"] = string(thinking)
 		}

@@ -185,6 +185,46 @@
       "callbackLabel": "完整回调网址",
       "complete": "连接账户",
       "success": "账户已连接。请在模型设置中选择此账户。"
+    },
+    "keyPools": {
+      "title": "Anthropic 密钥池",
+      "description": "每个密钥池保存来自不同 Anthropic 组织的 API 密钥。使用密钥池的模型会让每个对话固定在一个可用密钥上。",
+      "loading": "正在加载密钥池…",
+      "poolName": "密钥池名称",
+      "rename": "重命名",
+      "createPool": "创建密钥池",
+      "deletePool": "删除密钥池",
+      "deletePoolTitle": "删除 {{name}}？",
+      "deletePoolDescription": "这会删除该密钥池及其保存的密钥。",
+      "models": "模型",
+      "keyLabel": "密钥标签",
+      "apiKey": "Anthropic API 密钥",
+      "addKey": "添加密钥",
+      "checkingKey": "正在检查密钥…",
+      "enable": "启用",
+      "disable": "禁用",
+      "returnToService": "恢复使用",
+      "removeKey": "移除密钥",
+      "removeKeyTitle": "移除 {{name}}？",
+      "removeKeyDescription": "该密钥上的对话将转移到密钥池中的其他密钥。",
+      "nextCheck": "下次检查：{{time}}",
+      "rateLimitedUntil": "{{model}} 限流至 {{time}}",
+      "budget": "预算",
+      "monthlyBudget": "每月预算（美元）",
+      "resetDay": "重置日",
+      "spend": "≈ {{amount}}",
+      "spendOfBudget": "≈ {{amount}} / {{budget}}",
+      "unpricedTokens": "{{tokens}} 个未计价 token",
+      "cacheHitRate": "缓存命中率 {{rate}}",
+      "since": "自 {{date}} 起",
+      "state": {
+        "available": "可用",
+        "rate_limited": "已限流",
+        "exhausted": "额度不足",
+        "rejected": "被 Anthropic 拒绝",
+        "disabled": "已禁用",
+        "unknown": "网关未运行"
+      }
     }
   },
   "models": {
@@ -249,7 +289,7 @@
       "rpm": "速率限制（RPM）",
       "rpmHint": "每分钟最大请求数，0 表示不限制。",
       "thinkingLevel": "思考级别",
-      "thinkingLevelHint": "扩展思考预算：off、low、medium、high、xhigh、adaptive。",
+      "thinkingLevelHint": "思考强度：off、low、medium、high、xhigh、max、adaptive。",
       "maxTokensField": "Max Tokens 字段名",
       "maxTokensFieldHint": "覆盖请求中 max_tokens 的字段名，例如 max_completion_tokens。",
       "inactivityTimeout": "模型无进展等待上限（秒）",
@@ -270,7 +310,17 @@
       "testing": "正在等待当前模型回复…",
       "valid": "配置有效。未发送模型请求。",
       "success": "模型已成功回复（{{latency}} 毫秒）。",
-      "canceled": "模型测试已取消。"
+      "canceled": "模型测试已取消。",
+      "keysReplied": "{{total}} 个密钥中有 {{replied}} 个已回复。",
+      "keySuccess": "已回复（{{latency}} 毫秒）"
+    },
+    "keyPool": {
+      "credentials": "凭据",
+      "pool": "密钥池：{{name}}",
+      "model": "模型",
+      "selectModel": "选择模型",
+      "loadingModels": "正在从 Anthropic 加载模型…",
+      "apiKeyRequired": "停止使用密钥池前，请输入 API 密钥。"
     }
   },
   "channels": {

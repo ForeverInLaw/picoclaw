@@ -51,3 +51,31 @@ test("model validation and inference are explicit distinct actions with selected
     await new Promise((resolve) => server.close(resolve))
   }
 })
+
+test("pool-backed models list Anthropic's models through the exact pool", async () => {
+  const { getPoolModels } = await import("../src/api/key-pools.ts")
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (path, options) => {
+    requests.push({ path, method: options?.method })
+    return Response.json({
+      models: [{ id: "claude-opus-5-5", display_name: "Claude Opus 5.5" }],
+    })
+  }
+  try {
+    assert.deepEqual(await getPoolModels("orgs/1"), [
+      { id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
+    ])
+    assert.deepEqual(requests, [
+      { path: "/api/key-pools/orgs%2F1/models", method: "GET" },
+    ])
+    globalThis.fetch = async () =>
+      Response.json(
+        { status: "error", message: "Anthropic did not list models." },
+        { status: 502 },
+      )
+    await assert.rejects(getPoolModels("orgs"), /did not list models/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

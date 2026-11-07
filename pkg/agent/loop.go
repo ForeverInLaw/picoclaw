@@ -1195,7 +1195,7 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	registry := al.GetRegistry()
 	for _, name := range []string{"send_file", "generate_image"} {
 		registry.ForEachTool(name, func(t tools.Tool) {
-			if producer, ok := t.(interface{ SetMediaStore(media.MediaStore) }); ok {
+			if producer, ok := t.(interface{ SetMediaStore(store media.MediaStore) }); ok {
 				producer.SetMediaStore(s)
 			}
 		})
@@ -1541,7 +1541,8 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		DisableToolFeedback: inlineMode,
 		ConversationContext: ConversationContext{
 			Inline: inlineMode,
-			Guest:  inlineMode && isTelegramMessage(msg) && strings.EqualFold(msg.Metadata[telegramGuestMetadataKey], "true"),
+			Guest: inlineMode && isTelegramMessage(msg) &&
+				strings.EqualFold(msg.Metadata[telegramGuestMetadataKey], "true"),
 		},
 	}
 	if inlineMode {
@@ -2208,6 +2209,8 @@ turnLoop:
 			"max_tokens":       ts.agent.MaxTokens,
 			"temperature":      ts.agent.Temperature,
 			"prompt_cache_key": ts.agent.ID,
+
+			providers.ConversationIdentityOption: ts.conversationIdentity,
 		}
 
 		llmModel := activeModel
@@ -2239,6 +2242,12 @@ turnLoop:
 				return al.abortTurn(ts)
 			}
 		}
+		// Hooks may rebuild Options; the conversation identity binds the turn to
+		// its Key pool key, so it is not theirs to change.
+		if llmOpts == nil {
+			llmOpts = map[string]any{}
+		}
+		llmOpts[providers.ConversationIdentityOption] = ts.conversationIdentity
 
 		al.emitEvent(
 			EventKindLLMRequest,
@@ -3725,8 +3734,8 @@ func (al *AgentLoop) summarizeSession(
 		part1 := validMessages[:mid]
 		part2 := validMessages[mid:]
 
-		s1, _ := al.summarizeBatch(ctx, agent, part1, "")
-		s2, _ := al.summarizeBatch(ctx, agent, part2, "")
+		s1, _ := al.summarizeBatch(ctx, agent, sessionKey, part1, "")
+		s2, _ := al.summarizeBatch(ctx, agent, sessionKey, part2, "")
 
 		mergePrompt := fmt.Sprintf(
 			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
@@ -3734,14 +3743,14 @@ func (al *AgentLoop) summarizeSession(
 			s2,
 		)
 
-		resp, err := al.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
+		resp, err := al.retryLLMCall(ctx, agent, sessionKey, mergePrompt, llmMaxRetries)
 		if err == nil && resp.Content != "" {
 			finalSummary = resp.Content
 		} else {
 			finalSummary = s1 + " " + s2
 		}
 	} else {
-		finalSummary, _ = al.summarizeBatch(ctx, agent, validMessages, summary)
+		finalSummary, _ = al.summarizeBatch(ctx, agent, sessionKey, validMessages, summary)
 	}
 
 	if ctx.Err() != nil {
@@ -3798,6 +3807,7 @@ func (al *AgentLoop) findNearestUserMessage(messages []providers.Message, mid in
 func (al *AgentLoop) retryLLMCall(
 	ctx context.Context,
 	agent *AgentInstance,
+	conversation string,
 	prompt string,
 	maxRetries int,
 ) (*providers.LLMResponse, error) {
@@ -3823,6 +3833,8 @@ func (al *AgentLoop) retryLLMCall(
 					"max_tokens":       agent.MaxTokens,
 					"temperature":      llmTemperature,
 					"prompt_cache_key": agent.ID,
+
+					providers.ConversationIdentityOption: conversation,
 				},
 			)
 		}()
@@ -3847,6 +3859,7 @@ func (al *AgentLoop) retryLLMCall(
 func (al *AgentLoop) summarizeBatch(
 	ctx context.Context,
 	agent *AgentInstance,
+	sessionKey string,
 	batch []providers.Message,
 	existingSummary string,
 ) (string, error) {
@@ -3872,7 +3885,7 @@ func (al *AgentLoop) summarizeBatch(
 	}
 	prompt := sb.String()
 
-	response, err := al.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
+	response, err := al.retryLLMCall(ctx, agent, sessionKey, prompt, llmMaxRetries)
 	if err == nil && response.Content != "" {
 		return strings.TrimSpace(response.Content), nil
 	}

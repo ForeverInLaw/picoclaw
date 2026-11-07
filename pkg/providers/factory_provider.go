@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -233,30 +234,11 @@ func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfi
 		).withModelConfig(cfg), modelID, nil
 
 	case "anthropic":
-		if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
-			// Use OAuth credentials from auth store
-			provider, err := createClaudeAuthProvider(ctx)
-			if err != nil {
-				return nil, "", err
-			}
-			return provider, modelID, nil
+		provider, err := createAnthropicProvider(ctx, cfg)
+		if err != nil {
+			return nil, "", err
 		}
-		// Use API key with HTTP API
-		apiBase := cfg.APIBase
-		if apiBase == "" {
-			apiBase = "https://api.anthropic.com/v1"
-		}
-		if cfg.APIKey == "" {
-			return nil, "", fmt.Errorf("api_key is required for anthropic protocol (model: %s)", cfg.Model)
-		}
-		return NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
-			cfg.APIKey,
-			apiBase,
-			cfg.Proxy,
-			cfg.MaxTokensField,
-			cfg.RequestTimeout,
-			cfg.ExtraBody,
-		).withModelConfig(cfg), modelID, nil
+		return provider, modelID, nil
 
 	case "anthropic-messages":
 		// Anthropic Messages API with native format (HTTP-based, no SDK)
@@ -323,6 +305,40 @@ func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfi
 	default:
 		return nil, "", fmt.Errorf("unknown protocol %q in model %q", protocol, cfg.Model)
 	}
+}
+
+// createAnthropicProvider serves anthropic/ models from the setup-token login,
+// a Key pool or a single API key. API keys use the native Messages API, which
+// accepts cache_control (ADR 0004).
+func createAnthropicProvider(ctx context.Context, cfg *config.ModelConfig) (LLMProvider, error) {
+	if !cfg.IsAnthropicAPIKeyModel() {
+		return createClaudeAuthProvider(ctx)
+	}
+	if pool := cfg.KeyPool(); pool != nil {
+		keys, err := newKeyPool(pool, cfg, keyPools)
+		if err != nil {
+			return nil, err
+		}
+		return newClaudeProviderWithKeyPool(keys).withModelConfig(cfg), nil
+	}
+	if cfg.KeyPoolID != "" {
+		return nil, fmt.Errorf("key pool %q of model %s is not configured", cfg.KeyPoolID, cfg.ModelName)
+	}
+	if cfg.APIKey == "" {
+		return nil, fmt.Errorf("api_key is required for anthropic protocol (model: %s)", cfg.Model)
+	}
+	return newClaudeProviderWithDelegate(newAnthropicAPIKeyClient(cfg.APIKey, cfg)).withModelConfig(cfg), nil
+}
+
+// newAnthropicAPIKeyClient builds a Messages API client for one API key with
+// the model's endpoint, timeout and prompt-cache settings.
+func newAnthropicAPIKeyClient(apiKey string, cfg *config.ModelConfig) *anthropicprovider.Provider {
+	return anthropicprovider.NewProviderWithAPIKey(
+		apiKey,
+		cfg.APIBase,
+		cfg.Proxy,
+		time.Duration(cfg.RequestTimeout)*time.Second,
+	).WithPromptCacheTTL(cfg.CacheTTL)
 }
 
 // getDefaultAPIBase returns the default API base URL for a given protocol.

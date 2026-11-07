@@ -4,11 +4,22 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	anthropicprovider "github.com/sipeed/picoclaw/pkg/providers/anthropic"
 )
 
 type ClaudeProvider struct {
-	delegate *anthropicprovider.Provider
+	delegate  *anthropicprovider.Provider // single credential; nil when pool is set
+	pool      *keyPool                    // Key pool model: the delegate follows the conversation
+	configKey string
+}
+
+// ModelConfigKey lets agent resolution retain the exact factory selection.
+func (p *ClaudeProvider) ModelConfigKey() string { return p.configKey }
+
+func (p *ClaudeProvider) withModelConfig(mc *config.ModelConfig) *ClaudeProvider {
+	p.configKey = ModelConfigKey(mc)
+	return p
 }
 
 func NewClaudeProvider(token string) *ClaudeProvider {
@@ -41,14 +52,30 @@ func newClaudeProviderWithDelegate(delegate *anthropicprovider.Provider) *Claude
 	return &ClaudeProvider{delegate: delegate}
 }
 
+func newClaudeProviderWithKeyPool(pool *keyPool) *ClaudeProvider {
+	return &ClaudeProvider{pool: pool}
+}
+
+// serve runs one request on the single delegate or on the pool key bound to
+// the request's conversation.
+func (p *ClaudeProvider) serve(
+	ctx context.Context,
+	model string,
+	options map[string]any,
+	call func(*anthropicprovider.Provider) (*LLMResponse, error),
+) (*LLMResponse, error) {
+	if p.pool != nil {
+		return p.pool.serve(ctx, model, options, call)
+	}
+	return call(p.delegate)
+}
+
 func (p *ClaudeProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
-	resp, err := p.delegate.Chat(ctx, messages, tools, model, options)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return p.serve(ctx, model, options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
+		return delegate.Chat(ctx, messages, tools, model, options)
+	})
 }
 
 func (p *ClaudeProvider) ChatStream(
@@ -59,13 +86,19 @@ func (p *ClaudeProvider) ChatStream(
 	options map[string]any,
 	onUpdate func(content string),
 ) (*LLMResponse, error) {
-	if streamer, ok := any(p.delegate).(StreamingLLMProvider); ok {
-		return streamer.ChatStream(ctx, messages, tools, model, options, onUpdate)
-	}
-	return p.Chat(ctx, messages, tools, model, options)
+	return p.serve(ctx, model, options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
+		return delegate.ChatStream(ctx, messages, tools, model, options, onUpdate)
+	})
 }
 
+// SupportsThinking implements ThinkingCapable, so the agent sends thinking_level;
+// every Anthropic delegate, single or pool key, maps it.
+func (p *ClaudeProvider) SupportsThinking() bool { return true }
+
 func (p *ClaudeProvider) GetDefaultModel() string {
+	if p.pool != nil {
+		return p.pool.keys[0].client.GetDefaultModel()
+	}
 	return p.delegate.GetDefaultModel()
 }
 

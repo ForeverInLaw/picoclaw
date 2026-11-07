@@ -569,7 +569,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 
 > Run `picoclaw auth login --provider anthropic` to paste your API token.
 
-For direct Anthropic API access or custom endpoints that only support Anthropic's native message format:
+For third-party proxies and custom endpoints that implement Anthropic's native message format:
 
 ```json
 {
@@ -580,7 +580,7 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 }
 ```
 
-> Use `anthropic-messages` when the endpoint requires Anthropic's native `/v1/messages` format instead of OpenAI-compatible `/v1/chat/completions`.
+> Both `anthropic` and `anthropic-messages` use Anthropic's native Messages API (`/v1/messages`). Prefer `anthropic` for Anthropic itself and `anthropic-messages` for third-party proxies.
 
 </details>
 

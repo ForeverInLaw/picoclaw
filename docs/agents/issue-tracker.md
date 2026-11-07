@@ -1,19 +1,19 @@
-# Issue tracker: Linear
+# Issue tracker: itsaplan
 
-Workspace: ivoxygen
-Team: Ivoxygen (IVO)
-Team ID: 149c7831-e646-4972-8e83-4a9c24a652a5
-Project: Picoclaw (P-IVO-8)
-Project ID: daa0bab5-de3a-4ae8-a720-3780a35bb50d
-Project URL: https://linear.app/ivoxygen/project/picoclaw-57e5d325c7b7
+Team: Redstone (`redstone`)
+Project: Korobka (`KOROBKA`, ref `redstone.KOROBKA`)
 
-Use the connected Linear MCP tools for ticket operations.
+Use the connected itsaplan MCP tools for ticket operations.
 
-- Publish tickets and specs as issues in this team and project.
+- Publish tickets and specs as issues in the KOROBKA project.
 - Scope issue searches to this project.
+- Fetch a referenced ticket by its identifier (`KOROBKA-42`) with `get_issue_by_number`.
 - Read issue descriptions, labels, status, and comments before acting.
-- Resolve statuses and labels from the team before applying them.
+- Resolve columns, issue types, and labels from `get_project`; pick columns by `stateType`, never by name.
 - Preserve existing status and assignment unless the task requires a change.
-- Fetch referenced tickets by their Linear identifier or URL.
 - Check for existing tickets before creating duplicates.
-- Use native parent and blocking relationships where appropriate.
+- Use native subtasks (`parentId`) and issue links for blocking relationships.
+
+Tickets created before the move were imported from Linear. Branch names and older
+commits still cite `IVO-*` identifiers; each imported description starts with
+`Перенесено из Linear: IVO-N`, so search KOROBKA for that marker to find the ticket.

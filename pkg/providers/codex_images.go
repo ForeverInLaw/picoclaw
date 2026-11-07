@@ -42,7 +42,12 @@ func NewCodexImageClient(accountID string, maxBytes int) *CodexImageClient {
 	}
 }
 
-func (c *CodexImageClient) Generate(ctx context.Context, prompt string, images [][]byte, transparent bool) ([]byte, error) {
+func (c *CodexImageClient) Generate(
+	ctx context.Context,
+	prompt string,
+	images [][]byte,
+	transparent bool,
+) ([]byte, error) {
 	if strings.TrimSpace(prompt) == "" || len(images) > MaxCodexImageInputs {
 		return nil, fmt.Errorf("provide a prompt and at most %d reference images", MaxCodexImageInputs)
 	}
@@ -54,7 +59,9 @@ func (c *CodexImageClient) Generate(ctx context.Context, prompt string, images [
 		return nil, fmt.Errorf("configured Codex image account is unavailable")
 	}
 	if account.Resource != "" {
-		return nil, fmt.Errorf("this connection uses the public ChatGPT API; native images require a CLI Codex connection: picoclaw auth login --provider openai --device-code")
+		return nil, fmt.Errorf(
+			"this connection uses the public ChatGPT API; native images require a CLI Codex connection: picoclaw auth login --provider openai --device-code",
+		)
 	}
 	credential, err := auth.AccountCredentialContext(ctx, c.accountID)
 	if err != nil || credential == nil || credential.AccessToken == "" {
@@ -78,7 +85,8 @@ func (c *CodexImageClient) Generate(ctx context.Context, prompt string, images [
 	for _, data := range images {
 		total += len(data)
 		mime := http.DetectContentType(data)
-		if total > MaxCodexImageBytes || len(data) == 0 || (mime != "image/png" && mime != "image/jpeg" && mime != "image/webp") {
+		if total > MaxCodexImageBytes || len(data) == 0 ||
+			(mime != "image/png" && mime != "image/jpeg" && mime != "image/webp") {
 			return nil, fmt.Errorf("reference images must be PNG, JPEG or WebP and total at most 32 MiB")
 		}
 		request.Images = append(request.Images, imageReference{
@@ -100,8 +108,8 @@ func (c *CodexImageClient) Generate(ctx context.Context, prompt string, images [
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+credential.AccessToken)
-	req.Header.Set("originator", "codex_cli_rs")
-	req.Header.Set("x-codex-image-turn-id", uuid.NewString())
+	req.Header.Set("Originator", "codex_cli_rs")
+	req.Header.Set("X-Codex-Image-Turn-Id", uuid.NewString())
 	if credential.AccountID != "" {
 		req.Header.Set("Chatgpt-Account-Id", credential.AccountID)
 	}

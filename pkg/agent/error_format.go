@@ -71,11 +71,9 @@ func safeErrorText(cfg *config.Config, err error) string {
 			text = guidance
 		}
 	}
-	for _, mc := range cfg.ModelList {
-		for _, key := range append([]string{mc.APIKey}, mc.APIKeys...) {
-			if key != "" {
-				text = strings.ReplaceAll(text, key, "[REDACTED]")
-			}
+	for _, key := range cfg.ProviderCredentials() {
+		if key != "" {
+			text = strings.ReplaceAll(text, key, "[REDACTED]")
 		}
 	}
 	return cfg.FilterSensitiveData(text)

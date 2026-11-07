@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -62,13 +61,7 @@ func (h *Handler) handleGetModelRouting(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) handlePutModelRouting(w http.ResponseWriter, r *http.Request) {
 	var input modelRouting
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		http.Error(w, "invalid routing configuration", 400)
-		return
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
+	if !decodeJSONObject(w, r, &input) {
 		http.Error(w, "invalid routing configuration", http.StatusBadRequest)
 		return
 	}
@@ -159,6 +152,9 @@ func saveValidatedModels(path string, cfg *config.Config) error {
 		return err
 	}
 	if err := cfg.ValidateRoutingReferences(); err != nil {
+		return err
+	}
+	if err := cfg.ResolveKeyPools(); err != nil {
 		return err
 	}
 	for _, m := range cfg.ModelList {

@@ -1,9 +1,9 @@
-# Selected upstream sync: IVO-94
+# Selected upstream sync: KOROBKA-13
 
 This sync adapts the selected improvements from upstream
 `bbf6893ca7afad27f1d00a0f5a45982a549c6ed6` to this fork's existing boundaries.
 The baseline is `dev` at `38b16eda57c263bc0827c6c9ebe22902212b867b`; the feature
-branch is `feat/ivo-94-upstream-sync`. The [master specification](https://linear.app/ivoxygen/issue/IVO-94)
+branch is `feat/ivo-94-upstream-sync`. The master specification (KOROBKA-13)
 defines the finite scope. It adds no new channel/provider product direction or
 second delegation runtime. Existing Telegram replies, inline privacy, ASR/Riva,
 spawn/subagent, web search, archives and Saved facts remain preservation contracts.
@@ -15,24 +15,24 @@ duplicating each ticket's complete file inventory.
 
 | Issue | Result | Main affected modules/files |
 | --- | --- | --- |
-| [IVO-95](https://linear.app/ivoxygen/issue/IVO-95) | v3 channel/config migration and strict diagnostics | `pkg/config/channel_list.go`, `channel_security.go`, `diagnostics.go`; channel/routing/chatmemory adapters; launcher API/TUI/forms |
-| [IVO-96](https://linear.app/ivoxygen/issue/IVO-96) | Telegram location with text/topic/reply association | `pkg/channels/telegram/telegram_batching.go` |
-| [IVO-97](https://linear.app/ivoxygen/issue/IVO-97) | Benchmark-network SSRF exclusion | `pkg/tools/web.go` |
-| [IVO-98](https://linear.app/ivoxygen/issue/IVO-98) | Scheme-less URL handling in Shell workspace guard | `pkg/tools/shell.go` |
-| [IVO-91](https://linear.app/ivoxygen/issue/IVO-91) | Empty MCP arguments become an object | `pkg/mcp/manager.go` |
-| [IVO-99](https://linear.app/ivoxygen/issue/IVO-99) | Durable, authorized large MCP text artifacts | `pkg/tools/artifacts.go`, `mcp_tool.go`, `filesystem.go`; agent request scopes and atomic writer |
-| [IVO-100](https://linear.app/ivoxygen/issue/IVO-100) | Explicit Linux Shell/stdio MCP isolation | `pkg/isolation/`; Shell/process helpers and MCP manager |
-| [IVO-101](https://linear.app/ivoxygen/issue/IVO-101) | Exact fallback identity and safe actionable errors | `pkg/providers/config_identity.go`, factory/fallback/classifier/guidance; `pkg/agent/model_resolution.go`, `error_format.go` |
-| [IVO-102](https://linear.app/ivoxygen/issue/IVO-102) | Complete prepared-request context budget | `pkg/agent/context_budget.go`, `context.go`, `loop.go`; tokenizer estimator |
-| [IVO-103](https://linear.app/ivoxygen/issue/IVO-103) | Scoped Seahorse retrieval, compaction and lifetime | `pkg/seahorse/`; agent context manager/workers/tools/reset/session snapshot |
-| [IVO-104](https://linear.app/ivoxygen/issue/IVO-104) | Resumable active-context import, Seahorse default | `pkg/seahorse/import.go`, schema/source store; agent context manager and config defaults |
-| [IVO-105](https://linear.app/ivoxygen/issue/IVO-105) | Persistent dashboard password and revocable sessions | `web/backend/dashboardauth/`, auth API/middleware; launcher routes/menu/pages |
-| [IVO-106](https://linear.app/ivoxygen/issue/IVO-106) | Explicit selected-model minimal inference | model inference/credential API; shared model editor probe component |
-| [IVO-107](https://linear.app/ivoxygen/issue/IVO-107) | Thought/tool activity and reconnect outcomes | agent progress/events, Pico protocol/replay, existing chat controller and Zustand store |
-| [IVO-108](https://linear.app/ivoxygen/issue/IVO-108) | Paste/drop/select images to current compatible model | Pico upload/ownership and launcher proxy; composer/upload hook/store/media input |
-| [IVO-109](https://linear.app/ivoxygen/issue/IVO-109) | Authenticated Skill Hub search/detail/install | skill registry/install/provenance, Hub/config API, existing skills page |
-| [IVO-110](https://linear.app/ivoxygen/issue/IVO-110) | Reproducible launcher/runtime images | Dockerfiles/Compose/security profile, Makefile, packaging acceptance script |
-| [IVO-92](https://linear.app/ivoxygen/issue/IVO-92) | Actual documented MCP management CLI | `cmd/picoclaw/internal/mcp/`, root registration; config transport and MCP diagnostics |
+| KOROBKA-16 | v3 channel/config migration and strict diagnostics | `pkg/config/channel_list.go`, `channel_security.go`, `diagnostics.go`; channel/routing/chatmemory adapters; launcher API/TUI/forms |
+| KOROBKA-17 | Telegram location with text/topic/reply association | `pkg/channels/telegram/telegram_batching.go` |
+| KOROBKA-18 | Benchmark-network SSRF exclusion | `pkg/tools/web.go` |
+| KOROBKA-19 | Scheme-less URL handling in Shell workspace guard | `pkg/tools/shell.go` |
+| KOROBKA-14 | Empty MCP arguments become an object | `pkg/mcp/manager.go` |
+| KOROBKA-20 | Durable, authorized large MCP text artifacts | `pkg/tools/artifacts.go`, `mcp_tool.go`, `filesystem.go`; agent request scopes and atomic writer |
+| KOROBKA-21 | Explicit Linux Shell/stdio MCP isolation | `pkg/isolation/`; Shell/process helpers and MCP manager |
+| KOROBKA-22 | Exact fallback identity and safe actionable errors | `pkg/providers/config_identity.go`, factory/fallback/classifier/guidance; `pkg/agent/model_resolution.go`, `error_format.go` |
+| KOROBKA-23 | Complete prepared-request context budget | `pkg/agent/context_budget.go`, `context.go`, `loop.go`; tokenizer estimator |
+| KOROBKA-24 | Scoped Seahorse retrieval, compaction and lifetime | `pkg/seahorse/`; agent context manager/workers/tools/reset/session snapshot |
+| KOROBKA-25 | Resumable active-context import, Seahorse default | `pkg/seahorse/import.go`, schema/source store; agent context manager and config defaults |
+| KOROBKA-26 | Persistent dashboard password and revocable sessions | `web/backend/dashboardauth/`, auth API/middleware; launcher routes/menu/pages |
+| KOROBKA-27 | Explicit selected-model minimal inference | model inference/credential API; shared model editor probe component |
+| KOROBKA-28 | Thought/tool activity and reconnect outcomes | agent progress/events, Pico protocol/replay, existing chat controller and Zustand store |
+| KOROBKA-29 | Paste/drop/select images to current compatible model | Pico upload/ownership and launcher proxy; composer/upload hook/store/media input |
+| KOROBKA-30 | Authenticated Skill Hub search/detail/install | skill registry/install/provenance, Hub/config API, existing skills page |
+| KOROBKA-31 | Reproducible launcher/runtime images | Dockerfiles/Compose/security profile, Makefile, packaging acceptance script |
+| KOROBKA-15 | Actual documented MCP management CLI | `cmd/picoclaw/internal/mcp/`, root registration; config transport and MCP diagnostics |
 
 ## Upgrade and operator contracts
 

@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
@@ -33,6 +38,15 @@ type Provider struct {
 	client      *anthropic.Client
 	tokenSource func(context.Context) (string, error)
 	baseURL     string
+	// requestTimeout bounds non-streaming requests; streams rely on the
+	// caller's context and inactivity tracking instead.
+	requestTimeout time.Duration
+	// promptCache is nil for setup-token providers, whose requests stay as they were.
+	promptCache *promptCache
+	// serverFallback opts supporting models into Anthropic's server-side refusal fallback.
+	serverFallback bool
+	// keyLabel names the Key pool key in usage logs; empty outside pools.
+	keyLabel string
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -45,6 +59,8 @@ func NewProvider(token string) *Provider {
 func NewProviderWithBaseURL(token, apiBase string) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
 	client := anthropic.NewClient(
+		// Credentials come from configuration only, never from env vars or SDK profiles.
+		option.WithoutEnvironmentDefaults(),
 		option.WithAuthToken(token),
 		option.WithMaxRetries(0),
 		option.WithBaseURL(baseURL),
@@ -53,6 +69,48 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 		client:  &client,
 		baseURL: baseURL,
 	}
+}
+
+// NewProviderWithAPIKey authenticates with an Anthropic API key (x-api-key)
+// rather than a bearer token. A zero requestTimeout uses the shared default.
+func NewProviderWithAPIKey(apiKey, apiBase, proxy string, requestTimeout time.Duration) *Provider {
+	if requestTimeout <= 0 {
+		requestTimeout = common.DefaultRequestTimeout
+	}
+	baseURL := normalizeBaseURL(apiBase)
+	// The SDK applies requestTimeout per request; a client-wide timeout would cut long streams.
+	httpClient := &http.Client{Transport: common.NewHTTPClient(proxy).Transport}
+	client := anthropic.NewClient(
+		// Credentials come from configuration only, never from env vars or SDK profiles.
+		option.WithoutEnvironmentDefaults(),
+		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(0),
+		option.WithBaseURL(baseURL),
+		option.WithHTTPClient(httpClient),
+	)
+	return &Provider{
+		client:         &client,
+		baseURL:        baseURL,
+		requestTimeout: requestTimeout,
+		promptCache:    &promptCache{},
+		serverFallback: true,
+	}
+}
+
+// WithPromptCacheTTL sets the lifetime of both prompt-cache points: "1h", or
+// "5m"/"" for Anthropic's 5-minute default. Providers that do not cache ignore it.
+func (p *Provider) WithPromptCacheTTL(ttl string) *Provider {
+	if p.promptCache != nil {
+		p.promptCache.ttl = anthropic.CacheControlEphemeralTTL(ttl)
+	}
+	return p
+}
+
+// WithKeyLabel names the Key pool key this provider authenticates with in its
+// usage logs. The label is never the secret.
+func (p *Provider) WithKeyLabel(label string) *Provider {
+	p.keyLabel = label
+	return p
 }
 
 func NewProviderWithClient(client *anthropic.Client) *Provider {
@@ -102,22 +160,26 @@ func (p *Provider) Chat(
 		)
 	}
 
-	params, err := buildParams(messages, tools, model, options)
+	params, err := p.requestParams(ctx, messages, tools, model, options, opts)
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, p.serverFallbackOptions(params.Model)...)
 
 	// OAuth/setup-tokens require streaming; API keys use non-streaming.
 	if p.tokenSource != nil {
 		return p.chatStreaming(ctx, params, opts, nil)
 	}
 
+	if p.requestTimeout > 0 {
+		opts = append(opts, option.WithRequestTimeout(p.requestTimeout))
+	}
 	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return parseResponse(resp), nil
+	return p.completeResponse(params.Model, resp), nil
 }
 
 func (p *Provider) ChatStream(
@@ -140,10 +202,11 @@ func (p *Provider) ChatStream(
 		)
 	}
 
-	params, err := buildParams(messages, tools, model, options)
+	params, err := p.requestParams(ctx, messages, tools, model, options, opts)
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, p.serverFallbackOptions(params.Model)...)
 
 	return p.chatStreaming(ctx, params, opts, onUpdate)
 }
@@ -184,6 +247,9 @@ func (p *Provider) chatStreaming(
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
 		}
+		if event.Type == "message_delta" {
+			mergeDeltaUsage(&msg.Usage, event.AsMessageDelta().Usage)
+		}
 		if event.Type == "message_stop" {
 			completed = true
 			break
@@ -196,7 +262,46 @@ func (p *Provider) chatStreaming(
 	if !completed {
 		return nil, fmt.Errorf("claude stream ended before message_stop: %w", io.ErrUnexpectedEOF)
 	}
-	return parseResponse(&msg), nil
+	return p.completeResponse(params.Model, &msg), nil
+}
+
+// mergeDeltaUsage applies the cumulative counts of a message_delta event. The
+// SDK's Accumulate copies only output_tokens, which would drop the final input
+// and cache counts.
+func mergeDeltaUsage(usage *anthropic.Usage, delta anthropic.MessageDeltaUsage) {
+	if delta.JSON.InputTokens.Valid() {
+		usage.InputTokens = delta.InputTokens
+	}
+	if delta.JSON.CacheCreationInputTokens.Valid() {
+		usage.CacheCreationInputTokens = delta.CacheCreationInputTokens
+	}
+	if delta.JSON.CacheReadInputTokens.Valid() {
+		usage.CacheReadInputTokens = delta.CacheReadInputTokens
+	}
+}
+
+// completeResponse logs a finished message's usage against the model that
+// served it, naming the requested model too when they differ (for example after
+// a server-side fallback), and maps the message to an LLMResponse.
+func (p *Provider) completeResponse(requested anthropic.Model, msg *anthropic.Message) *LLMResponse {
+	served := servedModel(msg)
+	fields := map[string]any{
+		"model":                       served,
+		"input_tokens":                msg.Usage.InputTokens,
+		"output_tokens":               msg.Usage.OutputTokens,
+		"cache_creation_input_tokens": msg.Usage.CacheCreationInputTokens,
+		"cache_read_input_tokens":     msg.Usage.CacheReadInputTokens,
+	}
+	if p.keyLabel != "" {
+		fields["key"] = p.keyLabel
+	}
+	resp := parseResponse(msg)
+	if served != requested {
+		fields["requested_model"] = requested
+		resp.ServedModel = served
+	}
+	logger.InfoCF("provider.anthropic", "Anthropic usage", fields)
+	return resp
 }
 
 func (p *Provider) GetDefaultModel() string {
@@ -205,6 +310,28 @@ func (p *Provider) GetDefaultModel() string {
 
 func (p *Provider) BaseURL() string {
 	return p.baseURL
+}
+
+// requestParams builds the Messages API request, maps thinking_level for the
+// model and, for providers that cache, places the prompt-cache points on it.
+// opts are the answer's request options, reused for the capability lookup.
+func (p *Provider) requestParams(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	opts []option.RequestOption,
+) (anthropic.MessageNewParams, error) {
+	params, err := buildParams(messages, tools, model, options)
+	if err != nil {
+		return params, err
+	}
+	p.applyThinking(ctx, &params, options, opts)
+	if p.promptCache != nil {
+		p.promptCache.apply(&params)
+	}
+	return params, nil
 }
 
 func buildParams(
@@ -239,9 +366,7 @@ func buildParams(
 					anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
 				)
 			} else {
-				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)),
-				)
+				anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(userContent(msg)...))
 			}
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
@@ -283,12 +408,8 @@ func buildParams(
 		maxTokens = int64(mt)
 	}
 
-	// Normalize model ID: Anthropic API uses hyphens (claude-sonnet-4-6),
-	// but config may use dots (claude-sonnet-4.6).
-	apiModel := strings.ReplaceAll(model, ".", "-")
-
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(apiModel),
+		Model:     apiModelID(model),
 		Messages:  anthropicMessages,
 		MaxTokens: maxTokens,
 	}
@@ -297,86 +418,35 @@ func buildParams(
 		params.System = system
 	}
 
-	if temp, ok := options["temperature"].(float64); ok {
-		params.Temperature = anthropic.Float(temp)
-	}
+	// temperature is never sent: the current API version rejects it on every model.
 
 	if len(tools) > 0 {
 		params.Tools = translateTools(tools)
 	}
 
-	// Extended Thinking / Adaptive Thinking
-	// The thinking_level value directly determines the API parameter format:
-	//   "adaptive" → {thinking: {type: "adaptive"}} + output_config.effort
-	//   "low/medium/high/xhigh" → {thinking: {type: "enabled", budget_tokens: N}}
-	if level, ok := options["thinking_level"].(string); ok && level != "" && level != "off" {
-		applyThinkingConfig(&params, level)
-	}
-
 	return params, nil
 }
 
-// applyThinkingConfig sets thinking parameters based on the level value.
-// "adaptive" uses the adaptive thinking API (Claude 4.6+).
-// All other levels use budget_tokens which is universally supported.
-//
-// Anthropic API constraint: temperature must not be set when thinking is enabled.
-// budget_tokens must be strictly less than max_tokens.
-func applyThinkingConfig(params *anthropic.MessageNewParams, level string) {
-	// Anthropic API rejects requests with temperature set alongside thinking.
-	// Reset to zero value (omitted from JSON serialization).
-	if params.Temperature.Valid() {
-		log.Printf("anthropic: temperature cleared because thinking is enabled (level=%s)", level)
-	}
-	params.Temperature = anthropic.MessageNewParams{}.Temperature
-
-	if level == "adaptive" {
-		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
-		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
-		params.OutputConfig = anthropic.OutputConfigParam{
-			Effort: anthropic.OutputConfigEffortHigh,
+// userContent renders a user message's text followed by its image media.
+// Media the Messages API cannot take as an image (e.g. audio) is skipped, and
+// an image-only message carries no empty text block, which the API rejects.
+func userContent(msg Message) []anthropic.ContentBlockParamUnion {
+	var blocks []anthropic.ContentBlockParamUnion
+	for _, media := range msg.Media {
+		if header, data, ok := strings.Cut(strings.TrimPrefix(media, "data:"), ","); ok &&
+			strings.HasPrefix(media, "data:image/") && strings.HasSuffix(header, ";base64") {
+			blocks = append(blocks, anthropic.NewImageBlockBase64(strings.TrimSuffix(header, ";base64"), data))
+			continue
 		}
-		return
+		if parsed, err := url.Parse(media); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") &&
+			parsed.Hostname() != "" {
+			blocks = append(blocks, anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: media}))
+		}
 	}
-
-	budget := int64(levelToBudget(level))
-	if budget <= 0 {
-		return
+	if msg.Content != "" || len(blocks) == 0 {
+		blocks = append([]anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.Content)}, blocks...)
 	}
-
-	// budget_tokens must be < max_tokens; clamp to respect user's max_tokens setting.
-	if budget >= params.MaxTokens {
-		log.Printf("anthropic: budget_tokens (%d) clamped to %d (max_tokens-1)", budget, params.MaxTokens-1)
-		budget = params.MaxTokens - 1
-	} else if budget > params.MaxTokens*80/100 {
-		log.Printf("anthropic: thinking budget (%d) exceeds 80%% of max_tokens (%d), output may be truncated",
-			budget, params.MaxTokens)
-	}
-	params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
-}
-
-// levelToBudget maps a thinking level to budget_tokens.
-// Values are based on Anthropic's recommendations and community best practices:
-//
-//	low    =  4,096  — simple reasoning, quick debugging (Claude Code "think")
-//	medium = 16,384  — Anthropic recommended sweet spot for most tasks
-//	high   = 32,000  — complex architecture, deep analysis (diminishing returns above this)
-//	xhigh  = 64,000  — extreme reasoning, research problems, benchmarks
-//
-// Note: For Claude 4.6+, prefer adaptive thinking over manual budget_tokens.
-func levelToBudget(level string) int {
-	switch level {
-	case "low":
-		return 4096
-	case "medium":
-		return 16384
-	case "high":
-		return 32000
-	case "xhigh":
-		return 64000
-	default:
-		return 0
-	}
+	return blocks
 }
 
 func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
@@ -406,9 +476,12 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 }
 
 func parseResponse(resp *anthropic.Message) *LLMResponse {
+	if resp.StopReason == anthropic.StopReasonRefusal {
+		return refusalResponse(resp)
+	}
 	var content strings.Builder
 	var reasoning strings.Builder
-	var toolCalls []ToolCall
+	toolCalls := make([]ToolCall, 0, 1)
 
 	for _, block := range resp.Content {
 		switch block.Type {
@@ -418,6 +491,11 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		case "text":
 			tb := block.AsText()
 			content.WriteString(tb.Text)
+		case "fallback":
+			// The fallback model continues the declined model's text; thinking and
+			// tool calls from before the handoff are not part of the answer.
+			reasoning.Reset()
+			toolCalls = toolCalls[:0]
 		case "tool_use":
 			tu := block.AsToolUse()
 			var args map[string]any
@@ -448,11 +526,20 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		Reasoning:    reasoning.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
-		Usage: &UsageInfo{
-			PromptTokens:     int(resp.Usage.InputTokens),
-			CompletionTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
-		},
+		Usage:        usageInfo(resp.Usage),
+	}
+}
+
+// usageInfo counts the whole prompt: Anthropic's input_tokens covers only the
+// tokens after the last cache breakpoint.
+func usageInfo(usage anthropic.Usage) *UsageInfo {
+	prompt := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	return &UsageInfo{
+		PromptTokens:        int(prompt),
+		CompletionTokens:    int(usage.OutputTokens),
+		TotalTokens:         int(prompt + usage.OutputTokens),
+		CacheCreationTokens: int(usage.CacheCreationInputTokens),
+		CacheReadTokens:     int(usage.CacheReadInputTokens),
 	}
 }
 

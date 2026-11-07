@@ -10,17 +10,19 @@ import (
 	"path/filepath"
 )
 
+// HomeDir is the base directory of all Picoclaw data: $PICOCLAW_HOME, else
+// ~/.picoclaw.
+func HomeDir() string {
+	if home := os.Getenv(EnvHome); home != "" {
+		return home
+	}
+	userHome, _ := os.UserHomeDir()
+	return filepath.Join(userHome, ".picoclaw")
+}
+
 // DefaultConfig returns the default configuration for PicoClaw.
 func DefaultConfig() *Config {
-	// Determine the base path for the workspace.
-	// Priority: $PICOCLAW_HOME > ~/.picoclaw
-	var homePath string
-	if picoclawHome := os.Getenv(EnvHome); picoclawHome != "" {
-		homePath = picoclawHome
-	} else {
-		userHome, _ := os.UserHomeDir()
-		homePath = filepath.Join(userHome, ".picoclaw")
-	}
+	homePath := HomeDir()
 	workspacePath := filepath.Join(homePath, "workspace")
 
 	cfg := &Config{

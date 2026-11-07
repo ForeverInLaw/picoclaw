@@ -30,7 +30,7 @@ func (h *Handler) handleValidateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateModelTestConfiguration(mc); err != nil {
-		modelTestError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -51,38 +51,38 @@ func (h *Handler) readInlineModelTest(w http.ResponseWriter, r *http.Request) (c
 	defer r.Body.Close()
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	if err := decoder.Decode(&request); err != nil {
-		modelTestError(w, http.StatusBadRequest, "Invalid model configuration JSON.")
+		writeAPIError(w, http.StatusBadRequest, "Invalid model configuration JSON.")
 		return config.ModelConfig{}, false
 	}
 	mc := request.ModelConfig
 	if request.ModelIndex != nil {
 		cfg, err := config.LoadConfig(h.configPath)
 		if err != nil {
-			modelTestError(w, http.StatusInternalServerError, "Could not load the selected model configuration.")
+			writeAPIError(w, http.StatusInternalServerError, "Could not load the selected model configuration.")
 			return mc, false
 		}
 		models := cfg.ConfiguredModels()
 		index := *request.ModelIndex
 		if index < 0 || index >= len(models) {
-			modelTestError(w, http.StatusNotFound, "The selected model no longer exists. Refresh the model list.")
+			writeAPIError(w, http.StatusNotFound, "The selected model no longer exists. Refresh the model list.")
 			return mc, false
 		}
 		saved := exactProbeModel(cfg, models[index])
 		if mc.ID != "" && saved.ID != mc.ID {
-			modelTestError(w, http.StatusConflict, "The selected model moved. Refresh the model list before testing.")
+			writeAPIError(w, http.StatusConflict, "The selected model moved. Refresh the model list before testing.")
 			return mc, false
 		}
 		if err := retainModelCredential(&mc, saved); err != nil {
-			modelTestError(w, http.StatusBadRequest, err.Error())
+			writeAPIError(w, http.StatusBadRequest, err.Error())
 			return mc, false
 		}
-		if mc.APIKey == "" && saved.APIKey != "" && !compatibleModelCredentials(mc, saved) {
-			modelTestError(w, http.StatusBadRequest, "Enter a new API key for the edited provider, endpoint or proxy.")
+		if mc.KeyPoolID == "" && mc.APIKey == "" && saved.APIKey != "" && !compatibleModelCredentials(mc, saved) {
+			writeAPIError(w, http.StatusBadRequest, "Enter a new API key for the edited provider, endpoint or proxy.")
 			return mc, false
 		}
 	}
 	if modelCredentialPlaceholder(mc.APIKey) || len(mc.APIKeys) != 0 {
-		modelTestError(
+		writeAPIError(
 			w,
 			http.StatusBadRequest,
 			"Provide one explicit API key or select a compatible saved model. Save file/encrypted credentials before testing them.",
@@ -97,17 +97,17 @@ func (h *Handler) readInlineModelTest(w http.ResponseWriter, r *http.Request) (c
 func (h *Handler) handleTestSavedModel(w http.ResponseWriter, r *http.Request) {
 	index, err := strconv.Atoi(r.PathValue("index"))
 	if err != nil {
-		modelTestError(w, http.StatusBadRequest, "Invalid model index.")
+		writeAPIError(w, http.StatusBadRequest, "Invalid model index.")
 		return
 	}
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
-		modelTestError(w, http.StatusInternalServerError, "Could not load the selected model configuration.")
+		writeAPIError(w, http.StatusInternalServerError, "Could not load the selected model configuration.")
 		return
 	}
 	models := cfg.ConfiguredModels()
 	if index < 0 || index >= len(models) {
-		modelTestError(w, http.StatusNotFound, "The selected model no longer exists. Refresh the model list.")
+		writeAPIError(w, http.StatusNotFound, "The selected model no longer exists. Refresh the model list.")
 		return
 	}
 	h.runModelInference(w, r, exactProbeModel(cfg, models[index]))
@@ -116,7 +116,7 @@ func (h *Handler) handleTestSavedModel(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleTestSavedModelByID(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
-		modelTestError(w, 500, "Could not load the selected model configuration.")
+		writeAPIError(w, 500, "Could not load the selected model configuration.")
 		return
 	}
 	for _, model := range cfg.ConfiguredModels() {
@@ -125,7 +125,7 @@ func (h *Handler) handleTestSavedModelByID(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	modelTestError(w, 404, "The selected model no longer exists. Refresh the model list.")
+	writeAPIError(w, 404, "The selected model no longer exists. Refresh the model list.")
 }
 
 // The dashboard selects a configured entry; use its first resolved runtime key
@@ -141,7 +141,11 @@ func exactProbeModel(cfg *config.Config, selected config.ModelConfig) config.Mod
 
 func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc config.ModelConfig) {
 	if err := validateModelTestConfiguration(mc); err != nil {
-		modelTestError(w, http.StatusBadRequest, err.Error())
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if mc.KeyPoolID != "" {
+		h.runKeyPoolModelTest(w, r, mc)
 		return
 	}
 	// These protocols can open subprocesses/connections or use global OAuth
@@ -150,7 +154,7 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 	switch protocol {
 	case "azure", "azure-openai", "anthropic-messages", "coding-plan-anthropic", "alibaba-coding-anthropic",
 		"antigravity", "claude-cli", "claudecli", "codex-cli", "codexcli", "github-copilot", "copilot":
-		modelTestError(
+		writeAPIError(
 			w,
 			http.StatusBadRequest,
 			"This test supports OpenAI-compatible HTTP models with an API key or local endpoint.",
@@ -158,18 +162,14 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		return
 	}
 	if (mc.AuthMethod == "oauth" || mc.AuthMethod == "token") && protocol != "openai" {
-		modelTestError(
+		writeAPIError(
 			w,
 			http.StatusBadRequest,
 			"This test supports OpenAI-compatible HTTP models with an API key or local endpoint.",
 		)
 		return
 	}
-	timeout := 15 * time.Second
-	if mc.RequestTimeout > 0 && mc.RequestTimeout < 15 {
-		timeout = time.Duration(mc.RequestTimeout) * time.Second
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), modelTestTimeout(mc))
 	defer cancel()
 	accountID, sessionVersion := "", ""
 	if protocol == "openai" && (mc.AuthMethod == "oauth" || mc.AuthMethod == "token") {
@@ -215,17 +215,11 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 				setupMessage = "This test requires an OpenAI-compatible HTTP provider."
 				return nil, errors.New(setupMessage)
 			}
-			return provider.Chat(
-				attemptCtx,
-				[]providers.Message{{Role: "user", Content: "Reply with OK."}},
-				nil,
-				modelID,
-				map[string]any{"max_tokens": 32},
-			)
+			return sendModelTest(attemptCtx, provider, modelID, map[string]any{"max_tokens": 32})
 		},
 	)
 	if setupMessage != "" {
-		modelTestError(w, http.StatusBadRequest, setupMessage)
+		writeAPIError(w, http.StatusBadRequest, setupMessage)
 		return
 	}
 
@@ -254,27 +248,15 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		if accountID != "" && sessionVersion != "" {
 			_ = auth.RecordAccountProbeContext(ctx, accountID, sessionVersion, probe)
 		}
-		message := providers.ErrorGuidance(err)
-		var networkError net.Error
-		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
-			message = "The model test timed out. Check the endpoint's availability or try a faster model."
-		}
-		if message == "" {
-			message = "The selected model could not answer. Check its provider and request settings."
-		}
-		modelTestError(w, http.StatusBadGateway, message)
+		writeAPIError(w, http.StatusBadGateway, modelTestFailure(response, err))
 		return
 	}
-	if response == nil || strings.TrimSpace(response.Content) == "" {
+	if failure := modelTestFailure(response, nil); failure != "" {
 		probe.Status = "failed"
 		if accountID != "" && sessionVersion != "" {
 			_ = auth.RecordAccountProbeContext(ctx, accountID, sessionVersion, probe)
 		}
-		modelTestError(
-			w,
-			http.StatusBadGateway,
-			"The selected model returned no answer. Check its model identifier and request settings.",
-		)
+		writeAPIError(w, http.StatusBadGateway, failure)
 		return
 	}
 	if accountID != "" && sessionVersion != "" {
@@ -286,6 +268,51 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		"message":    "The selected model replied successfully.",
 		"latency_ms": time.Since(started).Milliseconds(),
 	})
+}
+
+// modelTestTimeout bounds one Test model request: 15 seconds, or the model's
+// shorter request timeout.
+func modelTestTimeout(mc config.ModelConfig) time.Duration {
+	if mc.RequestTimeout > 0 && mc.RequestTimeout < 15 {
+		return time.Duration(mc.RequestTimeout) * time.Second
+	}
+	return 15 * time.Second
+}
+
+// sendModelTest sends Test model's one short request with options.
+func sendModelTest(
+	ctx context.Context,
+	provider providers.LLMProvider,
+	modelID string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
+	return provider.Chat(
+		ctx,
+		[]providers.Message{{Role: "user", Content: "Reply with OK."}},
+		nil,
+		modelID,
+		options,
+	)
+}
+
+// modelTestFailure is the sanitized reason a Test model request did not
+// answer, or "" when it did. It never contains provider response bodies,
+// URLs or credentials.
+func modelTestFailure(response *providers.LLMResponse, err error) string {
+	if err != nil {
+		var networkError net.Error
+		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
+			return "The model test timed out. Check the endpoint's availability or try a faster model."
+		}
+		if message := providers.ErrorGuidance(err); message != "" {
+			return message
+		}
+		return "The selected model could not answer. Check its provider and request settings."
+	}
+	if response == nil || strings.TrimSpace(response.Content) == "" {
+		return "The selected model returned no answer. Check its model identifier and request settings."
+	}
+	return ""
 }
 
 func validateModelTestConfiguration(mc config.ModelConfig) error {
@@ -328,10 +355,4 @@ func validateModelTestConfiguration(mc config.ModelConfig) error {
 		}
 	}
 	return nil
-}
-
-func modelTestError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "error", "message": message})
 }

@@ -61,6 +61,8 @@ func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 			"temperature":      agent.Temperature,
 			"max_tokens":       agent.MaxTokens,
 			"prompt_cache_key": "seahorse:" + agent.ID,
+
+			providers.ConversationIdentityOption: key,
 		},
 	}
 	if reader, ok := agent.Sessions.(session.ContextReader); ok {
@@ -77,7 +79,7 @@ func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 		snapshot.Provider = agent.Provider
 	}
 	if tc, ok := snapshot.Provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() &&
-		agent.ThinkingLevel != ThinkingOff {
+		agent.ThinkingLevel != ThinkingDefault {
 		snapshot.Options["thinking_level"] = string(agent.ThinkingLevel)
 	}
 	if guard, ok := agent.Sessions.(session.ConversationTurn); ok {

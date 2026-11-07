@@ -155,7 +155,7 @@
 
 **Anthropic Messages API（原生格式）**
 
-用于直接访问 Anthropic API 或仅支持 Anthropic 原生消息格式的自定义端点：
+用于实现 Anthropic 原生消息格式的第三方代理和自定义端点：
 
 ```json
 {
@@ -166,12 +166,9 @@
 }
 ```
 
-> 使用 `anthropic-messages` 协议的场景：
-> - 使用仅支持 Anthropic 原生 `/v1/messages` 端点的第三方代理（不支持 OpenAI 兼容的 `/v1/chat/completions`）
-> - 连接到 MiniMax、Synthetic 等需要 Anthropic 原生消息格式的服务
-> - 现有的 `anthropic` 协议返回 404 错误（说明端点不支持 OpenAI 兼容格式）
+> 对于实现 Anthropic 原生 `/v1/messages` 端点的第三方代理和服务（如 MiniMax、Synthetic），请使用 `anthropic-messages`。
 >
-> **注意：** `anthropic` 协议使用 OpenAI 兼容格式（`/v1/chat/completions`），而 `anthropic-messages` 使用 Anthropic 原生格式（`/v1/messages`）。请根据端点支持的格式选择。
+> **注意：** 两种协议都使用 Anthropic 原生 Messages API（`/v1/messages`）。直接访问 Anthropic 时请优先使用 `anthropic`：它基于官方 Anthropic SDK，并且支持 setup-token 登录。
 
 **Ollama (本地)**
 

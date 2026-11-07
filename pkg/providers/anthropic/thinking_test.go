@@ -2,142 +2,67 @@ package anthropicprovider
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-func TestApplyThinkingConfig_Adaptive(t *testing.T) {
-	params := anthropic.MessageNewParams{
-		MaxTokens:   16000,
-		Temperature: anthropic.Float(0.7),
-	}
-	applyThinkingConfig(&params, "adaptive")
+// The setup-token path maps thinking_level too, and its capability lookup
+// carries the subscription token rather than an API key.
+func TestProvider_SetupTokenMapsThinkingLevel(t *testing.T) {
+	var lookupAuth, lookupBeta string
+	var thinking, outputConfig json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models/claude-opus-5-5" {
+			lookupAuth, lookupBeta = r.Header.Get("Authorization"), r.Header.Get("Anthropic-Beta")
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(
+				w,
+				`{"type":"model","id":"claude-opus-5-5","display_name":"Opus","created_at":"2026-01-01T00:00:00Z",
+				"capabilities":{"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},
+					"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},
+				"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"between_tools":{"supported":false},
+					"disabled":{"supported":false},"enabled":{"supported":false}}}}}`,
+			)
+			return
+		}
+		var body struct {
+			Thinking     json.RawMessage `json:"thinking"`
+			OutputConfig json.RawMessage `json:"output_config"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		thinking, outputConfig = body.Thinking, body.OutputConfig
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(
+			w,
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\","+
+				"\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"+
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		)
+	}))
+	defer server.Close()
+	p := NewProviderWithTokenSourceAndBaseURL("stale", func() (string, error) { return "setup-token", nil }, server.URL)
 
-	if params.Thinking.OfAdaptive == nil {
-		t.Fatal("expected adaptive thinking")
-	}
-	if params.Thinking.OfEnabled != nil {
-		t.Error("should not set enabled thinking in adaptive mode")
-	}
-	if params.OutputConfig.Effort != anthropic.OutputConfigEffortHigh {
-		t.Errorf("effort = %q, want %q", params.OutputConfig.Effort, anthropic.OutputConfigEffortHigh)
-	}
-	if params.Temperature.Valid() {
-		t.Error("temperature should be cleared when thinking is enabled")
-	}
-}
-
-func TestApplyThinkingConfig_BudgetLevels(t *testing.T) {
-	tests := []struct {
-		level      string
-		wantBudget int64
-	}{
-		{"low", 4096},
-		{"medium", 16384},
-		{"high", 32000},
-		{"xhigh", 64000},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.level, func(t *testing.T) {
-			params := anthropic.MessageNewParams{
-				MaxTokens:   200000,
-				Temperature: anthropic.Float(0.5),
-			}
-			applyThinkingConfig(&params, tt.level)
-
-			if params.Thinking.OfEnabled == nil {
-				t.Fatal("expected enabled thinking")
-			}
-			if params.Thinking.OfAdaptive != nil {
-				t.Error("should not set adaptive thinking")
-			}
-			if params.Thinking.OfEnabled.BudgetTokens != tt.wantBudget {
-				t.Errorf("budget_tokens = %d, want %d", params.Thinking.OfEnabled.BudgetTokens, tt.wantBudget)
-			}
-			if params.OutputConfig.Effort != "" {
-				t.Errorf("effort = %q, want empty", params.OutputConfig.Effort)
-			}
-			if params.Temperature.Valid() {
-				t.Error("temperature should be cleared when thinking is enabled")
-			}
-		})
-	}
-}
-
-func TestApplyThinkingConfig_BudgetClamp(t *testing.T) {
-	// budget_tokens must be < max_tokens; clamp budget down to respect user's max_tokens.
-	params := anthropic.MessageNewParams{MaxTokens: 4096}
-	applyThinkingConfig(&params, "high") // budget=32000 > maxTokens=4096
-
-	if params.Thinking.OfEnabled == nil {
-		t.Fatal("expected enabled thinking")
-	}
-	if params.Thinking.OfEnabled.BudgetTokens != 4095 {
-		t.Errorf("budget_tokens = %d, want 4095 (maxTokens-1)", params.Thinking.OfEnabled.BudgetTokens)
-	}
-	if params.MaxTokens != 4096 {
-		t.Errorf("max_tokens should not be modified, got %d", params.MaxTokens)
-	}
-}
-
-func TestApplyThinkingConfig_UnknownLevel(t *testing.T) {
-	params := anthropic.MessageNewParams{MaxTokens: 16000}
-	applyThinkingConfig(&params, "unknown")
-
-	if params.Thinking.OfEnabled != nil {
-		t.Error("should not set enabled thinking for unknown level")
-	}
-	if params.Thinking.OfAdaptive != nil {
-		t.Error("should not set adaptive thinking for unknown level")
-	}
-}
-
-func TestLevelToBudget(t *testing.T) {
-	tests := []struct {
-		name  string
-		level string
-		want  int
-	}{
-		{"low", "low", 4096},
-		{"medium", "medium", 16384},
-		{"high", "high", 32000},
-		{"xhigh", "xhigh", 64000},
-		{"off", "off", 0},
-		{"empty", "", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := levelToBudget(tt.level); got != tt.want {
-				t.Errorf("levelToBudget(%q) = %d, want %d", tt.level, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestBuildParams_ThinkingClearsTemperature(t *testing.T) {
-	msgs := []Message{{Role: "user", Content: "hello"}}
-	opts := map[string]any{
-		"max_tokens":     200000,
-		"temperature":    0.8,
-		"thinking_level": "medium",
-	}
-
-	params, err := buildParams(msgs, nil, "claude-sonnet-4-6", opts)
+	_, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "claude-opus-5-5",
+		map[string]any{"thinking_level": "off"})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Chat() error: %v", err)
 	}
 
-	if params.Temperature.Valid() {
-		t.Error("temperature should be cleared when thinking_level is set")
+	if lookupAuth != "Bearer setup-token" || lookupBeta != anthropicBetaHeader {
+		t.Errorf(
+			"capability lookup auth = %q / beta %q, want the setup token with the OAuth beta",
+			lookupAuth,
+			lookupBeta,
+		)
 	}
-	if params.Thinking.OfEnabled == nil {
-		t.Fatal("expected enabled thinking")
-	}
-	if params.Thinking.OfEnabled.BudgetTokens != 16384 {
-		t.Errorf("budget_tokens = %d, want 16384", params.Thinking.OfEnabled.BudgetTokens)
+	if string(thinking) != `{"type":"adaptive"}` || string(outputConfig) != `{"effort":"low"}` {
+		t.Errorf("thinking = %s, output_config = %s; want adaptive with low effort", thinking, outputConfig)
 	}
 }
 
@@ -192,21 +117,95 @@ func TestParseResponse_NoThinkingBlock(t *testing.T) {
 	}
 }
 
-func TestBuildParams_NoThinkingKeepsTemperature(t *testing.T) {
-	msgs := []Message{{Role: "user", Content: "hello"}}
-	opts := map[string]any{
-		"temperature": 0.8,
-	}
+// capabilityServer answers the Models API for claude-sonnet-4-6, which accepts
+// disabled thinking, with status for every key but goodKey. It counts lookups.
+func capabilityServer(t *testing.T, goodKey string, status *int) (*httptest.Server, *int) {
+	t.Helper()
+	lookups := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/v1/models/") {
+			lookups++
+			if r.Header.Get("X-Api-Key") != goodKey {
+				w.WriteHeader(*status)
+				io.WriteString(w, `{"type":"error","error":{"type":"error","message":"no"}}`)
+				return
+			}
+			io.WriteString(
+				w,
+				`{"type":"model","id":"claude-sonnet-4-6","display_name":"Sonnet","created_at":"2026-01-01T00:00:00Z",
+				"capabilities":{"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},
+					"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":true}},
+				"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"between_tools":{"supported":false},
+					"disabled":{"supported":true},"enabled":{"supported":true}}}}}`,
+			)
+			return
+		}
+		io.WriteString(
+			w,
+			`{"id":"m","type":"message","role":"assistant","model":"claude-sonnet-4-6","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`,
+		)
+	}))
+	t.Cleanup(server.Close)
+	return server, &lookups
+}
 
-	params, err := buildParams(msgs, nil, "claude-sonnet-4-6", opts)
+// useCapabilityCache gives the test its own capability cache on a clock it moves.
+func useCapabilityCache(t *testing.T) *time.Time {
+	t.Helper()
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	previous := modelCapabilities
+	modelCapabilities = newCapabilityCache(func() time.Time { return now })
+	t.Cleanup(func() { modelCapabilities = previous })
+	return &now
+}
+
+func thinkingOf(t *testing.T, p *Provider) anthropic.ThinkingConfigParamUnion {
+	t.Helper()
+	params, err := p.requestParams(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "claude-sonnet-4-6",
+		map[string]any{"thinking_level": "off"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return params.Thinking
+}
 
-	if !params.Temperature.Valid() {
-		t.Error("temperature should be preserved when thinking is not set")
+func TestCapabilityLookupFailureIsRetriedAfterAWhile(t *testing.T) {
+	now := useCapabilityCache(t)
+	status := http.StatusInternalServerError
+	server, lookups := capabilityServer(t, "", &status)
+	p := NewProviderWithAPIKey("sk-ant-key", server.URL, "", 0)
+
+	thinkingOf(t, p)
+	thinkingOf(t, p)
+	if *lookups != 1 {
+		t.Fatalf("lookups within the retry interval = %d, want 1", *lookups)
 	}
-	if params.Temperature.Value != 0.8 {
-		t.Errorf("temperature = %f, want 0.8", params.Temperature.Value)
+	*now = now.Add(capabilityRetryAfter)
+	thinkingOf(t, p)
+	if *lookups != 2 {
+		t.Fatalf("lookups after the retry interval = %d, want 2", *lookups)
+	}
+}
+
+func TestCapabilityLookupRejectedByOneKeyDoesNotDecideForOthers(t *testing.T) {
+	useCapabilityCache(t)
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server, _ := capabilityServer(t, "sk-ant-good", &status)
+			if thinking := thinkingOf(
+				t,
+				NewProviderWithAPIKey("sk-ant-bad", server.URL, "", 0),
+			); thinking.OfAdaptive == nil {
+				t.Fatalf("rejected lookup: thinking = %+v, want adaptive with the lowest effort", thinking)
+			}
+			if thinking := thinkingOf(
+				t,
+				NewProviderWithAPIKey("sk-ant-good", server.URL, "", 0),
+			); thinking.OfDisabled == nil {
+				t.Fatalf("other key after a rejected lookup: thinking = %+v, want disabled", thinking)
+			}
+		})
 	}
 }

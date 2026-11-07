@@ -8,7 +8,10 @@ Picoclaw provides assistant conversations through chat channels and Telegram inl
 An administrator-managed ChatGPT registration saved for this Picoclaw instance, with its own identity, credentials and availability. Several configured models may use the same connection; a display name or email alone does not identify one.
 
 **Configured model**:
-A named choice of model and its account connection or provider credentials. The same underlying model used through different connections represents separate choices.
+A named choice of model and its account connection, key pool or provider credentials. The same underlying model used through different connections represents separate choices.
+
+**Key pool**:
+A named, administrator-managed set of interchangeable provider API keys saved for this Picoclaw instance, each typically belonging to a separate provider organization with its own budget and cache. Several configured models may use the same pool; a key's availability and spending are shared by all of them. A conversation stays on one key from the pool while that key is available; keys in a pool are not reserves of the Routing chain.
 
 **Routing chain**:
 The ordered choice of a primary configured model and its reserves for a user request. Agents inherit the instance default unless they have an explicit override, which may contain no reserves.

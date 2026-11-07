@@ -153,11 +153,48 @@ This design also enables **multi-agent support** with flexible provider selectio
 }
 ```
 
+With an API key, requests use prompt caching: the tool definitions and the static part of the system prompt are cached, and so is the growing conversation. Cached entries live for 5 minutes by default. Set `"cache_ttl": "1h"` on the model to keep them for an hour, which costs more per cache write but avoids rewrites after longer pauses.
+
+`thinking_level` sets adaptive thinking with the matching effort: `low`, `medium`, `high`, `xhigh` or `max`, while `adaptive` sends adaptive thinking without an effort, so the model's default effort applies. When a model lacks the chosen effort, the nearest one it supports is used. `off` turns thinking off on models that allow it; models that always think, such as Claude Opus 5.5, use the lowest effort instead. Picoclaw reads each model's capabilities from Anthropic's Models API once per run. If that lookup fails, requests use the lowest effort until a retry ten minutes later succeeds. Leave `thinking_level` unset to keep the model's own default.
+
+On Claude Fable 5.1, Fable 5, Opus 5.5, Opus 5 and Sonnet 5.5, requests also opt into Anthropic's server-side refusal fallback, so a request that the model's safety classifier declines is answered by the fallback model Anthropic recommends, within the same call. When that happens, the usage log names the model that answered alongside the one you configured. A request that is still declined after the fallback reaches the user as a refusal from Claude; it is not treated as a provider failure, so the routing chain does not move on to its reserves.
+
 > Run `picoclaw auth login --provider anthropic` to paste your API token.
+
+**Anthropic Key pools (several organizations)**
+
+A Key pool groups API keys from separate Anthropic organizations, each with its own credit and prompt cache. Define it once under `key_pools` and reference it from any number of `anthropic/` models with `key_pool_id` instead of `api_key`:
+
+```json
+{
+  "key_pools": [
+    {
+      "id": "anthropic-orgs",
+      "name": "Anthropic organizations",
+      "keys": [
+        { "id": "org-a", "label": "Org A", "enabled": true, "api_key": "sk-ant-org-a" },
+        { "id": "org-b", "label": "Org B", "enabled": true, "api_key": "sk-ant-org-b" }
+      ]
+    }
+  ],
+  "model_list": [
+    { "model_name": "opus", "model": "anthropic/claude-opus-5-5", "key_pool_id": "anthropic-orgs" },
+    { "model_name": "haiku", "model": "anthropic/claude-haiku-4-5", "key_pool_id": "anthropic-orgs" }
+  ]
+}
+```
+
+Each conversation stays on one enabled key, chosen by hashing its session key, so its prompt cache keeps being read; new conversations spread across the keys. Spawned tasks, subturns and summaries use the key of the conversation they belong to. The binding is not stored: it survives restarts, and disabling a key moves only the conversations that were on it. Keys of a pool are not reserves of the Routing chain.
+
+Pool secrets are protected like model keys: `enc://` and `file://` references work, plaintext keys are sealed on save when a passphrase is set, and the dashboard shows them masked. When a `.security.yml` sidecar exists, it holds the pool secrets under `key_pools` and `config.json` keeps only the pools' ids, labels and enabled flags. An existing `anthropic/` entry with several `api_keys` is loaded as a pool referenced by that entry, and the migration is saved on the next configuration write. `api_keys` on other providers keep their ordered failover.
+
+Every answer a pool key serves adds its input, output, cache-write and cache-read tokens to that key's totals in `key-pool-spend.json` under the Picoclaw home, which is kept apart from configuration. Dollar figures are estimates from a built-in price table for the model that actually answered. Answers from a model missing from the table count tokens only and are never given a guessed amount. Test model requests on the Models page are billed, so they count too. If the file is ever unreadable, it is renamed to `key-pool-spend.json.corrupt-<time>` and counting starts afresh. A key can have a `monthly_budget_usd` and a `reset_day` (1 to 31; 0 or unset means the 1st). A new period starts at midnight UTC on the reset day, or on the last day of a month shorter than that. The Credentials page shows each key's estimated spend since its most recent reset day against its budget, along with its cache hit rate. Neither field ever limits traffic.
+
+With `gateway.hot_reload` on, renaming a pool or key, Return to service and budget edits apply to the next request without a reload. Adding or removing a key, enabling or disabling one, or changing its secret reloads the gateway.
 
 **Anthropic Messages API (native format)**
 
-For direct Anthropic API access or custom endpoints that only support Anthropic's native message format:
+For third-party proxies and custom endpoints that implement Anthropic's native message format:
 
 ```json
 {
@@ -168,12 +205,9 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 }
 ```
 
-> Use `anthropic-messages` protocol when:
-> - Using third-party proxies that only support Anthropic's native `/v1/messages` endpoint (not OpenAI-compatible `/v1/chat/completions`)
-> - Connecting to services like MiniMax, Synthetic that require Anthropic's native message format
-> - The existing `anthropic` protocol returns 404 errors (indicating the endpoint doesn't support OpenAI-compatible format)
+> Use `anthropic-messages` for third-party proxies and services such as MiniMax or Synthetic that implement Anthropic's native `/v1/messages` endpoint.
 >
-> **Note:** The `anthropic` protocol uses OpenAI-compatible format (`/v1/chat/completions`), while `anthropic-messages` uses Anthropic's native format (`/v1/messages`). Choose based on your endpoint's supported format.
+> **Note:** Both protocols use Anthropic's native Messages API (`/v1/messages`). For Anthropic itself, prefer `anthropic`: it is built on the official Anthropic SDK and also supports the setup-token login.
 
 **Ollama (local)**
 

@@ -205,6 +205,46 @@
       "callbackLabel": "Complete callback URL",
       "complete": "Connect account",
       "success": "Account connected. Choose it in Models to use it."
+    },
+    "keyPools": {
+      "title": "Anthropic Key pools",
+      "description": "Each pool holds API keys from separate Anthropic organizations. Models that use a pool keep each conversation on one available key.",
+      "loading": "Loading Key pools…",
+      "poolName": "Pool name",
+      "rename": "Rename",
+      "createPool": "Create pool",
+      "deletePool": "Delete pool",
+      "deletePoolTitle": "Delete {{name}}?",
+      "deletePoolDescription": "This removes the pool and its saved keys.",
+      "models": "Models",
+      "keyLabel": "Key label",
+      "apiKey": "Anthropic API key",
+      "addKey": "Add key",
+      "checkingKey": "Checking key…",
+      "enable": "Enable",
+      "disable": "Disable",
+      "returnToService": "Return to service",
+      "removeKey": "Remove key",
+      "removeKeyTitle": "Remove {{name}}?",
+      "removeKeyDescription": "Conversations on this key move to the other keys in the pool.",
+      "nextCheck": "Next check {{time}}",
+      "rateLimitedUntil": "{{model}} rate limited until {{time}}",
+      "budget": "Budget",
+      "monthlyBudget": "Monthly budget, USD",
+      "resetDay": "Reset day",
+      "spend": "≈ {{amount}}",
+      "spendOfBudget": "≈ {{amount}} of {{budget}}",
+      "unpricedTokens": "{{tokens}} tokens without a price",
+      "cacheHitRate": "{{rate}} cache hits",
+      "since": "since {{date}}",
+      "state": {
+        "available": "Available",
+        "rate_limited": "Rate limited",
+        "exhausted": "Out of credit",
+        "rejected": "Rejected by Anthropic",
+        "disabled": "Disabled",
+        "unknown": "Gateway not running"
+      }
     }
   },
   "models": {
@@ -269,7 +309,7 @@
       "rpm": "Rate Limit (RPM)",
       "rpmHint": "Maximum requests per minute. 0 = no limit.",
       "thinkingLevel": "Thinking Level",
-      "thinkingLevelHint": "Extended thinking budget: off, low, medium, high, xhigh, adaptive.",
+      "thinkingLevelHint": "Thinking effort: off, low, medium, high, xhigh, max, adaptive.",
       "maxTokensField": "Max Tokens Field",
       "maxTokensFieldHint": "Override the request field name for max tokens, e.g. max_completion_tokens.",
       "inactivityTimeout": "Model inactivity limit (seconds)",
@@ -290,7 +330,9 @@
       "testing": "Waiting for this model to reply…",
       "valid": "Configuration is valid. No model request was sent.",
       "success": "Model replied successfully ({{latency}} ms).",
-      "canceled": "Model test canceled."
+      "canceled": "Model test canceled.",
+      "keysReplied": "{{replied}} of {{total}} keys replied.",
+      "keySuccess": "Replied ({{latency}} ms)"
     },
     "routing": {
       "title": "Model order",
@@ -364,6 +406,14 @@
         "provider_error": "Provider server error"
       },
       "attempts": "Attempts: {{count}}"
+    },
+    "keyPool": {
+      "credentials": "Credentials",
+      "pool": "Key pool: {{name}}",
+      "model": "Model",
+      "selectModel": "Select a model",
+      "loadingModels": "Loading models from Anthropic…",
+      "apiKeyRequired": "Enter an API key to stop using the Key pool."
     }
   },
   "channels": {
