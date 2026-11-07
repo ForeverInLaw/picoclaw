@@ -112,3 +112,18 @@ func TestKeyPoolSecretsAreSealedWithThePassphrase(t *testing.T) {
 		t.Fatalf("reloaded key = %q, want the decrypted secret", got)
 	}
 }
+
+func TestPlaintextSecretWarningsCoverKeyPoolSecrets(t *testing.T) {
+	cfg := &Config{
+		ModelList: []ModelConfig{{ModelName: "own", APIKey: "sk-plain"}, {ModelName: "sealed", APIKey: "enc://x"}},
+		KeyPools: []KeyPool{{ID: "orgs", Name: "Orgs", Keys: []KeyPoolKey{
+			{ID: "a", Label: "First", APIKey: "sk-ant-plain"},
+			{ID: "b", Label: "Second", APIKey: "file://second.key"},
+		}}},
+	}
+	got := cfg.plaintextSecretWarnings()
+	if len(got) != 2 || !strings.Contains(got[0], `model "own"`) ||
+		!strings.Contains(got[1], `key "First" of Key pool "Orgs"`) {
+		t.Fatalf("warnings = %q, want the plaintext model key and pool key", got)
+	}
+}

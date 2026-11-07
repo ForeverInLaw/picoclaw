@@ -1345,15 +1345,8 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	if passphrase := credential.PassphraseProvider(); passphrase != "" {
-		for _, m := range cfg.ModelList {
-			if m.APIKey != "" && !strings.HasPrefix(m.APIKey, "enc://") &&
-				!strings.HasPrefix(m.APIKey, "file://") {
-				fmt.Fprintf(
-					os.Stderr,
-					"picoclaw: warning: model %q has a plaintext api_key; call SaveConfig to encrypt it\n",
-					m.ModelName,
-				)
-			}
+		for _, warning := range cfg.plaintextSecretWarnings() {
+			fmt.Fprintln(os.Stderr, warning)
 		}
 	}
 
@@ -1455,12 +1448,40 @@ func encryptPlaintextKeyPoolKeys(pools []KeyPool, passphrase string) ([]KeyPool,
 	return sealed, nil
 }
 
+// isPlaintextSecret reports whether secret is set and neither an enc:// nor a
+// file:// reference.
+func isPlaintextSecret(secret string) bool {
+	return secret != "" && !strings.HasPrefix(secret, "enc://") && !strings.HasPrefix(secret, "file://")
+}
+
+// plaintextSecretWarnings names each model api_key and Key pool secret that
+// config.json holds in plaintext although a passphrase could seal it.
+func (c *Config) plaintextSecretWarnings() []string {
+	var warnings []string
+	for _, m := range c.ModelList {
+		if isPlaintextSecret(m.APIKey) {
+			warnings = append(warnings, fmt.Sprintf(
+				"picoclaw: warning: model %q has a plaintext api_key; call SaveConfig to encrypt it", m.ModelName))
+		}
+	}
+	for _, pool := range c.KeyPools {
+		for _, key := range pool.Keys {
+			if isPlaintextSecret(key.APIKey) {
+				warnings = append(warnings, fmt.Sprintf(
+					"picoclaw: warning: key %q of Key pool %q has a plaintext api_key; call SaveConfig to encrypt it",
+					key.Label, pool.Name))
+			}
+		}
+	}
+	return warnings
+}
+
 // sealPlaintext encrypts each plaintext secret in place, leaving empty, enc://
 // and file:// values unchanged, and reports whether it sealed any.
 func sealPlaintext(secrets []*string, passphrase string) (bool, error) {
 	changed := false
 	for _, secret := range secrets {
-		if *secret == "" || strings.HasPrefix(*secret, "enc://") || strings.HasPrefix(*secret, "file://") {
+		if !isPlaintextSecret(*secret) {
 			continue
 		}
 		encrypted, err := credential.Encrypt(passphrase, "", *secret)
