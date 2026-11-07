@@ -8,16 +8,16 @@ export type ModelTestConfiguration = Omit<
 // Test model's outcome on one Key pool key, named by its label only.
 export interface KeyTestResult {
   label: string
-  status: "success" | "error"
+  status: "success" | "failed"
   message: string
   latency_ms: number
 }
 
 // A pool-backed model is tested on each available key; its status is
-// "failed" unless every key replied.
+// "failed" unless every key replied, and it carries no message of its own.
 export interface ModelTestResult {
   status: "valid" | "success" | "failed"
-  message: string
+  message?: string
   latency_ms?: number
   keys?: KeyTestResult[]
 }

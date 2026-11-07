@@ -165,7 +165,7 @@ func (h *Handler) handleListKeyPools(w http.ResponseWriter, r *http.Request) {
 	}
 	pools := make([]keyPoolView, 0, len(cfg.KeyPools))
 	for _, pool := range cfg.KeyPools {
-		pools = append(pools, newKeyPoolView(cfg, pool, reported[pool.ID], runtime == "running", spent))
+		pools = append(pools, newKeyPoolView(cfg, pool, reported[pool.ID], runtime.Running(), spent))
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"runtime": runtime, "pools": pools})

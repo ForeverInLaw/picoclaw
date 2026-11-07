@@ -207,7 +207,7 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 	gatewayHealth(t, false)
 	result := testModel("/api/models/by-id/claude/test", "")
 	assertOutcomes("without a gateway every enabled key is tested", result,
-		"failed", "First org: success", "Second org: success", "Third org: error")
+		"failed", "First org: success", "Second org: success", "Third org: failed")
 	if !strings.Contains(result.Keys[2].Message, "credit") {
 		t.Errorf("out-of-credit key message = %q", result.Keys[2].Message)
 	}
@@ -249,7 +249,7 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 	unsaved := `{"model_name":"unsaved","model":"anthropic/claude-opus-5-5","api_base":"` + anthropicBase +
 		`","key_pool_id":"orgs"}`
 	assertOutcomes("an exhausted key is not tested", testModel("/api/models/test-inline", unsaved),
-		"failed", "First org: success", "Third org: error")
+		"failed", "First org: success", "Third org: failed")
 	assertProbedKeys(firstPoolSecret, thirdPoolSecret)
 
 	rateLimited := func(model string) {
@@ -262,11 +262,11 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 	}
 	rateLimited("claude-opus-5-5")
 	assertOutcomes("a key rate limited for the model is not tested", testModel("/api/models/test-inline", unsaved),
-		"failed", "First org: success", "Third org: error")
+		"failed", "First org: success", "Third org: failed")
 	assertProbedKeys(firstPoolSecret, thirdPoolSecret)
 	rateLimited("claude-haiku-5-5")
 	assertOutcomes("a key rate limited for another model is tested", testModel("/api/models/test-inline", unsaved),
-		"failed", "First org: success", "Second org: success", "Third org: error")
+		"failed", "First org: success", "Second org: success", "Third org: failed")
 	assertProbedKeys(firstPoolSecret, secondPoolSecret, thirdPoolSecret)
 }
 

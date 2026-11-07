@@ -10,33 +10,45 @@ import (
 	"github.com/sipeed/picoclaw/pkg/modelruntime"
 )
 
-// gatewayRuntime reads the gateway's runtime snapshot and whether it describes
-// the gateway running now: "running", "stale", "offline", or "unknown" when
-// no snapshot exists. Only a running snapshot reflects in-memory state.
-func (h *Handler) gatewayRuntime() (modelruntime.Snapshot, string) {
+// gatewayState says how far the gateway's runtime snapshot describes the
+// gateway now. Only a running snapshot reflects in-memory state.
+type gatewayState string
+
+const (
+	gatewayRunning gatewayState = "running"
+	gatewayStale   gatewayState = "stale"
+	gatewayOffline gatewayState = "offline"
+	gatewayUnknown gatewayState = "unknown" // no snapshot exists
+)
+
+// Running reports whether the snapshot is the running gateway's current state.
+func (s gatewayState) Running() bool { return s == gatewayRunning }
+
+// gatewayRuntime reads the gateway's runtime snapshot and its state.
+func (h *Handler) gatewayRuntime() (modelruntime.Snapshot, gatewayState) {
 	snapshot, err := modelruntime.Read(h.configPath)
 	if err != nil {
-		return snapshot, "unknown"
+		return snapshot, gatewayUnknown
 	}
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
-		return snapshot, "stale"
+		return snapshot, gatewayStale
 	}
 	health, status, healthErr := h.getGatewayHealth(cfg, time.Second)
 	switch {
 	case !snapshot.StoppedAt.IsZero() || healthErr != nil || status != http.StatusOK:
-		return snapshot, "offline"
+		return snapshot, gatewayOffline
 	case health.Pid == snapshot.PID && time.Since(snapshot.UpdatedAt) < modelruntime.StaleAfter:
-		return snapshot, "running"
+		return snapshot, gatewayRunning
 	}
-	return snapshot, "stale"
+	return snapshot, gatewayStale
 }
 
 func (h *Handler) handleModelRuntime(w http.ResponseWriter, r *http.Request) {
 	snapshot, state := h.gatewayRuntime()
 	for i := range snapshot.Availability {
 		item := &snapshot.Availability[i]
-		if state != "running" {
+		if !state.Running() {
 			item.Available = false
 			item.Reason = "runtime_unknown"
 			item.NextEligibleAt = time.Time{}
@@ -52,7 +64,7 @@ func (h *Handler) handleModelRuntime(w http.ResponseWriter, r *http.Request) {
 		if item.Reason == "auth" && item.Authorization == "authorized" {
 			item.Authorization = "reauthorization_required"
 		}
-		if item.Authorization == "authorized" && state == "running" && !item.NextEligibleAt.IsZero() &&
+		if item.Authorization == "authorized" && state.Running() && !item.NextEligibleAt.IsZero() &&
 			!time.Now().Before(item.NextEligibleAt) {
 			item.Available = true
 			item.Reason = ""
@@ -67,7 +79,7 @@ func (h *Handler) handleModelRuntime(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
-		State   string                `json:"state"`
+		State   gatewayState          `json:"state"`
 		Runtime modelruntime.Snapshot `json:"runtime"`
 	}{state, snapshot})
 }

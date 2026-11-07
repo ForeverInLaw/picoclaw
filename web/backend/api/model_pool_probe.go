@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"slices"
 	"sync"
@@ -16,7 +15,7 @@ import (
 // by label only.
 type keyTestResult struct {
 	Label     string `json:"label"`
-	Status    string `json:"status"` // "success" or "error"
+	Status    string `json:"status"` // "success" or "failed", like the overall status
 	Message   string `json:"message"`
 	LatencyMS int64  `json:"latency_ms"`
 }
@@ -54,21 +53,13 @@ func (h *Handler) runKeyPoolModelTest(w http.ResponseWriter, r *http.Request, mc
 		wg.Go(func() { results[i] = testPoolKey(r.Context(), pool, key, mc, modelID) })
 	}
 	wg.Wait()
-	replied := 0
+	status := "success"
 	for _, result := range results {
-		if result.Status == "success" {
-			replied++
+		if result.Status != "success" {
+			status = "failed"
 		}
 	}
-	status := "success"
-	if replied < len(results) {
-		status = "failed"
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  status,
-		"message": fmt.Sprintf("%d of %d keys replied.", replied, len(results)),
-		"keys":    results,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"status": status, "keys": results})
 }
 
 // testableKeys are the pool's enabled keys that the running gateway does not
@@ -79,7 +70,7 @@ func (h *Handler) testableKeys(pool config.KeyPool, modelID string) []config.Key
 	reported := reportedKeyStates(snapshot)[pool.ID]
 	keys := []config.KeyPoolKey{}
 	for _, key := range pool.Keys {
-		state := keyState(key, reported, runtime == "running")
+		state := keyState(key, reported, runtime.Running())
 		switch {
 		case state.State == providers.KeyDisabled, state.State == providers.KeyExhausted,
 			state.State == providers.KeyRejected:
@@ -118,7 +109,7 @@ func testPoolKey(
 		LatencyMS: time.Since(started).Milliseconds(),
 	}
 	if failure := modelTestFailure(response, err); failure != "" {
-		result.Status, result.Message = "error", failure
+		result.Status, result.Message = "failed", failure
 	}
 	return result
 }
