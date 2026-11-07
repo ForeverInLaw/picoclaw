@@ -525,6 +525,9 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 }
 
 func parseResponse(resp *anthropic.Message) *LLMResponse {
+	if resp.StopReason == anthropic.StopReasonRefusal {
+		return refusalResponse(resp)
+	}
 	var content strings.Builder
 	var reasoning strings.Builder
 	var toolCalls []ToolCall

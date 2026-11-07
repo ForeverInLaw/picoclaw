@@ -153,3 +153,73 @@ func TestAnthropicAPIKeyModelReturnsAnswerServedByFallbackModel(t *testing.T) {
 		})
 	}
 }
+
+const (
+	// anthropicRefusal is a refusal that survived the server-side fallback.
+	anthropicRefusal = `{"id":"msg_r","type":"message","role":"assistant","model":"claude-opus-5-5",
+		"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber",
+			"explanation":"This request could enable cyber harm.","recommended_model":null},
+		"content":[],"usage":{"input_tokens":12,"output_tokens":0}}`
+	anthropicRefusalText = "Claude declined to answer this request (cyber). This request could enable cyber harm."
+)
+
+func TestAnthropicAPIKeyModelSurfacesFinalRefusal(t *testing.T) {
+	const (
+		uncategorized = `{"id":"msg_r2","type":"message","role":"assistant","model":"claude-opus-5-5",
+			"stop_reason":"refusal","stop_details":{"type":"refusal","category":null,"explanation":null},
+			"content":[],"usage":{"input_tokens":12,"output_tokens":0}}`
+		// A mid-stream refusal after partial output: the partial text is discarded.
+		messageStart = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_rs\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-opus-5-5\",\"stop_reason\":null,\"usage\":{\"input_tokens\":12,\"output_tokens\":0}}}\n\n"
+		partialText  = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"Sure, the exploit\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+		messageDelta = "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"type\":\"refusal\",\"category\":\"cyber\",\"explanation\":\"This request could enable cyber harm.\",\"recommended_model\":null}},\"usage\":{\"output_tokens\":4}}\n\n"
+		messageStop  = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	)
+	for _, tc := range []struct {
+		name    string
+		respond func(w http.ResponseWriter)
+		call    func(*testing.T, LLMProvider, string) (*LLMResponse, error)
+		want    string
+	}{
+		{name: "non-streaming", respond: func(w http.ResponseWriter) { writeJSON(w, anthropicRefusal) }, call: chatHi,
+			want: anthropicRefusalText},
+		{name: "uncategorized", respond: func(w http.ResponseWriter) { writeJSON(w, uncategorized) }, call: chatHi,
+			want: "Claude declined to answer this request."},
+		{
+			name:    "streaming mid-output",
+			respond: func(w http.ResponseWriter) { writeSSE(w, messageStart, partialText, messageDelta, messageStop) },
+			call:    streamHi,
+			want:    anthropicRefusalText,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeAnthropic(t, tc.respond)
+			provider, modelID := anthropicModelProvider(t, fake, "claude-opus-5-5")
+
+			resp, err := tc.call(t, provider, modelID)
+			if err != nil {
+				t.Fatalf("call error = %v, want the refusal as an answer", err)
+			}
+			if resp.Content != tc.want || resp.FinishReason != "content_filter" || len(resp.ToolCalls) != 0 {
+				t.Errorf("response = %q/%q with %d tool calls, want %q/content_filter",
+					resp.Content, resp.FinishReason, len(resp.ToolCalls), tc.want)
+			}
+		})
+	}
+}
+
+func TestFallbackChain_AnthropicFinalRefusalDoesNotFailOver(t *testing.T) {
+	for name, provider := range anthropicProviders(t, http.StatusOK, anthropicRefusal) {
+		t.Run(name, func(t *testing.T) {
+			result, reserveCalls, _, err := runAnthropicThenReserve(t, provider)
+			if err != nil {
+				t.Fatalf("Execute() error = %v, want the refusal as the answer", err)
+			}
+			if reserveCalls != 0 {
+				t.Fatalf("reserve calls = %d, want none", reserveCalls)
+			}
+			if result.Response.Content != anthropicRefusalText || result.Response.FinishReason != "content_filter" {
+				t.Fatalf("response = %+v, want the refusal", result.Response)
+			}
+		})
+	}
+}

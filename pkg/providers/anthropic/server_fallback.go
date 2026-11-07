@@ -3,6 +3,8 @@ package anthropicprovider
 import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 // serverFallbackModels are the models documented to accept Anthropic's
@@ -45,4 +47,24 @@ func servedModel(msg *anthropic.Message) anthropic.Model {
 		break
 	}
 	return msg.Model
+}
+
+// refusalResponse surfaces a refusal that survived any server-side fallback as
+// an answer, so neither the agent nor the Routing chain treats it as a provider
+// failure. Output streamed before a mid-stream refusal is incomplete and dropped.
+func refusalResponse(msg *anthropic.Message) *LLMResponse {
+	details := msg.StopDetails
+	logger.WarnCF("provider.anthropic", "Anthropic refusal", map[string]any{
+		"model":    string(servedModel(msg)),
+		"category": string(details.Category),
+	})
+	text := "Claude declined to answer this request"
+	if details.Category != "" {
+		text += " (" + string(details.Category) + ")"
+	}
+	text += "."
+	if details.Explanation != "" {
+		text += " " + details.Explanation
+	}
+	return &LLMResponse{Content: text, FinishReason: "content_filter", Usage: usageInfo(msg.Usage)}
 }
