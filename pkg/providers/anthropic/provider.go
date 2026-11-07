@@ -57,6 +57,8 @@ func NewProvider(token string) *Provider {
 func NewProviderWithBaseURL(token, apiBase string) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
 	client := anthropic.NewClient(
+		// Credentials come from configuration only, never from env vars or SDK profiles.
+		option.WithoutEnvironmentDefaults(),
 		option.WithAuthToken(token),
 		option.WithMaxRetries(0),
 		option.WithBaseURL(baseURL),
@@ -77,9 +79,9 @@ func NewProviderWithAPIKey(apiKey, apiBase, proxy string, requestTimeout time.Du
 	// The SDK applies requestTimeout per request; a client-wide timeout would cut long streams.
 	httpClient := &http.Client{Transport: common.NewHTTPClient(proxy).Transport}
 	client := anthropic.NewClient(
+		// Credentials come from configuration only, never from env vars or SDK profiles.
+		option.WithoutEnvironmentDefaults(),
 		option.WithAPIKey(apiKey),
-		// NewClient also reads ANTHROPIC_AUTH_TOKEN; the configured key alone authenticates.
-		option.WithHeaderDel("Authorization"),
 		option.WithMaxRetries(0),
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(httpClient),
@@ -425,7 +427,7 @@ func buildParams(
 // Anthropic API constraint: budget_tokens must be strictly less than max_tokens.
 func applyThinkingConfig(params *anthropic.MessageNewParams, level string) {
 	if level == "adaptive" {
-		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
+		adaptive := anthropic.ThinkingConfigAdaptiveParam{}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
 		params.OutputConfig = anthropic.OutputConfigParam{
 			Effort: anthropic.OutputConfigEffortHigh,
