@@ -8,10 +8,7 @@ import (
 )
 
 func TestApplyThinkingConfig_Adaptive(t *testing.T) {
-	params := anthropic.MessageNewParams{
-		MaxTokens:   16000,
-		Temperature: anthropic.Float(0.7),
-	}
+	params := anthropic.MessageNewParams{MaxTokens: 16000}
 	applyThinkingConfig(&params, "adaptive")
 
 	if params.Thinking.OfAdaptive == nil {
@@ -22,9 +19,6 @@ func TestApplyThinkingConfig_Adaptive(t *testing.T) {
 	}
 	if params.OutputConfig.Effort != anthropic.OutputConfigEffortHigh {
 		t.Errorf("effort = %q, want %q", params.OutputConfig.Effort, anthropic.OutputConfigEffortHigh)
-	}
-	if params.Temperature.Valid() {
-		t.Error("temperature should be cleared when thinking is enabled")
 	}
 }
 
@@ -41,10 +35,7 @@ func TestApplyThinkingConfig_BudgetLevels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.level, func(t *testing.T) {
-			params := anthropic.MessageNewParams{
-				MaxTokens:   200000,
-				Temperature: anthropic.Float(0.5),
-			}
+			params := anthropic.MessageNewParams{MaxTokens: 200000}
 			applyThinkingConfig(&params, tt.level)
 
 			if params.Thinking.OfEnabled == nil {
@@ -58,9 +49,6 @@ func TestApplyThinkingConfig_BudgetLevels(t *testing.T) {
 			}
 			if params.OutputConfig.Effort != "" {
 				t.Errorf("effort = %q, want empty", params.OutputConfig.Effort)
-			}
-			if params.Temperature.Valid() {
-				t.Error("temperature should be cleared when thinking is enabled")
 			}
 		})
 	}
@@ -117,11 +105,10 @@ func TestLevelToBudget(t *testing.T) {
 	}
 }
 
-func TestBuildParams_ThinkingClearsTemperature(t *testing.T) {
+func TestBuildParams_ThinkingLevelSetsBudget(t *testing.T) {
 	msgs := []Message{{Role: "user", Content: "hello"}}
 	opts := map[string]any{
 		"max_tokens":     200000,
-		"temperature":    0.8,
 		"thinking_level": "medium",
 	}
 
@@ -130,9 +117,6 @@ func TestBuildParams_ThinkingClearsTemperature(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if params.Temperature.Valid() {
-		t.Error("temperature should be cleared when thinking_level is set")
-	}
 	if params.Thinking.OfEnabled == nil {
 		t.Fatal("expected enabled thinking")
 	}
@@ -189,24 +173,5 @@ func TestParseResponse_NoThinkingBlock(t *testing.T) {
 	}
 	if result.Content != "Just a normal response." {
 		t.Errorf("Content = %q, want text content", result.Content)
-	}
-}
-
-func TestBuildParams_NoThinkingKeepsTemperature(t *testing.T) {
-	msgs := []Message{{Role: "user", Content: "hello"}}
-	opts := map[string]any{
-		"temperature": 0.8,
-	}
-
-	params, err := buildParams(msgs, nil, "claude-sonnet-4-6", opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !params.Temperature.Valid() {
-		t.Error("temperature should be preserved when thinking is not set")
-	}
-	if params.Temperature.Value != 0.8 {
-		t.Errorf("temperature = %f, want 0.8", params.Temperature.Value)
 	}
 }

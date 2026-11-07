@@ -297,9 +297,7 @@ func buildParams(
 		params.System = system
 	}
 
-	if temp, ok := options["temperature"].(float64); ok {
-		params.Temperature = anthropic.Float(temp)
-	}
+	// temperature is never sent: the current API version rejects it on every model.
 
 	if len(tools) > 0 {
 		params.Tools = translateTools(tools)
@@ -320,16 +318,8 @@ func buildParams(
 // "adaptive" uses the adaptive thinking API (Claude 4.6+).
 // All other levels use budget_tokens which is universally supported.
 //
-// Anthropic API constraint: temperature must not be set when thinking is enabled.
-// budget_tokens must be strictly less than max_tokens.
+// Anthropic API constraint: budget_tokens must be strictly less than max_tokens.
 func applyThinkingConfig(params *anthropic.MessageNewParams, level string) {
-	// Anthropic API rejects requests with temperature set alongside thinking.
-	// Reset to zero value (omitted from JSON serialization).
-	if params.Temperature.Valid() {
-		log.Printf("anthropic: temperature cleared because thinking is enabled (level=%s)", level)
-	}
-	params.Temperature = anthropic.MessageNewParams{}.Temperature
-
 	if level == "adaptive" {
 		adaptive := anthropic.NewThinkingConfigAdaptiveParam()
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
