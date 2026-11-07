@@ -142,6 +142,11 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
     : null
 
   const handleSave = () => {
+    // A pool-backed model has no saved key to keep, so leaving the pool needs one.
+    if (model?.key_pool_id && !keyPoolID && !form.apiKey.trim()) {
+      setError(t("models.keyPool.apiKeyRequired"))
+      return
+    }
     setError("")
     save.mutate(undefined, { onError: (e) => setError(e.message) })
   }

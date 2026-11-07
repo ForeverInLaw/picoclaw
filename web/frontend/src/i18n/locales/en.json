@@ -412,7 +412,8 @@
       "pool": "Key pool: {{name}}",
       "model": "Model",
       "selectModel": "Select a model",
-      "loadingModels": "Loading models from Anthropic…"
+      "loadingModels": "Loading models from Anthropic…",
+      "apiKeyRequired": "Enter an API key to stop using the Key pool."
     }
   },
   "channels": {

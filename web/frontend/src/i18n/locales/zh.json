@@ -319,7 +319,8 @@
       "pool": "密钥池：{{name}}",
       "model": "模型",
       "selectModel": "选择模型",
-      "loadingModels": "正在从 Anthropic 加载模型…"
+      "loadingModels": "正在从 Anthropic 加载模型…",
+      "apiKeyRequired": "停止使用密钥池前，请输入 API 密钥。"
     }
   },
   "channels": {
