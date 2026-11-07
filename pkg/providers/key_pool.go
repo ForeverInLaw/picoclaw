@@ -159,7 +159,7 @@ func (p *keyPool) recordSpend(key pooledKey, model string, response *LLMResponse
 		return
 	}
 	spend := keyspend.Totals{
-		InputTokens:      int64(usage.PromptTokens - usage.CacheCreationTokens - usage.CacheReadTokens),
+		InputTokens:      int64(usage.UncachedPromptTokens()),
 		OutputTokens:     int64(usage.CompletionTokens),
 		CacheWriteTokens: int64(usage.CacheCreationTokens),
 		CacheReadTokens:  int64(usage.CacheReadTokens),

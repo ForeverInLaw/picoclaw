@@ -71,6 +71,12 @@ type UsageInfo struct {
 	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
 }
 
+// UncachedPromptTokens is the part of the prompt neither written to nor read
+// from a prompt cache.
+func (u UsageInfo) UncachedPromptTokens() int {
+	return u.PromptTokens - u.CacheCreationTokens - u.CacheReadTokens
+}
+
 // CacheControl marks a content block for LLM-side prefix caching.
 // Currently only "ephemeral" is supported (used by Anthropic).
 type CacheControl struct {

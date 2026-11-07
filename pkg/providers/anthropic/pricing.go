@@ -68,8 +68,7 @@ func EstimateCost(model string, usage UsageInfo, cacheTTL string) (usd float64, 
 	if cacheTTL == string(anthropic.CacheControlEphemeralTTLTTL1h) {
 		cacheWrite = price.cacheWrite1h
 	}
-	input := usage.PromptTokens - usage.CacheCreationTokens - usage.CacheReadTokens
-	perMTok := float64(input)*price.input +
+	perMTok := float64(usage.UncachedPromptTokens())*price.input +
 		float64(usage.CacheCreationTokens)*cacheWrite +
 		float64(usage.CacheReadTokens)*price.cacheRead +
 		float64(usage.CompletionTokens)*price.output
