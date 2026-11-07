@@ -32,6 +32,14 @@ func (p *Provider) serverFallbackOptions(model anthropic.Model) []option.Request
 	}
 }
 
+// WithoutServerFallback keeps every request on the requested model, so a
+// refusal comes back as the model's own answer. The dashboard's Test model uses
+// it to check exactly one model on one key.
+func (p *Provider) WithoutServerFallback() *Provider {
+	p.serverFallback = false
+	return p
+}
+
 // servedModel is the model that produced msg: the target of its last fallback
 // block, or else the model the response names. A stream declined mid-output
 // still names the requested model, from message_start.
