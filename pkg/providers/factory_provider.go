@@ -315,7 +315,7 @@ func createAnthropicProvider(ctx context.Context, cfg *config.ModelConfig) (LLMP
 		return createClaudeAuthProvider(ctx)
 	}
 	if pool := cfg.KeyPool(); pool != nil {
-		keys, err := newKeyPool(pool, cfg)
+		keys, err := newKeyPool(pool, cfg, keyPools)
 		if err != nil {
 			return nil, err
 		}

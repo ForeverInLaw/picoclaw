@@ -21,12 +21,24 @@ import (
 // identity to one key (ADR 0004); other providers ignore it.
 const ConversationIdentityOption = "conversation_identity"
 
+// keyPoolRuntime is the state every Key pool provider of the process shares:
+// the key availability registry and the spend file.
+type keyPoolRuntime struct {
+	availability *keyAvailabilityRegistry
+	spend        keyspend.Store
+}
+
+// keyPools is the process's Key pool runtime, which the factory hands to each
+// Key pool provider; tests replace it.
+var keyPools = keyPoolRuntime{availability: newKeyAvailabilityRegistry(systemClock{})}
+
 // keyPool serves a Key pool model with one Messages API client per enabled key.
 // Key availability lives in a registry shared by every model using the pool.
 type keyPool struct {
 	name         string
 	keys         []pooledKey
 	availability *keyAvailabilityRegistry
+	spend        keyspend.Store
 	cacheTTL     string // prices this model's cache writes
 }
 
@@ -42,8 +54,8 @@ type pooledKey struct {
 // endpoint, after applying the pool's returns to service. A pool without
 // enabled keys leaves the candidate unavailable, so the Routing chain moves to
 // its reserves.
-func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig) (*keyPool, error) {
-	keyAvailability.applyReturns(pool)
+func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig, runtime keyPoolRuntime) (*keyPool, error) {
+	runtime.availability.applyReturns(pool)
 	enabled := pool.EnabledKeys()
 	if len(enabled) == 0 {
 		return nil, &CandidateUnavailableError{
@@ -59,7 +71,13 @@ func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig) (*keyPool, error) 
 			client: newAnthropicAPIKeyClient(key.APIKey, mc).WithKeyLabel(key.Label),
 		})
 	}
-	return &keyPool{name: pool.Name, keys: keys, availability: keyAvailability, cacheTTL: mc.CacheTTL}, nil
+	return &keyPool{
+		name:         pool.Name,
+		keys:         keys,
+		availability: runtime.availability,
+		spend:        runtime.spend,
+		cacheTTL:     mc.CacheTTL,
+	}, nil
 }
 
 // NewKeyPoolKeyProbe builds a provider that sends mc's requests through key
@@ -184,7 +202,7 @@ func (p *keyPool) recordSpend(key pooledKey, model string, response *LLMResponse
 	} else {
 		spend.UnpricedTokens = int64(usage.TotalTokens)
 	}
-	if err := (keyspend.Store{}).Record(key.ref.pool, key.ref.key, p.availability.clock.Now(), spend); err != nil {
+	if err := p.spend.Record(key.ref.pool, key.ref.key, p.availability.clock.Now(), spend); err != nil {
 		logger.WarnCF("provider.anthropic", "Key pool spend not recorded",
 			map[string]any{"pool": p.name, "key": key.label, "error": err.Error()})
 	}

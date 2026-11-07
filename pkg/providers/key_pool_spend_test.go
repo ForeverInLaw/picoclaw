@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"path/filepath"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/keyspend"
@@ -21,12 +22,20 @@ func usageAnswer(model string, input, cacheWrite, cacheRead, output int) string 
 // keyIDs maps the fake keys of keyPoolConfig to their Key pool key IDs.
 var keyIDs = map[string]string{"sk-ant-a": "org-1", "sk-ant-b": "org-2", "sk-ant-c": "org-3"}
 
+// useSpendStore gives the test its own Key pool spend file.
+func useSpendStore(t *testing.T) {
+	t.Helper()
+	previous := keyPools.spend
+	keyPools.spend = keyspend.NewStore(filepath.Join(t.TempDir(), "spend.json"))
+	t.Cleanup(func() { keyPools.spend = previous })
+}
+
 // spendOf reads the current monthly totals of a key of keyPoolConfig's pool.
 func spendOf(t *testing.T, clock *fakeClock, apiKey string) keyspend.Totals {
 	t.Helper()
-	ledger, err := keyspend.Store{}.Read()
+	ledger, err := keyPools.spend.Read()
 	if err != nil {
-		t.Fatalf("keyspend.Store{}.Read() error = %v", err)
+		t.Fatalf("reading Key pool spend: %v", err)
 	}
 	return ledger.Since("orgs", keyIDs[apiKey], keyspend.PeriodStart(1, clock.Now()))
 }

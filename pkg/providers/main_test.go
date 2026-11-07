@@ -3,21 +3,22 @@ package providers
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/keyspend"
 )
 
-// TestMain points the Picoclaw home at a temporary directory, so answers served
-// through Key pools in tests never record spend in the real home.
+// TestMain points Key pool spend at a temporary file, so answers served through
+// Key pools in tests never record spend in the real Picoclaw home.
 func TestMain(m *testing.M) {
-	home, err := os.MkdirTemp("", "picoclaw-providers-test-")
+	dir, err := os.MkdirTemp("", "picoclaw-providers-test-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	os.Setenv(config.EnvHome, home)
+	keyPools.spend = keyspend.NewStore(filepath.Join(dir, "spend.json"))
 	code := m.Run()
-	os.RemoveAll(home)
+	os.RemoveAll(dir)
 	os.Exit(code)
 }

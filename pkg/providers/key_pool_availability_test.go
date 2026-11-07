@@ -50,9 +50,9 @@ func (c *fakeClock) advance(d time.Duration) {
 func useKeyPoolClock(t *testing.T) *fakeClock {
 	t.Helper()
 	clock := &fakeClock{now: time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)}
-	previous := keyAvailability
-	keyAvailability = newKeyAvailabilityRegistry(clock)
-	t.Cleanup(func() { keyAvailability = previous })
+	previous := keyPools.availability
+	keyPools.availability = newKeyAvailabilityRegistry(clock)
+	t.Cleanup(func() { keyPools.availability = previous })
 	return clock
 }
 

@@ -57,14 +57,14 @@ type ModelRateLimit struct {
 // order, after applying the pool's returns to service. States are held in
 // memory for the process and shared by every configured model using the pool.
 func KeyPoolAvailability(pool *config.KeyPool) []KeyAvailability {
-	keyAvailability.applyReturns(pool)
+	keyPools.availability.applyReturns(pool)
 	states := make([]KeyAvailability, 0, len(pool.Keys))
 	for _, key := range pool.Keys {
 		if !key.Enabled {
 			states = append(states, KeyAvailability{KeyID: key.ID, State: KeyDisabled})
 			continue
 		}
-		states = append(states, keyAvailability.report(keyRef{pool: pool.ID, key: key.ID}))
+		states = append(states, keyPools.availability.report(keyRef{pool: pool.ID, key: key.ID}))
 	}
 	return states
 }
@@ -80,9 +80,6 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time                         { return time.Now() }
 func (systemClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
-
-// keyAvailability is the process-wide registry of Key pool key states.
-var keyAvailability = newKeyAvailabilityRegistry(systemClock{})
 
 // keyRef identifies a key across every configured model using its pool.
 type keyRef struct{ pool, key string }
