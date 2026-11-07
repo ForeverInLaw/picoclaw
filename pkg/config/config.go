@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -91,6 +92,7 @@ type Config struct {
 	ChannelList ChannelList     `json:"channel_list"`
 	Providers   ProvidersConfig `json:"providers,omitempty"`
 	ModelList   []ModelConfig   `json:"model_list"` // New model-centric provider configuration
+	KeyPools    []KeyPool       `json:"key_pools,omitempty"`
 	Gateway     GatewayConfig   `json:"gateway"`
 	Hooks       HooksConfig     `json:"hooks,omitempty"`
 	Tools       ToolsConfig     `json:"tools"`
@@ -150,10 +152,7 @@ func (c *Config) ArtifactFilter() func(string) string {
 	}
 	// Runtime keys have already been decoded/dereferenced by LoadConfig. Sidecar
 	// values alone may contain their encrypted/file reference instead.
-	for _, model := range c.ModelList {
-		values = append(values, model.APIKey)
-		values = append(values, model.APIKeys...)
-	}
+	values = append(values, c.ProviderCredentials()...)
 	sort.SliceStable(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
 	seen := make(map[string]bool)
 	pairs := make([]string, 0, len(values)*2)
@@ -164,6 +163,22 @@ func (c *Config) ArtifactFilter() func(string) string {
 		}
 	}
 	return strings.NewReplacer(pairs...).Replace
+}
+
+// ProviderCredentials returns the resolved model API keys and Key pool secrets,
+// which error text and artifacts must never reveal.
+func (c *Config) ProviderCredentials() []string {
+	var values []string
+	for _, model := range c.ModelList {
+		values = append(values, model.APIKey)
+		values = append(values, model.APIKeys...)
+	}
+	for _, pool := range c.KeyPools {
+		for _, key := range pool.Keys {
+			values = append(values, key.APIKey)
+		}
+	}
+	return values
 }
 
 type HooksConfig struct {
@@ -933,11 +948,12 @@ type ModelConfig struct {
 	Model     string `json:"model"`      // Protocol/model-identifier (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4.6")
 
 	// HTTP-based providers
-	APIBase   string   `json:"api_base,omitempty"` // API endpoint URL
-	APIKey    string   `json:"api_key"`            // API authentication key (single key)
-	APIKeys   []string `json:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
-	Proxy     string   `json:"proxy,omitempty"`    // HTTP proxy URL
-	Fallbacks []string `json:"fallbacks"`          // Fallback model names for failover
+	APIBase   string   `json:"api_base,omitempty"`    // API endpoint URL
+	APIKey    string   `json:"api_key"`               // API authentication key (single key)
+	APIKeys   []string `json:"api_keys,omitempty"`    // API authentication keys (multiple keys for failover)
+	Proxy     string   `json:"proxy,omitempty"`       // HTTP proxy URL
+	Fallbacks []string `json:"fallbacks"`             // Fallback model names for failover
+	KeyPoolID string   `json:"key_pool_id,omitempty"` // Key pool serving an anthropic/ model instead of api_key
 
 	// Special providers (CLI-based, OAuth, etc.)
 	AccountID   string `json:"account_id,omitempty"`   // Saved OAuth connection reference, distinct from provider workspace identity.
@@ -957,6 +973,8 @@ type ModelConfig struct {
 
 	// from security
 	apiKeys []string
+	// attached by Config.ResolveKeyPools
+	keyPool *KeyPool
 }
 
 const DefaultModelInactivityTimeout = 60 * time.Second
@@ -1354,11 +1372,13 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if err := resolveAPIKeys(cfg.ModelList, filepath.Dir(path)); err != nil {
+	// Migration keeps credential references (enc://, file://) intact; they resolve below.
+	cfg.EnsureModelIDs()
+	cfg.migrateAnthropicAPIKeysToPools()
+
+	if err := cfg.resolveCredentials(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-
-	cfg.EnsureModelIDs()
 
 	// Expand multi-key configs into separate entries for key-level failover
 	cfg.configuredModels = cloneModels(cfg.ModelList)
@@ -1400,22 +1420,85 @@ func encryptPlaintextAPIKeys(models []ModelConfig, passphrase string) ([]ModelCo
 		for j := range m.APIKeys {
 			keys = append(keys, &m.APIKeys[j])
 		}
-		for _, key := range keys {
-			if *key == "" || strings.HasPrefix(*key, "enc://") || strings.HasPrefix(*key, "file://") {
-				continue
-			}
-			encrypted, err := credential.Encrypt(passphrase, "", *key)
-			if err != nil {
-				return nil, fmt.Errorf("cannot seal api_key for model %q: %w", m.ModelName, err)
-			}
-			*key = encrypted
-			changed = true
+		sealedAny, err := sealPlaintext(keys, passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("cannot seal api_key for model %q: %w", m.ModelName, err)
 		}
+		changed = changed || sealedAny
 	}
 	if !changed {
 		return nil, nil
 	}
 	return sealed, nil
+}
+
+// encryptPlaintextKeyPoolKeys is encryptPlaintextAPIKeys for Key pool secrets.
+func encryptPlaintextKeyPoolKeys(pools []KeyPool, passphrase string) ([]KeyPool, error) {
+	sealed := make([]KeyPool, len(pools))
+	changed := false
+	for i, pool := range pools {
+		pool.Keys = slices.Clone(pool.Keys)
+		keys := make([]*string, len(pool.Keys))
+		for j := range pool.Keys {
+			keys[j] = &pool.Keys[j].APIKey
+		}
+		sealedAny, err := sealPlaintext(keys, passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("cannot seal api_key for key pool %q: %w", pool.ID, err)
+		}
+		changed = changed || sealedAny
+		sealed[i] = pool
+	}
+	if !changed {
+		return nil, nil
+	}
+	return sealed, nil
+}
+
+// sealPlaintext encrypts each plaintext secret in place, leaving empty, enc://
+// and file:// values unchanged, and reports whether it sealed any.
+func sealPlaintext(secrets []*string, passphrase string) (bool, error) {
+	changed := false
+	for _, secret := range secrets {
+		if *secret == "" || strings.HasPrefix(*secret, "enc://") || strings.HasPrefix(*secret, "file://") {
+			continue
+		}
+		encrypted, err := credential.Encrypt(passphrase, "", *secret)
+		if err != nil {
+			return false, err
+		}
+		*secret = encrypted
+		changed = true
+	}
+	return changed, nil
+}
+
+// resolveCredentials dereferences model and Key pool secrets, then attaches
+// each referenced Key pool to its models.
+func (c *Config) resolveCredentials(configDir string) error {
+	if err := resolveAPIKeys(c.ModelList, configDir); err != nil {
+		return err
+	}
+	if err := resolveKeyPoolKeys(c.KeyPools, configDir); err != nil {
+		return err
+	}
+	return c.ResolveKeyPools()
+}
+
+// resolveKeyPoolKeys decrypts or dereferences each Key pool secret in place,
+// like resolveAPIKeys does for model keys.
+func resolveKeyPoolKeys(pools []KeyPool, configDir string) error {
+	cr := credential.NewResolver(configDir)
+	for i := range pools {
+		for j := range pools[i].Keys {
+			resolved, err := cr.Resolve(pools[i].Keys[j].APIKey)
+			if err != nil {
+				return fmt.Errorf("key pool %q: keys[%d]: %w", pools[i].ID, j, err)
+			}
+			pools[i].Keys[j].APIKey = resolved
+		}
+	}
+	return nil
 }
 
 // resolveAPIKeys decrypts or dereferences each api_key in models in-place.
@@ -1492,16 +1575,31 @@ func saveConfig(path string, cfg *Config, syncSidecar bool) error {
 			tmp.ModelList = sealed
 			cfg = &tmp
 		}
+		sealedPools, err := encryptPlaintextKeyPoolKeys(cfg.KeyPools, passphrase)
+		if err != nil {
+			return err
+		}
+		if sealedPools != nil {
+			tmp := *cfg
+			tmp.KeyPools = sealedPools
+			cfg = &tmp
+		}
 	}
 
+	if syncSidecar {
+		inSidecar, err := saveExistingSecurityConfig(path, cfg)
+		if err != nil {
+			return err
+		}
+		if inSidecar {
+			tmp := *cfg
+			tmp.KeyPools = keyPoolsWithoutSecrets(cfg.KeyPools)
+			cfg = &tmp
+		}
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
-	}
-	if syncSidecar {
-		if err := saveExistingSecurityConfig(path, cfg); err != nil {
-			return err
-		}
 	}
 	return fileutil.WriteFileAtomic(path, data, 0o600)
 }

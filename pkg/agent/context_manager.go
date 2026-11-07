@@ -61,6 +61,8 @@ func snapshotContext(agent *AgentInstance, key string) ContextSnapshot {
 			"temperature":      agent.Temperature,
 			"max_tokens":       agent.MaxTokens,
 			"prompt_cache_key": "seahorse:" + agent.ID,
+
+			providers.ConversationIdentityOption: key,
 		},
 	}
 	if reader, ok := agent.Sessions.(session.ContextReader); ok {

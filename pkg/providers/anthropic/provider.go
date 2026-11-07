@@ -43,6 +43,8 @@ type Provider struct {
 	requestTimeout time.Duration
 	// promptCache is nil for setup-token providers, whose requests stay as they were.
 	promptCache *promptCache
+	// keyLabel names the Key pool key in usage logs; empty outside pools.
+	keyLabel string
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -98,6 +100,13 @@ func (p *Provider) WithPromptCacheTTL(ttl string) *Provider {
 	if p.promptCache != nil {
 		p.promptCache.ttl = anthropic.CacheControlEphemeralTTL(ttl)
 	}
+	return p
+}
+
+// WithKeyLabel names the Key pool key this provider authenticates with in its
+// usage logs. The label is never the secret.
+func (p *Provider) WithKeyLabel(label string) *Provider {
+	p.keyLabel = label
 	return p
 }
 
@@ -166,7 +175,7 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return completeResponse(resp), nil
+	return p.completeResponse(resp), nil
 }
 
 func (p *Provider) ChatStream(
@@ -248,7 +257,7 @@ func (p *Provider) chatStreaming(
 	if !completed {
 		return nil, fmt.Errorf("claude stream ended before message_stop: %w", io.ErrUnexpectedEOF)
 	}
-	return completeResponse(&msg), nil
+	return p.completeResponse(&msg), nil
 }
 
 // mergeDeltaUsage applies the cumulative counts of a message_delta event. The
@@ -267,14 +276,18 @@ func mergeDeltaUsage(usage *anthropic.Usage, delta anthropic.MessageDeltaUsage) 
 }
 
 // completeResponse logs a finished message's usage and maps it to an LLMResponse.
-func completeResponse(msg *anthropic.Message) *LLMResponse {
-	logger.InfoCF("provider.anthropic", "Anthropic usage", map[string]any{
+func (p *Provider) completeResponse(msg *anthropic.Message) *LLMResponse {
+	fields := map[string]any{
 		"model":                       string(msg.Model),
 		"input_tokens":                msg.Usage.InputTokens,
 		"output_tokens":               msg.Usage.OutputTokens,
 		"cache_creation_input_tokens": msg.Usage.CacheCreationInputTokens,
 		"cache_read_input_tokens":     msg.Usage.CacheReadInputTokens,
-	})
+	}
+	if p.keyLabel != "" {
+		fields["key"] = p.keyLabel
+	}
+	logger.InfoCF("provider.anthropic", "Anthropic usage", fields)
 	return parseResponse(msg)
 }
 

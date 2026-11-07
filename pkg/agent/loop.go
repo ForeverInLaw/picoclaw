@@ -2208,6 +2208,8 @@ turnLoop:
 			"max_tokens":       ts.agent.MaxTokens,
 			"temperature":      ts.agent.Temperature,
 			"prompt_cache_key": ts.agent.ID,
+
+			providers.ConversationIdentityOption: ts.conversationIdentity,
 		}
 
 		llmModel := activeModel
@@ -3725,8 +3727,8 @@ func (al *AgentLoop) summarizeSession(
 		part1 := validMessages[:mid]
 		part2 := validMessages[mid:]
 
-		s1, _ := al.summarizeBatch(ctx, agent, part1, "")
-		s2, _ := al.summarizeBatch(ctx, agent, part2, "")
+		s1, _ := al.summarizeBatch(ctx, agent, sessionKey, part1, "")
+		s2, _ := al.summarizeBatch(ctx, agent, sessionKey, part2, "")
 
 		mergePrompt := fmt.Sprintf(
 			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
@@ -3734,14 +3736,14 @@ func (al *AgentLoop) summarizeSession(
 			s2,
 		)
 
-		resp, err := al.retryLLMCall(ctx, agent, mergePrompt, llmMaxRetries)
+		resp, err := al.retryLLMCall(ctx, agent, sessionKey, mergePrompt, llmMaxRetries)
 		if err == nil && resp.Content != "" {
 			finalSummary = resp.Content
 		} else {
 			finalSummary = s1 + " " + s2
 		}
 	} else {
-		finalSummary, _ = al.summarizeBatch(ctx, agent, validMessages, summary)
+		finalSummary, _ = al.summarizeBatch(ctx, agent, sessionKey, validMessages, summary)
 	}
 
 	if ctx.Err() != nil {
@@ -3798,6 +3800,7 @@ func (al *AgentLoop) findNearestUserMessage(messages []providers.Message, mid in
 func (al *AgentLoop) retryLLMCall(
 	ctx context.Context,
 	agent *AgentInstance,
+	conversation string,
 	prompt string,
 	maxRetries int,
 ) (*providers.LLMResponse, error) {
@@ -3823,6 +3826,8 @@ func (al *AgentLoop) retryLLMCall(
 					"max_tokens":       agent.MaxTokens,
 					"temperature":      llmTemperature,
 					"prompt_cache_key": agent.ID,
+
+					providers.ConversationIdentityOption: conversation,
 				},
 			)
 		}()
@@ -3847,6 +3852,7 @@ func (al *AgentLoop) retryLLMCall(
 func (al *AgentLoop) summarizeBatch(
 	ctx context.Context,
 	agent *AgentInstance,
+	sessionKey string,
 	batch []providers.Message,
 	existingSummary string,
 ) (string, error) {
@@ -3872,7 +3878,7 @@ func (al *AgentLoop) summarizeBatch(
 	}
 	prompt := sb.String()
 
-	response, err := al.retryLLMCall(ctx, agent, prompt, llmMaxRetries)
+	response, err := al.retryLLMCall(ctx, agent, sessionKey, prompt, llmMaxRetries)
 	if err == nil && response.Content != "" {
 		return strings.TrimSpace(response.Content), nil
 	}
