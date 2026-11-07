@@ -155,7 +155,7 @@ Thiết kế này cũng cho phép **hỗ trợ đa agent** với lựa chọn pr
 
 **Anthropic Messages API (định dạng native)**
 
-Để truy cập trực tiếp API Anthropic hoặc endpoint tùy chỉnh chỉ hỗ trợ định dạng message native của Anthropic:
+Dành cho proxy bên thứ ba và endpoint tùy chỉnh triển khai định dạng message native của Anthropic:
 
 ```json
 {
@@ -166,12 +166,9 @@ Thiết kế này cũng cho phép **hỗ trợ đa agent** với lựa chọn pr
 }
 ```
 
-> Sử dụng giao thức `anthropic-messages` khi:
-> - Sử dụng proxy bên thứ ba chỉ hỗ trợ endpoint native `/v1/messages` của Anthropic (không tương thích OpenAI `/v1/chat/completions`)
-> - Kết nối đến dịch vụ như MiniMax, Synthetic yêu cầu định dạng message native của Anthropic
-> - Giao thức `anthropic` hiện tại trả về lỗi 404 (cho thấy endpoint không hỗ trợ định dạng tương thích OpenAI)
+> Sử dụng `anthropic-messages` cho proxy bên thứ ba và các dịch vụ như MiniMax hoặc Synthetic triển khai endpoint native `/v1/messages` của Anthropic.
 >
-> **Lưu ý:** Giao thức `anthropic` sử dụng định dạng tương thích OpenAI (`/v1/chat/completions`), trong khi `anthropic-messages` sử dụng định dạng native của Anthropic (`/v1/messages`). Chọn dựa trên định dạng endpoint hỗ trợ.
+> **Lưu ý:** Cả hai giao thức đều dùng Messages API native của Anthropic (`/v1/messages`). Với chính Anthropic, hãy ưu tiên `anthropic`: giao thức này dựa trên SDK chính thức của Anthropic và hỗ trợ đăng nhập bằng setup-token.
 
 **Ollama (local)**
 

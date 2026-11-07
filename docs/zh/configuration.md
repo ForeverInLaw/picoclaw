@@ -433,7 +433,7 @@ Agent 读取 HEARTBEAT.md
 
 > 运行 `picoclaw auth login --provider anthropic` 粘贴 API Token。
 
-如需直连 Anthropic 原生接口（不兼容 OpenAI 格式的端点）：
+如需接入实现 Anthropic 原生消息格式的第三方代理：
 
 ```json
 {
@@ -444,7 +444,7 @@ Agent 读取 HEARTBEAT.md
 }
 ```
 
-> 当端点不支持 OpenAI 兼容格式（`/v1/chat/completions`），需要 Anthropic 原生 `/v1/messages` 时使用 `anthropic-messages`。
+> `anthropic` 和 `anthropic-messages` 都使用 Anthropic 原生 Messages API（`/v1/messages`）。直连 Anthropic 请优先使用 `anthropic`，第三方代理请使用 `anthropic-messages`。
 
 </details>
 

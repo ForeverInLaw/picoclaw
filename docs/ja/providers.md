@@ -155,7 +155,7 @@
 
 **Anthropic Messages API（ネイティブ形式）**
 
-Anthropic API への直接アクセスや、Anthropic のネイティブメッセージ形式のみをサポートするカスタムエンドポイント向け：
+Anthropic のネイティブメッセージ形式を実装したサードパーティプロキシやカスタムエンドポイント向け：
 
 ```json
 {
@@ -166,12 +166,9 @@ Anthropic API への直接アクセスや、Anthropic のネイティブメッ�
 }
 ```
 
-> `anthropic-messages` プロトコルを使用するケース：
-> - Anthropic のネイティブ `/v1/messages` エンドポイントのみをサポートするサードパーティプロキシを使用する場合（OpenAI 互換の `/v1/chat/completions` 非対応）
-> - MiniMax、Synthetic など Anthropic のネイティブメッセージ形式を必要とするサービスに接続する場合
-> - 既存の `anthropic` プロトコルが 404 エラーを返す場合（エンドポイントが OpenAI 互換形式をサポートしていないことを示す）
+> MiniMax や Synthetic など、Anthropic のネイティブ `/v1/messages` エンドポイントを実装したサードパーティプロキシやサービスには `anthropic-messages` を使用してください。
 >
-> **注意:** `anthropic` プロトコルは OpenAI 互換形式（`/v1/chat/completions`）を使用し、`anthropic-messages` は Anthropic のネイティブ形式（`/v1/messages`）を使用します。エンドポイントがサポートする形式に応じて選択してください。
+> **注意:** どちらのプロトコルも Anthropic のネイティブ Messages API（`/v1/messages`）を使用します。Anthropic 本体に接続する場合は `anthropic` を推奨します。公式 Anthropic SDK を使用し、setup-token ログインにも対応しています。
 
 **Ollama (ローカル)**
 

@@ -155,7 +155,7 @@ Este design também permite **suporte multi-agente** com seleção flexível de 
 
 **Anthropic Messages API (formato nativo)**
 
-Para acesso direto à API Anthropic ou endpoints personalizados que suportam apenas o formato de mensagem nativo da Anthropic:
+Para proxies de terceiros e endpoints personalizados que implementam o formato de mensagem nativo da Anthropic:
 
 ```json
 {
@@ -166,12 +166,9 @@ Para acesso direto à API Anthropic ou endpoints personalizados que suportam ape
 }
 ```
 
-> Use o protocolo `anthropic-messages` quando:
-> - Usar proxies de terceiros que suportam apenas o endpoint nativo `/v1/messages` da Anthropic (não o compatível com OpenAI `/v1/chat/completions`)
-> - Conectar a serviços como MiniMax, Synthetic que requerem o formato de mensagem nativo da Anthropic
-> - O protocolo `anthropic` existente retorna erros 404 (indicando que o endpoint não suporta formato compatível com OpenAI)
+> Use `anthropic-messages` para proxies de terceiros e serviços como MiniMax ou Synthetic que implementam o endpoint nativo `/v1/messages` da Anthropic.
 >
-> **Nota:** O protocolo `anthropic` usa formato compatível com OpenAI (`/v1/chat/completions`), enquanto `anthropic-messages` usa o formato nativo da Anthropic (`/v1/messages`). Escolha com base no formato suportado pelo seu endpoint.
+> **Nota:** Os dois protocolos usam a Messages API nativa da Anthropic (`/v1/messages`). Para a própria Anthropic, prefira `anthropic`: ele usa o SDK oficial da Anthropic e também suporta login com setup-token.
 
 **Ollama (local)**
 
