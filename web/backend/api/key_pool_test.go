@@ -495,3 +495,76 @@ func TestKeyPoolKeyStateComesFromTheGatewayAndReturnToServiceClearsExhaustion(t 
 		t.Fatalf("request after return was served by %q", servedBy)
 	}
 }
+
+func TestPoolModelIsConfiguredOnlyWithAnEnabledKeyThatHasASecret(t *testing.T) {
+	model := func(keys ...config.KeyPoolKey) config.ModelConfig {
+		cfg := config.DefaultConfig()
+		cfg.KeyPools = []config.KeyPool{{ID: "orgs", Name: "Organizations", Keys: keys}}
+		cfg.ModelList = []config.ModelConfig{
+			{ModelName: "claude", Model: "anthropic/claude-opus-5-5", KeyPoolID: "orgs"},
+		}
+		if err := cfg.ResolveKeyPools(); err != nil {
+			t.Fatal(err)
+		}
+		return cfg.ModelList[0]
+	}
+	if hasModelConfiguration(model(config.KeyPoolKey{ID: "empty", Label: "Empty", Enabled: true})) {
+		t.Error("a pool whose only enabled key has no secret counts as configured")
+	}
+	if !hasModelConfiguration(
+		model(config.KeyPoolKey{ID: "org", Label: "Org", Enabled: true, APIKey: firstPoolSecret}),
+	) {
+		t.Error("a pool with an enabled key that has a secret is not configured")
+	}
+}
+
+func TestAddingAKeyIsRefusedWhenThePoolEndpointChangedDuringItsCheck(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.KeyPools = []config.KeyPool{{ID: "orgs", Name: "Organizations"}}
+	cfg.ModelList = []config.ModelConfig{
+		{ID: "claude", ModelName: "claude", Model: "anthropic/claude-opus-5-5", KeyPoolID: "orgs"},
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the pool's new endpoint received %s %s", r.Method, r.URL.Path)
+	}))
+	t.Cleanup(moved.Close)
+	// The fake Anthropic accepts the key, and while it answers the pool's model
+	// moves to another endpoint.
+	checked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		edited, err := config.LoadConfig(path)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		edited.ModelList[0].APIBase = moved.URL
+		if err := config.SaveConfig(path, edited); err != nil {
+			t.Error(err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[],"has_more":false}`))
+	}))
+	t.Cleanup(checked.Close)
+	cfg.ModelList[0].APIBase = checked.URL
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	NewHandler(path).RegisterRoutes(mux)
+
+	rec := serve(mux, http.MethodPost, "/api/key-pools/orgs/keys", `{"label":"Org","api_key":"`+firstPoolSecret+`"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("adding a key checked over an endpoint the pool left = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	saved, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.KeyPools[0].Keys) != 0 {
+		t.Fatalf("the key was saved for the moved pool: %+v", saved.KeyPools[0].Keys)
+	}
+}

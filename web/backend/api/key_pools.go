@@ -243,7 +243,8 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "Could not load configuration.")
 		return
 	}
-	if status, message := keyPoolEndpoint(cfg, r.PathValue("pool")).checkKey(r.Context(), request.APIKey); status != 0 {
+	checked := keyPoolEndpoint(cfg, r.PathValue("pool"))
+	if status, message := checked.checkKey(r.Context(), request.APIKey); status != 0 {
 		writeAPIError(w, status, message)
 		return
 	}
@@ -252,6 +253,11 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 		pool, err := findKeyPool(cfg, r.PathValue("pool"))
 		if err != nil {
 			return nil, err
+		}
+		// The check ran outside the configuration lock; a key checked over one
+		// endpoint is never saved for a pool that now uses another.
+		if keyPoolEndpoint(cfg, pool.ID) != checked {
+			return nil, errPoolEndpointChanged
 		}
 		pool.Keys = append(pool.Keys, key)
 		return newKeyPoolKeyView(pool.ID, key, keyState(key, nil, false), keyspend.Ledger{}), nil
@@ -272,6 +278,19 @@ func keyPoolEndpoint(cfg *config.Config, poolID string) anthropicEndpoint {
 		}
 	}
 	return anthropicEndpoint{apiBase: anthropicAPIBase}
+}
+
+// keyPoolTrustsEndpoint reports whether the pool's keys may be sent over
+// endpoint: Anthropic's API without a proxy, or the endpoint of a saved model
+// that uses the pool. An unsaved endpoint from a request never receives them.
+func keyPoolTrustsEndpoint(cfg *config.Config, poolID string, endpoint anthropicEndpoint) bool {
+	if endpoint == (anthropicEndpoint{apiBase: anthropicAPIBase}) {
+		return true
+	}
+	return slices.ContainsFunc(cfg.ModelList, func(model config.ModelConfig) bool {
+		return model.KeyPoolID == poolID &&
+			endpoint == anthropicEndpoint{apiBase: cmp.Or(model.APIBase, anthropicAPIBase), proxy: model.Proxy}
+	})
 }
 
 // checkKey lists models with apiKey. It returns the HTTP status and message
@@ -438,9 +457,13 @@ type keyPoolError struct {
 func (e *keyPoolError) Error() string { return e.message }
 
 var (
-	errPoolNotFound = &keyPoolError{status: http.StatusNotFound, message: "Key pool no longer exists."}
-	errKeyNotFound  = &keyPoolError{status: http.StatusNotFound, message: "Key no longer exists in this pool."}
-	statusSuccess   = map[string]string{"status": "success"}
+	errPoolNotFound        = &keyPoolError{status: http.StatusNotFound, message: "Key pool no longer exists."}
+	errKeyNotFound         = &keyPoolError{status: http.StatusNotFound, message: "Key no longer exists in this pool."}
+	errPoolEndpointChanged = &keyPoolError{
+		status:  http.StatusConflict,
+		message: "The Key pool's endpoint changed while the key was checked. Add the key again.",
+	}
+	statusSuccess = map[string]string{"status": "success"}
 )
 
 func findKeyPool(cfg *config.Config, id string) (*config.KeyPool, error) {
