@@ -80,13 +80,37 @@ func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig, runtime keyPoolRun
 	}, nil
 }
 
-// NewKeyPoolKeyProbe builds a provider that sends mc's requests through key
-// alone: no other key of its pool, no key availability tracking and no
+// NewKeyPoolKeyProbe builds a provider that sends mc's requests through key of
+// pool alone: no other key of its pool, no key availability tracking and no
 // server-side refusal fallback, so each result belongs to that key and model.
-func NewKeyPoolKeyProbe(key config.KeyPoolKey, mc *config.ModelConfig) LLMProvider {
-	client := newAnthropicAPIKeyClient(key.APIKey, mc).WithKeyLabel(key.Label)
-	return newClaudeProviderWithDelegate(client.WithoutServerFallback())
+// Its answers are billed, so they add to the key's spend.
+func NewKeyPoolKeyProbe(pool *config.KeyPool, key config.KeyPoolKey, mc *config.ModelConfig) LLMProvider {
+	client := newAnthropicAPIKeyClient(key.APIKey, mc).WithKeyLabel(key.Label).WithoutServerFallback()
+	return &keyPoolKeyProbe{pool: &keyPool{
+		name: pool.Name,
+		keys: []pooledKey{{ref: keyRef{pool: pool.ID, key: key.ID}, label: key.Label, client: client}},
+		// A registry of its own, so the probe never changes the key's availability.
+		availability: newKeyAvailabilityRegistry(systemClock{}),
+		spend:        keyPools.spend,
+		cacheTTL:     mc.CacheTTL,
+	}}
 }
+
+// keyPoolKeyProbe answers through the one key of its pool and records spend.
+type keyPoolKeyProbe struct{ pool *keyPool }
+
+func (p *keyPoolKeyProbe) Chat(
+	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
+) (*LLMResponse, error) {
+	key := p.pool.keys[0]
+	response, err := key.client.Chat(ctx, messages, tools, model, options)
+	if err == nil {
+		p.pool.recordSpend(key, model, response)
+	}
+	return response, err
+}
+
+func (p *keyPoolKeyProbe) GetDefaultModel() string { return p.pool.keys[0].client.GetDefaultModel() }
 
 // rank orders the keys for a conversation by rendezvous (highest random weight)
 // hashing of its identity and each key ID. The first key serves the

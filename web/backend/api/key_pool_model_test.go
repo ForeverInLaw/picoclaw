@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/keyspend"
 	"github.com/sipeed/picoclaw/pkg/modelruntime"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -192,6 +193,27 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 	assertProbedKeys(firstPoolSecret, secondPoolSecret, thirdPoolSecret)
 	if reserveCalls.Load() != 0 {
 		t.Fatalf("Test model used the Routing chain reserve %d times", reserveCalls.Load())
+	}
+	// Probes are billed, so they add to their key's spend, but they never change
+	// a key's availability.
+	spent, err := keyspend.Store{}.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	since := keyspend.PeriodStart(1, time.Now())
+	for _, key := range []string{"first", "second"} {
+		if totals := spent.Since("orgs", key, since); totals.InputTokens != 1 || totals.OutputTokens != 1 ||
+			totals.EstimatedUSD <= 0 {
+			t.Errorf("spend of %s after its probe = %+v, want the probe's usage", key, totals)
+		}
+	}
+	if totals := spent.Since("orgs", "third", since); totals != (keyspend.Totals{}) {
+		t.Errorf("spend of the key that did not answer = %+v, want none", totals)
+	}
+	for _, state := range providers.KeyPoolAvailability(&cfg.KeyPools[0]) {
+		if state.State != providers.KeyAvailable && state.State != providers.KeyDisabled {
+			t.Errorf("key %s is %s after Test model, want its availability untouched", state.KeyID, state.State)
+		}
 	}
 
 	gatewayHealth(t, true)

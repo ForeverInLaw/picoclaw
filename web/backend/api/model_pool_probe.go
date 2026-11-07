@@ -51,7 +51,7 @@ func (h *Handler) runKeyPoolModelTest(w http.ResponseWriter, r *http.Request, mc
 	results := make([]keyTestResult, len(keys))
 	var wg sync.WaitGroup
 	for i, key := range keys {
-		wg.Go(func() { results[i] = testPoolKey(r.Context(), key, mc, modelID) })
+		wg.Go(func() { results[i] = testPoolKey(r.Context(), pool, key, mc, modelID) })
 	}
 	wg.Wait()
 	replied := 0
@@ -88,10 +88,16 @@ func (h *Handler) testableKeys(cfg *config.Config, pool config.KeyPool) []config
 	return keys
 }
 
-func testPoolKey(ctx context.Context, key config.KeyPoolKey, mc config.ModelConfig, modelID string) keyTestResult {
+func testPoolKey(
+	ctx context.Context,
+	pool *config.KeyPool,
+	key config.KeyPoolKey,
+	mc config.ModelConfig,
+	modelID string,
+) keyTestResult {
 	ctx, cancel := context.WithTimeout(ctx, modelTestTimeout(mc))
 	defer cancel()
-	provider := providers.NewKeyPoolKeyProbe(key, &mc)
+	provider := providers.NewKeyPoolKeyProbe(pool, key, &mc)
 	started := time.Now()
 	response, err := providers.RunModelAttempt(ctx, mc.InactivityTimeout(),
 		func(attemptCtx context.Context) (*providers.LLMResponse, error) {
