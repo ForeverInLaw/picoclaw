@@ -75,6 +75,9 @@ func (p *ClaudeProvider) ChatStream(
 	return p.Chat(ctx, messages, tools, model, options)
 }
 
+// SupportsThinking implements ThinkingCapable, so the agent sends thinking_level.
+func (p *ClaudeProvider) SupportsThinking() bool { return p.delegate.SupportsThinking() }
+
 func (p *ClaudeProvider) GetDefaultModel() string {
 	return p.delegate.GetDefaultModel()
 }
