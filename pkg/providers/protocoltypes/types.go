@@ -42,7 +42,7 @@ type StreamContent struct {
 }
 
 type LLMResponse struct {
-	ServedModel      string            `json:"served_model,omitempty"` // Actual wire model when an adapter resolves a configured alias.
+	ServedModel      string            `json:"served_model,omitempty"` // Actual wire model when it differs from the requested one: a resolved alias or a server-side fallback.
 	ContentPhase     ContentPhase      `json:"content_phase,omitempty"`
 	Content          string            `json:"content"`
 	ReasoningContent string            `json:"reasoning_content,omitempty"`

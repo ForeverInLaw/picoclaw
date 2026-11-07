@@ -43,6 +43,8 @@ type Provider struct {
 	requestTimeout time.Duration
 	// promptCache is nil for setup-token providers, whose requests stay as they were.
 	promptCache *promptCache
+	// serverFallback opts supporting models into Anthropic's server-side refusal fallback.
+	serverFallback bool
 	// keyLabel names the Key pool key in usage logs; empty outside pools.
 	keyLabel string
 }
@@ -91,6 +93,7 @@ func NewProviderWithAPIKey(apiKey, apiBase, proxy string, requestTimeout time.Du
 		baseURL:        baseURL,
 		requestTimeout: requestTimeout,
 		promptCache:    &promptCache{},
+		serverFallback: true,
 	}
 }
 
@@ -157,10 +160,11 @@ func (p *Provider) Chat(
 		)
 	}
 
-	params, err := p.requestParams(messages, tools, model, options)
+	params, err := p.requestParams(ctx, messages, tools, model, options, opts)
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, p.serverFallbackOptions(params.Model)...)
 
 	// OAuth/setup-tokens require streaming; API keys use non-streaming.
 	if p.tokenSource != nil {
@@ -175,7 +179,7 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return p.completeResponse(resp), nil
+	return p.completeResponse(params.Model, resp), nil
 }
 
 func (p *Provider) ChatStream(
@@ -198,10 +202,11 @@ func (p *Provider) ChatStream(
 		)
 	}
 
-	params, err := p.requestParams(messages, tools, model, options)
+	params, err := p.requestParams(ctx, messages, tools, model, options, opts)
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, p.serverFallbackOptions(params.Model)...)
 
 	return p.chatStreaming(ctx, params, opts, onUpdate)
 }
@@ -257,7 +262,7 @@ func (p *Provider) chatStreaming(
 	if !completed {
 		return nil, fmt.Errorf("claude stream ended before message_stop: %w", io.ErrUnexpectedEOF)
 	}
-	return p.completeResponse(&msg), nil
+	return p.completeResponse(params.Model, &msg), nil
 }
 
 // mergeDeltaUsage applies the cumulative counts of a message_delta event. The
@@ -275,10 +280,13 @@ func mergeDeltaUsage(usage *anthropic.Usage, delta anthropic.MessageDeltaUsage) 
 	}
 }
 
-// completeResponse logs a finished message's usage and maps it to an LLMResponse.
-func (p *Provider) completeResponse(msg *anthropic.Message) *LLMResponse {
+// completeResponse logs a finished message's usage against the model that
+// served it, naming the requested model too when they differ (for example after
+// a server-side fallback), and maps the message to an LLMResponse.
+func (p *Provider) completeResponse(requested anthropic.Model, msg *anthropic.Message) *LLMResponse {
+	served := servedModel(msg)
 	fields := map[string]any{
-		"model":                       string(msg.Model),
+		"model":                       string(served),
 		"input_tokens":                msg.Usage.InputTokens,
 		"output_tokens":               msg.Usage.OutputTokens,
 		"cache_creation_input_tokens": msg.Usage.CacheCreationInputTokens,
@@ -287,8 +295,13 @@ func (p *Provider) completeResponse(msg *anthropic.Message) *LLMResponse {
 	if p.keyLabel != "" {
 		fields["key"] = p.keyLabel
 	}
+	resp := parseResponse(msg)
+	if served != requested {
+		fields["requested_model"] = string(requested)
+		resp.ServedModel = string(served)
+	}
 	logger.InfoCF("provider.anthropic", "Anthropic usage", fields)
-	return parseResponse(msg)
+	return resp
 }
 
 func (p *Provider) GetDefaultModel() string {
@@ -299,19 +312,25 @@ func (p *Provider) BaseURL() string {
 	return p.baseURL
 }
 
-// requestParams builds the Messages API request and, for providers that cache,
-// places the prompt-cache points on it.
+// requestParams builds the Messages API request, maps thinking_level for the
+// model and, for providers that cache, places the prompt-cache points on it.
+// opts are the answer's request options, reused for the capability lookup.
 func (p *Provider) requestParams(
+	ctx context.Context,
 	messages []Message,
 	tools []ToolDefinition,
 	model string,
 	options map[string]any,
+	opts []option.RequestOption,
 ) (anthropic.MessageNewParams, error) {
 	params, err := buildParams(messages, tools, model, options)
-	if err != nil || p.promptCache == nil {
+	if err != nil {
 		return params, err
 	}
-	p.promptCache.apply(&params)
+	p.applyThinking(ctx, &params, options, opts)
+	if p.promptCache != nil {
+		p.promptCache.apply(&params)
+	}
 	return params, nil
 }
 
@@ -409,70 +428,7 @@ func buildParams(
 		params.Tools = translateTools(tools)
 	}
 
-	// Extended Thinking / Adaptive Thinking
-	// The thinking_level value directly determines the API parameter format:
-	//   "adaptive" → {thinking: {type: "adaptive"}} + output_config.effort
-	//   "low/medium/high/xhigh" → {thinking: {type: "enabled", budget_tokens: N}}
-	if level, ok := options["thinking_level"].(string); ok && level != "" && level != "off" {
-		applyThinkingConfig(&params, level)
-	}
-
 	return params, nil
-}
-
-// applyThinkingConfig sets thinking parameters based on the level value.
-// "adaptive" uses the adaptive thinking API (Claude 4.6+).
-// All other levels use budget_tokens which is universally supported.
-//
-// Anthropic API constraint: budget_tokens must be strictly less than max_tokens.
-func applyThinkingConfig(params *anthropic.MessageNewParams, level string) {
-	if level == "adaptive" {
-		adaptive := anthropic.ThinkingConfigAdaptiveParam{}
-		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
-		params.OutputConfig = anthropic.OutputConfigParam{
-			Effort: anthropic.OutputConfigEffortHigh,
-		}
-		return
-	}
-
-	budget := int64(levelToBudget(level))
-	if budget <= 0 {
-		return
-	}
-
-	// budget_tokens must be < max_tokens; clamp to respect user's max_tokens setting.
-	if budget >= params.MaxTokens {
-		log.Printf("anthropic: budget_tokens (%d) clamped to %d (max_tokens-1)", budget, params.MaxTokens-1)
-		budget = params.MaxTokens - 1
-	} else if budget > params.MaxTokens*80/100 {
-		log.Printf("anthropic: thinking budget (%d) exceeds 80%% of max_tokens (%d), output may be truncated",
-			budget, params.MaxTokens)
-	}
-	params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
-}
-
-// levelToBudget maps a thinking level to budget_tokens.
-// Values are based on Anthropic's recommendations and community best practices:
-//
-//	low    =  4,096  — simple reasoning, quick debugging (Claude Code "think")
-//	medium = 16,384  — Anthropic recommended sweet spot for most tasks
-//	high   = 32,000  — complex architecture, deep analysis (diminishing returns above this)
-//	xhigh  = 64,000  — extreme reasoning, research problems, benchmarks
-//
-// Note: For Claude 4.6+, prefer adaptive thinking over manual budget_tokens.
-func levelToBudget(level string) int {
-	switch level {
-	case "low":
-		return 4096
-	case "medium":
-		return 16384
-	case "high":
-		return 32000
-	case "xhigh":
-		return 64000
-	default:
-		return 0
-	}
 }
 
 // userContent renders a user message's text followed by its image media.
@@ -524,6 +480,9 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 }
 
 func parseResponse(resp *anthropic.Message) *LLMResponse {
+	if resp.StopReason == anthropic.StopReasonRefusal {
+		return refusalResponse(resp)
+	}
 	var content strings.Builder
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
@@ -536,6 +495,11 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		case "text":
 			tb := block.AsText()
 			content.WriteString(tb.Text)
+		case "fallback":
+			// The fallback model continues the declined model's text; thinking and
+			// tool calls from before the handoff are not part of the answer.
+			reasoning.Reset()
+			toolCalls = nil
 		case "tool_use":
 			tu := block.AsToolUse()
 			var args map[string]any
