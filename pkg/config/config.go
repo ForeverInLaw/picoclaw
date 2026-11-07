@@ -152,10 +152,7 @@ func (c *Config) ArtifactFilter() func(string) string {
 	}
 	// Runtime keys have already been decoded/dereferenced by LoadConfig. Sidecar
 	// values alone may contain their encrypted/file reference instead.
-	for _, model := range c.ModelList {
-		values = append(values, model.APIKey)
-		values = append(values, model.APIKeys...)
-	}
+	values = append(values, c.ProviderCredentials()...)
 	sort.SliceStable(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
 	seen := make(map[string]bool)
 	pairs := make([]string, 0, len(values)*2)
@@ -166,6 +163,22 @@ func (c *Config) ArtifactFilter() func(string) string {
 		}
 	}
 	return strings.NewReplacer(pairs...).Replace
+}
+
+// ProviderCredentials returns the resolved model API keys and Key pool secrets,
+// which error text and artifacts must never reveal.
+func (c *Config) ProviderCredentials() []string {
+	var values []string
+	for _, model := range c.ModelList {
+		values = append(values, model.APIKey)
+		values = append(values, model.APIKeys...)
+	}
+	for _, pool := range c.KeyPools {
+		for _, key := range pool.Keys {
+			values = append(values, key.APIKey)
+		}
+	}
+	return values
 }
 
 type HooksConfig struct {

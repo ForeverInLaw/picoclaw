@@ -35,6 +35,15 @@ func (p *KeyPool) EnabledKeys() []KeyPoolKey {
 // has attached it; nil for models with their own credentials.
 func (c *ModelConfig) KeyPool() *KeyPool { return c.keyPool }
 
+func (c *Config) keyPoolByID(id string) *KeyPool {
+	for i := range c.KeyPools {
+		if id != "" && c.KeyPools[i].ID == id {
+			return &c.KeyPools[i]
+		}
+	}
+	return nil
+}
+
 // ResolveKeyPools validates Key pools and attaches each referenced pool to its
 // configured models. LoadConfig calls it; callers that edit KeyPools or
 // ModelList in memory call it again before creating providers.

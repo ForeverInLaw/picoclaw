@@ -40,6 +40,11 @@ func hasModelConfiguration(m config.ModelConfig) bool {
 		return true
 	}
 
+	if m.KeyPoolID != "" {
+		pool := m.KeyPool()
+		return pool != nil && len(pool.EnabledKeys()) > 0
+	}
+
 	if requiresRuntimeProbe(m) {
 		return true
 	}
