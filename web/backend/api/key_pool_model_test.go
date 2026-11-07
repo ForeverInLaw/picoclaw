@@ -334,3 +334,60 @@ func TestSavedPoolBackedModelsReferenceThePoolAndAnswer(t *testing.T) {
 		}
 	}
 }
+
+func TestInlineTestModelNeverSendsPoolKeysToAnUnsavedEndpoint(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	anthropicBase, received := fakeAnthropicMessages(t)
+	var foreignCalls atomic.Int32
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		foreignCalls.Add(1)
+	}))
+	t.Cleanup(foreign.Close)
+	cfg := config.DefaultConfig()
+	cfg.KeyPools = []config.KeyPool{{ID: "orgs", Name: "Organizations", Keys: []config.KeyPoolKey{
+		{ID: "first", Label: "First org", Enabled: true, APIKey: firstPoolSecret},
+	}}}
+	cfg.ModelList = []config.ModelConfig{
+		{
+			ID:        "claude",
+			ModelName: "claude",
+			Model:     "anthropic/claude-opus-5-5",
+			APIBase:   anthropicBase,
+			KeyPoolID: "orgs",
+		},
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	NewHandler(path).RegisterRoutes(mux)
+	gatewayHealth(t, false)
+
+	unsaved := func(apiBase string) string {
+		return `{"model_name":"unsaved","model":"anthropic/claude-opus-5-5","api_base":"` + apiBase +
+			`","key_pool_id":"orgs"}`
+	}
+	if rec := serve(
+		mux,
+		http.MethodPost,
+		"/api/models/test-inline",
+		unsaved(foreign.URL),
+	); rec.Code != http.StatusBadRequest {
+		t.Fatalf("inline test over an unsaved endpoint = %d %s, want 400", rec.Code, rec.Body.String())
+	}
+	if foreignCalls.Load() != 0 {
+		t.Fatalf("an unsaved endpoint received %d requests carrying pool keys", foreignCalls.Load())
+	}
+	if rec := serve(
+		mux,
+		http.MethodPost,
+		"/api/models/test-inline",
+		unsaved(anthropicBase),
+	); rec.Code != http.StatusOK {
+		t.Fatalf("inline test over the pool's saved endpoint = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if got := received(); len(got) != 1 {
+		t.Fatalf("the pool's saved endpoint received %q, want one probe", got)
+	}
+}

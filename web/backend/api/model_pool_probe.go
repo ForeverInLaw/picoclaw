@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"slices"
@@ -39,6 +40,15 @@ func (h *Handler) runKeyPoolModelTest(w http.ResponseWriter, r *http.Request, mc
 	pool, err := findKeyPool(cfg, mc.KeyPoolID)
 	if err != nil {
 		writeAPIError(w, errPoolNotFound.status, errPoolNotFound.message)
+		return
+	}
+	if !keyPoolTrustsEndpoint(
+		cfg,
+		pool.ID,
+		anthropicEndpoint{apiBase: cmp.Or(mc.APIBase, anthropicAPIBase), proxy: mc.Proxy},
+	) {
+		writeAPIError(w, http.StatusBadRequest,
+			"Save the model before testing its Key pool over a new endpoint or proxy.")
 		return
 	}
 	keys := h.testableKeys(*pool, modelID)
