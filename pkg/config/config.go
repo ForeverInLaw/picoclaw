@@ -91,6 +91,7 @@ type Config struct {
 	ChannelList ChannelList     `json:"channel_list"`
 	Providers   ProvidersConfig `json:"providers,omitempty"`
 	ModelList   []ModelConfig   `json:"model_list"` // New model-centric provider configuration
+	KeyPools    []KeyPool       `json:"key_pools,omitempty"`
 	Gateway     GatewayConfig   `json:"gateway"`
 	Hooks       HooksConfig     `json:"hooks,omitempty"`
 	Tools       ToolsConfig     `json:"tools"`
@@ -933,11 +934,12 @@ type ModelConfig struct {
 	Model     string `json:"model"`      // Protocol/model-identifier (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4.6")
 
 	// HTTP-based providers
-	APIBase   string   `json:"api_base,omitempty"` // API endpoint URL
-	APIKey    string   `json:"api_key"`            // API authentication key (single key)
-	APIKeys   []string `json:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
-	Proxy     string   `json:"proxy,omitempty"`    // HTTP proxy URL
-	Fallbacks []string `json:"fallbacks"`          // Fallback model names for failover
+	APIBase   string   `json:"api_base,omitempty"`    // API endpoint URL
+	APIKey    string   `json:"api_key"`               // API authentication key (single key)
+	APIKeys   []string `json:"api_keys,omitempty"`    // API authentication keys (multiple keys for failover)
+	Proxy     string   `json:"proxy,omitempty"`       // HTTP proxy URL
+	Fallbacks []string `json:"fallbacks"`             // Fallback model names for failover
+	KeyPoolID string   `json:"key_pool_id,omitempty"` // Key pool serving an anthropic/ model instead of api_key
 
 	// Special providers (CLI-based, OAuth, etc.)
 	AccountID   string `json:"account_id,omitempty"`   // Saved OAuth connection reference, distinct from provider workspace identity.
@@ -956,6 +958,8 @@ type ModelConfig struct {
 
 	// from security
 	apiKeys []string
+	// attached by Config.ResolveKeyPools
+	keyPool *KeyPool
 }
 
 const DefaultModelInactivityTimeout = 60 * time.Second

@@ -243,6 +243,16 @@ func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfi
 			return provider, modelID, nil
 		}
 		// API keys use the native Messages API, which accepts cache_control (ADR 0004).
+		if pool := cfg.KeyPool(); pool != nil {
+			keys, err := newKeyPool(pool, cfg)
+			if err != nil {
+				return nil, "", err
+			}
+			return newClaudeProviderWithKeyPool(keys).withModelConfig(cfg), modelID, nil
+		}
+		if cfg.KeyPoolID != "" {
+			return nil, "", fmt.Errorf("key pool %q of model %s is not configured", cfg.KeyPoolID, cfg.ModelName)
+		}
 		if cfg.APIKey == "" {
 			return nil, "", fmt.Errorf("api_key is required for anthropic protocol (model: %s)", cfg.Model)
 		}
