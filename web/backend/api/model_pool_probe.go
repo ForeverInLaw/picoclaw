@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
-	"github.com/sipeed/picoclaw/pkg/keyspend"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
@@ -42,7 +42,7 @@ func (h *Handler) runKeyPoolModelTest(w http.ResponseWriter, r *http.Request, mc
 		modelTestError(w, errPoolNotFound.status, errPoolNotFound.message)
 		return
 	}
-	keys := h.testableKeys(cfg, *pool)
+	keys := h.testableKeys(*pool, modelID)
 	if len(keys) == 0 {
 		modelTestError(w, http.StatusConflict,
 			"No key of this pool is available to test. Enable a key or return one to service on the Credentials page.")
@@ -72,15 +72,20 @@ func (h *Handler) runKeyPoolModelTest(w http.ResponseWriter, r *http.Request, mc
 }
 
 // testableKeys are the pool's enabled keys that the running gateway does not
-// report as exhausted or rejected. Without a running gateway their state is
-// unknown, so every enabled key is tested.
-func (h *Handler) testableKeys(cfg *config.Config, pool config.KeyPool) []config.KeyPoolKey {
+// report as exhausted, rejected or rate limited for modelID. Without a running
+// gateway their state is unknown, so every enabled key is tested.
+func (h *Handler) testableKeys(pool config.KeyPool, modelID string) []config.KeyPoolKey {
 	snapshot, runtime := h.gatewayRuntime()
-	view := newKeyPoolView(cfg, pool, reportedKeyStates(snapshot)[pool.ID], runtime == "running", keyspend.Ledger{})
+	reported := reportedKeyStates(snapshot)[pool.ID]
 	keys := []config.KeyPoolKey{}
-	for i, key := range pool.Keys {
-		switch view.Keys[i].State {
-		case providers.KeyDisabled, providers.KeyExhausted, providers.KeyRejected:
+	for _, key := range pool.Keys {
+		state := keyState(key, reported, runtime == "running")
+		switch {
+		case state.State == providers.KeyDisabled, state.State == providers.KeyExhausted,
+			state.State == providers.KeyRejected:
+		case slices.ContainsFunc(state.RateLimitedModels, func(limit providers.ModelRateLimit) bool {
+			return limit.Model == modelID && limit.Until.After(time.Now())
+		}):
 		default:
 			keys = append(keys, key)
 		}

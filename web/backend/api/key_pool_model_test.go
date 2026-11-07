@@ -217,10 +217,9 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 	}
 
 	gatewayHealth(t, true)
+	second := providers.KeyAvailability{KeyID: "second", State: providers.KeyExhausted, Until: time.Now().Add(time.Hour)}
 	status, err := modelruntime.New(path, func() ([]providers.RoutingAvailability, []modelruntime.KeyPoolStatus) {
-		return nil, []modelruntime.KeyPoolStatus{{ID: "orgs", Keys: []providers.KeyAvailability{
-			{KeyID: "second", State: providers.KeyExhausted, Until: time.Now().Add(time.Hour)},
-		}}}
+		return nil, []modelruntime.KeyPoolStatus{{ID: "orgs", Keys: []providers.KeyAvailability{second}}}
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +230,23 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 	assertOutcomes("an exhausted key is not tested", testModel("/api/models/test-inline", unsaved),
 		"failed", "First org: success", "Third org: error")
 	assertProbedKeys(firstPoolSecret, thirdPoolSecret)
+
+	rateLimited := func(model string) {
+		t.Helper()
+		second = providers.KeyAvailability{KeyID: "second", State: providers.KeyRateLimited,
+			RateLimitedModels: []providers.ModelRateLimit{{Model: model, Until: time.Now().Add(time.Minute)}}}
+		if err := status.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rateLimited("claude-opus-5-5")
+	assertOutcomes("a key rate limited for the model is not tested", testModel("/api/models/test-inline", unsaved),
+		"failed", "First org: success", "Third org: error")
+	assertProbedKeys(firstPoolSecret, thirdPoolSecret)
+	rateLimited("claude-haiku-5-5")
+	assertOutcomes("a key rate limited for another model is tested", testModel("/api/models/test-inline", unsaved),
+		"failed", "First org: success", "Second org: success", "Third org: error")
+	assertProbedKeys(firstPoolSecret, secondPoolSecret, thirdPoolSecret)
 }
 
 func TestSavedPoolBackedModelsReferenceThePoolAndAnswer(t *testing.T) {

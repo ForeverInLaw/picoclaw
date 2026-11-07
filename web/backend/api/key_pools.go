@@ -75,32 +75,45 @@ type keySpendView struct {
 func newKeyPoolKeyView(
 	poolID string,
 	key config.KeyPoolKey,
-	reported *providers.KeyAvailability,
+	state providers.KeyAvailability,
 	spent keyspend.Ledger,
 ) keyPoolKeyView {
 	since := keyspend.PeriodStart(key.ResetDay, time.Now())
 	totals := spent.Since(poolID, key.ID, since)
-	view := keyPoolKeyView{
+	return keyPoolKeyView{
 		ID: key.ID, Label: key.Label, Enabled: key.Enabled, APIKey: maskAPIKey(key.APIKey),
+		State: state.State, Until: state.Until, RateLimitedModels: state.RateLimitedModels,
 		MonthlyBudgetUSD: key.MonthlyBudgetUSD, ResetDay: max(key.ResetDay, 1),
 		Spend: keySpendView{Since: since, Totals: totals, CacheHitRate: totals.CacheHitRate()},
 	}
-	switch {
-	case !key.Enabled:
-		view.State = providers.KeyDisabled
-	case reported == nil:
-		view.State = keyStateUnknown
-	case !key.ReturnedAt.IsZero() && !key.ReturnedAt.Equal(reported.ReturnedAt):
-		// The gateway applies a saved return before the key next serves or is reported.
-		view.State = providers.KeyAvailable
-	default:
-		view.State, view.Until, view.RateLimitedModels = reported.State, reported.Until, reported.RateLimitedModels
-	}
-	return view
 }
 
-// newKeyPoolView shows pool with the key states a running gateway reported,
-// where a key it has not reported yet has had no trouble, and the keys' spend.
+// keyState is a key's availability as the dashboard knows it: disabled, unknown
+// while no gateway runs, available once a saved return to service is newer
+// than the gateway's report, else what the running gateway reports, where a
+// key it has not reported has had no trouble.
+func keyState(
+	key config.KeyPoolKey,
+	reported map[string]providers.KeyAvailability,
+	running bool,
+) providers.KeyAvailability {
+	state, ok := reported[key.ID]
+	switch {
+	case !key.Enabled:
+		return providers.KeyAvailability{KeyID: key.ID, State: providers.KeyDisabled}
+	case !running:
+		return providers.KeyAvailability{KeyID: key.ID, State: keyStateUnknown}
+	case !ok:
+		return providers.KeyAvailability{KeyID: key.ID, State: providers.KeyAvailable}
+	case !key.ReturnedAt.IsZero() && !key.ReturnedAt.Equal(state.ReturnedAt):
+		// The gateway applies a saved return before the key next serves or is reported.
+		return providers.KeyAvailability{KeyID: key.ID, State: providers.KeyAvailable}
+	}
+	return state
+}
+
+// newKeyPoolView shows pool with the key states a running gateway reported and
+// the keys' spend.
 func newKeyPoolView(
 	cfg *config.Config,
 	pool config.KeyPool,
@@ -110,15 +123,7 @@ func newKeyPoolView(
 ) keyPoolView {
 	view := keyPoolView{ID: pool.ID, Name: pool.Name, Models: keyPoolModels(cfg, pool.ID), Keys: []keyPoolKeyView{}}
 	for _, key := range pool.Keys {
-		var state *providers.KeyAvailability
-		if running {
-			found, ok := reported[key.ID]
-			if !ok {
-				found = providers.KeyAvailability{KeyID: key.ID, State: providers.KeyAvailable}
-			}
-			state = &found
-		}
-		view.Keys = append(view.Keys, newKeyPoolKeyView(pool.ID, key, state, spent))
+		view.Keys = append(view.Keys, newKeyPoolKeyView(pool.ID, key, keyState(key, reported, running), spent))
 	}
 	return view
 }
@@ -244,7 +249,7 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		pool.Keys = append(pool.Keys, key)
-		return newKeyPoolKeyView(pool.ID, key, nil, keyspend.Ledger{}), nil
+		return newKeyPoolKeyView(pool.ID, key, keyState(key, nil, false), keyspend.Ledger{}), nil
 	})
 }
 
