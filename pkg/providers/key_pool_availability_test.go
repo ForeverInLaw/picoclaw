@@ -469,6 +469,38 @@ func TestKeyPoolKeyStateFollowsItsSecret(t *testing.T) {
 	}
 }
 
+func TestKeyPoolSuccessOfAnOrdinaryRequestNeverUndoesAKeyGoingDown(t *testing.T) {
+	useKeyPoolClock(t)
+	fake := newPoolAnthropic(t)
+	cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b")
+	provider, modelID := createProvider(t, &cfg.ModelList[0])
+	conversation := fake.conversationOn(t, provider, modelID, "sk-ant-a")
+
+	arrived, release := make(chan struct{}), make(chan struct{})
+	fake.fail("sk-ant-a", 1, func(w http.ResponseWriter) {
+		close(arrived)
+		<-release
+		writeJSON(w, okAnswer)
+	})
+	slow := make(chan string)
+	go func() {
+		_, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hi"}}, nil, modelID,
+			map[string]any{"max_tokens": 64, ConversationIdentityOption: conversation})
+		slow <- fmt.Sprint(err)
+	}()
+	<-arrived
+	fake.fail("sk-ant-a", always, downForms["credit balance 400"])
+	fake.keyFor(t, provider, modelID, conversation)
+	close(release)
+	if err := <-slow; err != "<nil>" {
+		t.Fatalf("in-flight request error = %s", err)
+	}
+
+	if state := KeyPoolAvailability(&cfg.KeyPools[0])[0].State; state != KeyExhausted {
+		t.Fatalf("key state = %s after a request that started before it went down succeeded, want exhausted", state)
+	}
+}
+
 func TestKeyPoolWithNoAvailableKeyLetsTheRoutingChainAnswerFromItsReserve(t *testing.T) {
 	cases := map[string]struct {
 		a, b   func(http.ResponseWriter)

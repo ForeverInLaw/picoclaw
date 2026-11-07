@@ -144,7 +144,11 @@ func (p *keyPool) serve(
 			continue
 		}
 		response, outcome, err := p.attempt(ctx, key, model, call)
-		if recheck && outcome != keyTakenDown {
+		switch {
+		case !recheck:
+		case err == nil:
+			p.availability.recovered(key.ref)
+		case outcome != keyTakenDown:
 			// Only an out-of-credit or rejected answer keeps a down key down.
 			p.availability.releaseRecheck(key.ref)
 		}
@@ -175,7 +179,6 @@ func (p *keyPool) attempt(
 	for waited := false; ; waited = true {
 		response, err = call(key.client)
 		if err == nil {
-			p.availability.served(key.ref)
 			p.recordSpend(key, model, response)
 			return response, keyKept, nil
 		}

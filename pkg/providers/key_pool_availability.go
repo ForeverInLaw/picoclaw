@@ -191,9 +191,10 @@ func (r *keyAvailabilityRegistry) releaseRecheck(ref keyRef) {
 	}
 }
 
-// served records a success, which returns a rechecked key to service. Active
-// rate limits set by concurrent requests stay.
-func (r *keyAvailabilityRegistry) served(ref keyRef) {
+// recovered records the success of a claimed recheck, which returns the down
+// key to service. Only the recheck may: an ordinary request that started before
+// the key went down says nothing about it now. Active rate limits stay.
+func (r *keyAvailabilityRegistry) recovered(ref keyRef) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if health := r.keys[ref]; health != nil {
