@@ -385,3 +385,23 @@ func TestKeyPoolWithNoAvailableKeyLetsTheRoutingChainAnswerFromItsReserve(t *tes
 		t.Errorf("pool keys received %d requests, want one each before both were marked", got)
 	}
 }
+
+func TestKeyPoolKeepsAKeyThatAnsweredWithARefusal(t *testing.T) {
+	useKeyPoolClock(t)
+	fake := newPoolAnthropic(t)
+	cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b")
+	provider, modelID := createProvider(t, &cfg.ModelList[0])
+	conversation := fake.conversationOn(t, provider, modelID, "sk-ant-a")
+
+	fake.fail("sk-ant-a", 1, func(w http.ResponseWriter) {
+		writeJSON(w, `{"id":"msg_r","type":"message","role":"assistant","model":"claude-opus-5-5",
+			"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"},"content":[],
+			"usage":{"input_tokens":1,"output_tokens":0}}`)
+	})
+	if got := fake.keyFor(t, provider, modelID, conversation); got != "sk-ant-a" {
+		t.Fatalf("refusal came from %s, want the conversation's own key", got)
+	}
+	if got := fake.keyFor(t, provider, modelID, conversation); got != "sk-ant-a" {
+		t.Fatalf("after a refusal the conversation moved to %s", got)
+	}
+}
