@@ -75,6 +75,16 @@ export function canUseKeyPool(model: string, authMethod: string) {
   )
 }
 
+// The Key pool a model form has chosen, or "" while the model uses its own
+// API key or cannot use a pool.
+export function selectedKeyPool(
+  model: string,
+  authMethod: string,
+  keyPoolID: string,
+) {
+  return canUseKeyPool(model, authMethod) ? keyPoolID : ""
+}
+
 const poolPath = (poolID: string) =>
   `/api/key-pools/${encodeURIComponent(poolID)}`
 const keyPath = (poolID: string, keyID: string) =>

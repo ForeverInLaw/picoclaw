@@ -83,3 +83,17 @@ test("Key pool management addresses the exact pool and key", async () => {
     globalThis.fetch = originalFetch
   }
 })
+
+test("a model form's Key pool applies only to anthropic/ API-key models", async () => {
+  const { selectedKeyPool } = await import("../src/api/key-pools.ts")
+  assert.equal(selectedKeyPool("anthropic/claude-opus-5-5", "", "orgs"), "orgs")
+  assert.equal(
+    selectedKeyPool("anthropic/claude-opus-5-5", "oauth", "orgs"),
+    "",
+  )
+  assert.equal(
+    selectedKeyPool("anthropic/claude-opus-5-5", "token", "orgs"),
+    "",
+  )
+  assert.equal(selectedKeyPool("openai/gpt-5", "", "orgs"), "")
+})

@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { getCodexAccounts } from "@/api/codex-accounts"
-import { canUseKeyPool } from "@/api/key-pools"
+import { selectedKeyPool } from "@/api/key-pools"
 import type { ModelTestConfiguration } from "@/api/model-probe"
 import {
   type ModelInfo,
@@ -38,7 +38,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
-import { KeyPoolModelFields } from "./key-pool-model-fields"
+import { ModelCredentialFields } from "./key-pool-model-fields"
 import { ModelProbe } from "./model-probe"
 
 interface EditForm {
@@ -114,8 +114,7 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
     (key: keyof EditForm) => (e: React.ChangeEvent<HTMLInputElement>) =>
       setForm((f) => ({ ...f, [key]: e.target.value }))
 
-  const poolCapable = canUseKeyPool(form.model, form.authMethod)
-  const keyPoolID = poolCapable ? form.keyPoolID : ""
+  const keyPoolID = selectedKeyPool(form.model, form.authMethod, form.keyPoolID)
   const configuration: ModelTestConfiguration | null = model
     ? {
         id: model.id,
@@ -205,34 +204,29 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
                 {accounts.error && <p role="alert">{accounts.error.message}</p>}
               </Field>
             )}
-            {poolCapable && (
-              <KeyPoolModelFields
-                poolID={keyPoolID}
-                model={form.model}
-                onPoolChange={(id) =>
-                  setForm((f) => ({ ...f, keyPoolID: id, apiKey: "" }))
-                }
-                onModelChange={(next) =>
-                  setForm((f) => ({ ...f, model: next }))
-                }
-              />
-            )}
-            {!isOAuth && !keyPoolID && (
-              <Field
-                label={t("models.field.apiKey")}
-                hint={
-                  model?.configured && !model.key_pool_id
-                    ? t("models.edit.apiKeyHint")
-                    : undefined
-                }
-              >
-                <KeyInput
-                  value={form.apiKey}
-                  onChange={(v) => setForm((f) => ({ ...f, apiKey: v }))}
-                  placeholder={apiKeyPlaceholder}
-                />
-              </Field>
-            )}
+            <ModelCredentialFields
+              model={form.model}
+              authMethod={form.authMethod}
+              keyPoolID={form.keyPoolID}
+              onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+            >
+              {!isOAuth && (
+                <Field
+                  label={t("models.field.apiKey")}
+                  hint={
+                    model?.configured && !model.key_pool_id
+                      ? t("models.edit.apiKeyHint")
+                      : undefined
+                  }
+                >
+                  <KeyInput
+                    value={form.apiKey}
+                    onChange={(v) => setForm((f) => ({ ...f, apiKey: v }))}
+                    placeholder={apiKeyPlaceholder}
+                  />
+                </Field>
+              )}
+            </ModelCredentialFields>
 
             <Field
               label={t("models.field.apiBase")}

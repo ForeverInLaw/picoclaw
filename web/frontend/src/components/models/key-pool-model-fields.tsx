@@ -1,7 +1,12 @@
 import { useQuery } from "@tanstack/react-query"
+import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
-import { ANTHROPIC_PREFIX } from "@/api/key-pools"
+import {
+  ANTHROPIC_PREFIX,
+  canUseKeyPool,
+  selectedKeyPool,
+} from "@/api/key-pools"
 import { Field } from "@/components/shared-form"
 import {
   Select,
@@ -25,10 +30,51 @@ interface KeyPoolModelFieldsProps {
   onModelChange: (model: string) => void
 }
 
+// The credential fields of a model form that a Key pool choice changes.
+interface ModelCredentialsPatch {
+  model?: string
+  keyPoolID?: string
+  apiKey?: string
+}
+
+interface ModelCredentialFieldsProps {
+  model: string
+  authMethod: string
+  keyPoolID: string
+  onChange: (patch: ModelCredentialsPatch) => void
+  // The model's own API key field, shown while no pool is chosen.
+  children: ReactNode
+}
+
+// A model form's credentials: an anthropic/ API-key model may choose a Key
+// pool, which replaces its own API key and clears any key typed so far.
+export function ModelCredentialFields({
+  model,
+  authMethod,
+  keyPoolID,
+  onChange,
+  children,
+}: ModelCredentialFieldsProps) {
+  const poolID = selectedKeyPool(model, authMethod, keyPoolID)
+  return (
+    <>
+      {canUseKeyPool(model, authMethod) && (
+        <KeyPoolModelFields
+          poolID={poolID}
+          model={model}
+          onPoolChange={(id) => onChange({ keyPoolID: id, apiKey: "" })}
+          onModelChange={(next) => onChange({ model: next })}
+        />
+      )}
+      {!poolID && children}
+    </>
+  )
+}
+
 // Lets an anthropic/ model use a Key pool instead of its own API key, then pick
 // its model id from the list Anthropic returns for that pool. A failed list is
 // shown as an error and keeps the current model selectable.
-export function KeyPoolModelFields({
+function KeyPoolModelFields({
   poolID,
   model,
   onPoolChange,

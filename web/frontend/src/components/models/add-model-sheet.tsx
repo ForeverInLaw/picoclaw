@@ -4,7 +4,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { getCodexAccounts } from "@/api/codex-accounts"
-import { canUseKeyPool } from "@/api/key-pools"
+import { selectedKeyPool } from "@/api/key-pools"
 import type { ModelTestConfiguration } from "@/api/model-probe"
 import { addModel, setDefaultModel } from "@/api/models"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
@@ -33,7 +33,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
-import { KeyPoolModelFields } from "./key-pool-model-fields"
+import { ModelCredentialFields } from "./key-pool-model-fields"
 import { ModelProbe } from "./model-probe"
 
 interface AddForm {
@@ -152,8 +152,11 @@ function AddModelForm({
       }
     }
 
-  const poolCapable = canUseKeyPool(form.model.trim(), form.authMethod.trim())
-  const keyPoolID = poolCapable ? form.keyPoolID : ""
+  const keyPoolID = selectedKeyPool(
+    form.model.trim(),
+    form.authMethod.trim(),
+    form.keyPoolID,
+  )
   const configuration: ModelTestConfiguration = {
     model_name: form.modelName.trim(),
     model: form.model.trim(),
@@ -265,17 +268,12 @@ function AddModelForm({
                 </Select>
               </Field>
             )}
-            {poolCapable && (
-              <KeyPoolModelFields
-                poolID={keyPoolID}
-                model={form.model.trim()}
-                onPoolChange={(id) =>
-                  setForm((f) => ({ ...f, keyPoolID: id, apiKey: "" }))
-                }
-                onModelChange={(model) => setForm((f) => ({ ...f, model }))}
-              />
-            )}
-            {!keyPoolID && (
+            <ModelCredentialFields
+              model={form.model.trim()}
+              authMethod={form.authMethod.trim()}
+              keyPoolID={form.keyPoolID}
+              onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+            >
               <Field label={t("models.field.apiKey")}>
                 <KeyInput
                   value={form.apiKey}
@@ -283,7 +281,7 @@ function AddModelForm({
                   placeholder={apiKeyPlaceholder}
                 />
               </Field>
-            )}
+            </ModelCredentialFields>
 
             <Field label={t("models.field.apiBase")}>
               <Input

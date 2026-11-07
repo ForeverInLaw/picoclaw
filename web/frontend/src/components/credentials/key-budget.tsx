@@ -1,10 +1,10 @@
 import type { TFunction } from "i18next"
-import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { KeyPoolKey, KeyPoolKeyPatch } from "@/api/key-pools"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+
+import { InlineEdit } from "./inline-edit"
 
 const dollars = (value: number) =>
   value.toLocaleString(undefined, {
@@ -69,34 +69,18 @@ export function KeyBudget({
   onSave: (patch: KeyPoolKeyPatch) => void
 }) {
   const { t } = useTranslation()
-  const [editing, setEditing] = useState(false)
-  if (!editing)
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm">{spendFacts(poolKey, t)}</p>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-muted-foreground"
-          disabled={disabled}
-          onClick={() => setEditing(true)}
-        >
-          {t("credentials.keyPools.budget")}
-        </Button>
-      </div>
-    )
   return (
-    <form
-      className="flex flex-wrap items-end gap-2"
-      onSubmit={(event) => {
-        event.preventDefault()
-        const form = new FormData(event.currentTarget)
+    <InlineEdit
+      view={<p className="text-sm">{spendFacts(poolKey, t)}</p>}
+      actionLabel={t("credentials.keyPools.budget")}
+      disabled={disabled}
+      formClassName="flex flex-wrap items-end gap-2"
+      onSubmit={(form) =>
         onSave({
           monthly_budget_usd: Number(form.get("budget") || 0),
           reset_day: Number(form.get("resetDay")),
         })
-        setEditing(false)
-      }}
+      }
     >
       <label className="flex flex-col gap-1 text-sm">
         {t("credentials.keyPools.monthlyBudget")}
@@ -126,12 +110,6 @@ export function KeyBudget({
           disabled={disabled}
         />
       </label>
-      <Button type="submit" variant="outline" disabled={disabled}>
-        {t("common.save")}
-      </Button>
-      <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
-        {t("common.cancel")}
-      </Button>
-    </form>
+    </InlineEdit>
   )
 }
