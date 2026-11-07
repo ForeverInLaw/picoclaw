@@ -1,8 +1,10 @@
 package providers
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -17,9 +19,9 @@ const (
 	shortRateLimitWait = 10 * time.Second
 	// defaultRateLimitPause applies to a 429 that names no time.
 	defaultRateLimitPause = time.Minute
-	// exhaustedRecheckInterval spaces the single attempts that recheck whether an
-	// exhausted key has credit again.
-	exhaustedRecheckInterval = 6 * time.Hour
+	// downRecheckInterval spaces the single attempts that recheck whether an
+	// exhausted key serves again.
+	downRecheckInterval = 6 * time.Hour
 )
 
 // KeyState names the availability of one Key pool key.
@@ -27,17 +29,25 @@ type KeyState string
 
 const (
 	KeyAvailable   KeyState = "available"
-	KeyRateLimited KeyState = "rate_limited"
-	KeyExhausted   KeyState = "exhausted"
+	KeyRateLimited KeyState = "rate_limited" // for at least one model
+	KeyExhausted   KeyState = "exhausted"    // out of credit
 	KeyDisabled    KeyState = "disabled"
 )
 
-// KeyAvailability is one key's state. Until is when a rate limit ends or when
-// an exhausted key is next rechecked; it is zero for other states.
+// KeyAvailability is one key's state. Until is the next recheck of an
+// exhausted key, zero otherwise. Anthropic rate-limits each model
+// separately, so RateLimitedModels lists the models the key cannot serve now.
 type KeyAvailability struct {
-	KeyID string    `json:"key_id"`
-	State KeyState  `json:"state"`
-	Until time.Time `json:"until,omitzero"`
+	KeyID             string           `json:"key_id"`
+	State             KeyState         `json:"state"`
+	Until             time.Time        `json:"until,omitzero"`
+	RateLimitedModels []ModelRateLimit `json:"rate_limited_models,omitempty"`
+}
+
+// ModelRateLimit is a rate limit of one key for one model id, ending at Until.
+type ModelRateLimit struct {
+	Model string    `json:"model"`
+	Until time.Time `json:"until"`
 }
 
 // KeyPoolAvailability reports the state of each key of pool in configured
@@ -46,17 +56,17 @@ type KeyAvailability struct {
 func KeyPoolAvailability(pool *config.KeyPool) []KeyAvailability {
 	states := make([]KeyAvailability, 0, len(pool.Keys))
 	for _, key := range pool.Keys {
-		state := KeyAvailability{KeyID: key.ID, State: KeyDisabled}
-		if key.Enabled {
-			state.State, state.Until = keyAvailability.state(keyRef{pool: pool.ID, key: key.ID})
+		if !key.Enabled {
+			states = append(states, KeyAvailability{KeyID: key.ID, State: KeyDisabled})
+			continue
 		}
-		states = append(states, state)
+		states = append(states, keyAvailability.report(keyRef{pool: pool.ID, key: key.ID}))
 	}
 	return states
 }
 
-// ReturnKeyToService makes a rate-limited or exhausted key available at once,
-// for an administrator who knows its credit is renewed.
+// ReturnKeyToService makes a key available at once, clearing exhaustion and
+// rate limits, for an administrator who knows its credit is renewed.
 func ReturnKeyToService(poolID, keyID string) {
 	keyAvailability.clear(keyRef{pool: poolID, key: keyID})
 }
@@ -81,69 +91,96 @@ type keyRef struct{ pool, key string }
 
 // keyHealth is a key's recorded trouble; a key without an entry is available.
 type keyHealth struct {
-	exhausted bool
-	until     time.Time // end of a rate limit, or an exhausted key's next recheck
+	down    KeyState             // KeyExhausted, or empty while the key itself is fine
+	recheck time.Time            // next single attempt on a down key
+	limits  map[string]time.Time // model id → end of its rate limit
 }
 
 type keyAvailabilityRegistry struct {
 	clock clock
 	mu    sync.Mutex
-	keys  map[keyRef]keyHealth
+	keys  map[keyRef]*keyHealth
 }
 
 func newKeyAvailabilityRegistry(clock clock) *keyAvailabilityRegistry {
-	return &keyAvailabilityRegistry{clock: clock, keys: map[keyRef]keyHealth{}}
+	return &keyAvailabilityRegistry{clock: clock, keys: map[keyRef]*keyHealth{}}
 }
 
-// claim reports whether the key may serve a request now. A due recheck of an
-// exhausted key goes to this one request: the next recheck moves an interval
-// ahead, and only a success makes the key available again.
-func (r *keyAvailabilityRegistry) claim(ref keyRef) bool {
+// health returns the key's entry, creating it; callers hold mu.
+func (r *keyAvailabilityRegistry) health(ref keyRef) *keyHealth {
+	health := r.keys[ref]
+	if health == nil {
+		health = &keyHealth{limits: map[string]time.Time{}}
+		r.keys[ref] = health
+	}
+	return health
+}
+
+// blocked reports what keeps the key from serving model at now and until when
+// it might serve again; KeyAvailable once nothing does. Callers hold mu.
+func (r *keyAvailabilityRegistry) blocked(ref keyRef, model string, now time.Time) (KeyState, time.Time) {
+	health := r.keys[ref]
+	if health == nil {
+		return KeyAvailable, time.Time{}
+	}
+	limit := health.limits[model]
+	switch {
+	case health.down != "" && now.Before(health.recheck):
+		return health.down, latest(health.recheck, limit)
+	case now.Before(limit):
+		return KeyRateLimited, limit
+	}
+	return KeyAvailable, time.Time{}
+}
+
+// blockedNow is blocked for a caller without the lock.
+func (r *keyAvailabilityRegistry) blockedNow(ref keyRef, model string) (KeyState, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	health, troubled := r.keys[ref]
+	return r.blocked(ref, model, r.clock.Now())
+}
+
+// claim reports whether the key may serve model now. A due recheck of a down
+// key goes to this one request: the next recheck moves an interval ahead, and
+// only a success makes the key available again.
+func (r *keyAvailabilityRegistry) claim(ref keyRef, model string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	now := r.clock.Now()
-	switch {
-	case !troubled:
-		return true
-	case now.Before(health.until):
+	if state, _ := r.blocked(ref, model, now); state != KeyAvailable {
 		return false
-	case health.exhausted:
-		health.until = now.Add(exhaustedRecheckInterval)
-		r.keys[ref] = health
-	default:
-		delete(r.keys, ref)
+	}
+	if health := r.keys[ref]; health != nil && health.down != "" {
+		health.recheck = now.Add(downRecheckInterval)
 	}
 	return true
 }
 
-// served records a success, which returns a rechecked exhausted key to service.
-// An active rate limit set by a concurrent request stays.
+// served records a success, which returns a rechecked key to service. Active
+// rate limits set by concurrent requests stay.
 func (r *keyAvailabilityRegistry) served(ref keyRef) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.keys[ref].exhausted {
-		delete(r.keys, ref)
+	if health := r.keys[ref]; health != nil {
+		health.down = ""
 	}
 }
 
-// exhaust marks the key out of credit until a recheck succeeds.
-func (r *keyAvailabilityRegistry) exhaust(ref keyRef) {
+// takeDown marks the key down in state until a recheck succeeds.
+func (r *keyAvailabilityRegistry) takeDown(ref keyRef, state KeyState) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.keys[ref] = keyHealth{exhausted: true, until: r.clock.Now().Add(exhaustedRecheckInterval)}
+	health := r.health(ref)
+	health.down = state
+	health.recheck = r.clock.Now().Add(downRecheckInterval)
 }
 
-// rateLimit pauses the key for d. It never shortens a longer pause or turns an
-// exhausted key into a rate-limited one.
-func (r *keyAvailabilityRegistry) rateLimit(ref keyRef, d time.Duration) {
+// rateLimit pauses the key for model for d, never shortening a longer pause.
+func (r *keyAvailabilityRegistry) rateLimit(ref keyRef, model string, d time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	health := r.keys[ref]
-	if until := r.clock.Now().Add(d); !health.exhausted && until.After(health.until) {
-		health.until = until
-		r.keys[ref] = health
-	}
+	health := r.health(ref)
+	health.limits[model] = latest(health.limits[model], r.clock.Now().Add(d))
 }
 
 func (r *keyAvailabilityRegistry) clear(ref keyRef) {
@@ -152,17 +189,26 @@ func (r *keyAvailabilityRegistry) clear(ref keyRef) {
 	delete(r.keys, ref)
 }
 
-func (r *keyAvailabilityRegistry) state(ref keyRef) (KeyState, time.Time) {
+func (r *keyAvailabilityRegistry) report(ref keyRef) KeyAvailability {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	health, troubled := r.keys[ref]
-	switch {
-	case troubled && health.exhausted:
-		return KeyExhausted, health.until
-	case troubled && r.clock.Now().Before(health.until):
-		return KeyRateLimited, health.until
+	report := KeyAvailability{KeyID: ref.key, State: KeyAvailable}
+	health := r.keys[ref]
+	if health == nil {
+		return report
 	}
-	return KeyAvailable, time.Time{}
+	now := r.clock.Now()
+	for model, until := range health.limits {
+		if now.Before(until) {
+			report.State = KeyRateLimited
+			report.RateLimitedModels = append(report.RateLimitedModels, ModelRateLimit{Model: model, Until: until})
+		}
+	}
+	slices.SortFunc(report.RateLimitedModels, func(a, b ModelRateLimit) int { return cmp.Compare(a.Model, b.Model) })
+	if health.down != "" {
+		report.State, report.Until = health.down, health.recheck
+	}
+	return report
 }
 
 // wait sleeps for d unless ctx ends first.
@@ -173,6 +219,13 @@ func (r *keyAvailabilityRegistry) wait(ctx context.Context, d time.Duration) err
 	case <-r.clock.After(d):
 		return nil
 	}
+}
+
+func latest(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // rateLimitPause is how long a 429 keeps its key away: its retry-after, else

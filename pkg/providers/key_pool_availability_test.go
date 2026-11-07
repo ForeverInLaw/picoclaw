@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -267,8 +267,8 @@ const anthropicSpendCapBody = `{"type":"error","error":{"type":"rate_limit_error
 	`"message":"You have reached your API usage limits: Your organization has reached its monthly spend limit. ` +
 	`You will regain access on 2026-12-01 at 00:00 UTC.","details":{"error_code":"enforced_spend_limit_reached"}}}`
 
-// exhaustedForms are the ways Anthropic says a key's organization is out of money.
-var exhaustedForms = map[string]func(http.ResponseWriter){
+// downForms are the ways Anthropic says a key's organization is out of money.
+var downForms = map[string]func(http.ResponseWriter){
 	"credit balance 400": anthropicStatus(http.StatusBadRequest, anthropicErrorBody(anthropicCreditBalanceMessage)),
 	"billing 402": anthropicStatus(http.StatusPaymentRequired,
 		`{"type":"error","error":{"type":"billing_error","message":"There is an issue with your billing."}}`),
@@ -277,8 +277,8 @@ var exhaustedForms = map[string]func(http.ResponseWriter){
 		"You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC.")),
 }
 
-func TestKeyPoolKeepsAnExhaustedKeyOutUntilARecheckSucceeds(t *testing.T) {
-	for name, exhausted := range exhaustedForms {
+func TestKeyPoolKeepsAKeyOutOfCreditOutUntilARecheckSucceeds(t *testing.T) {
+	for name, down := range downForms {
 		t.Run(name, func(t *testing.T) {
 			clock := useKeyPoolClock(t)
 			fake := newPoolAnthropic(t)
@@ -287,9 +287,9 @@ func TestKeyPoolKeepsAnExhaustedKeyOutUntilARecheckSucceeds(t *testing.T) {
 			haiku, haikuID := createProvider(t, &cfg.ModelList[1])
 			conversation := fake.conversationOn(t, opus, opusID, "sk-ant-a")
 
-			fake.fail("sk-ant-a", always, exhausted)
+			fake.fail("sk-ant-a", always, down)
 			if got := fake.keyFor(t, opus, opusID, conversation); got == "sk-ant-a" {
-				t.Fatal("exhausted key answered")
+				t.Fatal("the key answered")
 			}
 			if len(clock.waits) != 0 {
 				t.Errorf("waits = %v, want none for an exhausted key", clock.waits)
@@ -308,7 +308,7 @@ func TestKeyPoolKeepsAnExhaustedKeyOutUntilARecheckSucceeds(t *testing.T) {
 			clock.advance(time.Hour) // past any rate limit
 			assertKeyOut("exhausted")
 
-			clock.advance(exhaustedRecheckInterval - time.Hour)
+			clock.advance(downRecheckInterval - time.Hour)
 			fake.keyFor(t, opus, opusID, conversation)
 			if got := fake.requestsWith("sk-ant-a") - exhaustedRequests; got != 1 {
 				t.Fatalf("recheck sent %d requests to the exhausted key, want one", got)
@@ -318,13 +318,33 @@ func TestKeyPoolKeepsAnExhaustedKeyOutUntilARecheckSucceeds(t *testing.T) {
 			assertKeyOut("failed recheck")
 
 			fake.heal("sk-ant-a")
-			clock.advance(exhaustedRecheckInterval)
+			clock.advance(downRecheckInterval)
 			for range 2 {
 				if got := fake.keyFor(t, opus, opusID, conversation); got != "sk-ant-a" {
 					t.Fatalf("after a successful recheck the conversation used %s, want its own key", got)
 				}
 			}
 		})
+	}
+}
+
+func TestKeyPoolRateLimitsAKeyOnlyForTheLimitedModel(t *testing.T) {
+	useKeyPoolClock(t)
+	fake := newPoolAnthropic(t)
+	cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b")
+	opus, opusID := createProvider(t, &cfg.ModelList[0])
+	haiku, haikuID := createProvider(t, &cfg.ModelList[1])
+	conversation := fake.conversationOn(t, opus, opusID, "sk-ant-a")
+
+	fake.fail("sk-ant-a", 1, rateLimitedFor("60"))
+	if got := fake.keyFor(t, opus, opusID, conversation); got == "sk-ant-a" {
+		t.Fatal("rate-limited Opus request stayed on its key")
+	}
+	if got := fake.keyFor(t, haiku, haikuID, conversation); got != "sk-ant-a" {
+		t.Errorf("Haiku request moved to %s because Opus was rate limited on its key", got)
+	}
+	if got := fake.keyFor(t, opus, opusID, conversation); got == "sk-ant-a" {
+		t.Error("Opus request returned to its key before the rate limit expired")
 	}
 }
 
@@ -337,25 +357,30 @@ func TestKeyPoolAvailabilityReportsKeyStatesAndReturnsAKeyToService(t *testing.T
 		t.Fatal(err)
 	}
 	provider, modelID := createProvider(t, &cfg.ModelList[0])
+	failures := map[string]func(http.ResponseWriter){
+		"sk-ant-a": downForms["credit balance 400"],
+		"sk-ant-b": rateLimitedFor("60"),
+	}
 	exhaustedConversation := fake.conversationOn(t, provider, modelID, "sk-ant-a")
-	limitedConversation := fake.conversationOn(t, provider, modelID, "sk-ant-b")
-	fake.fail("sk-ant-a", always, exhaustedForms["credit balance 400"])
-	fake.fail("sk-ant-b", 1, rateLimitedFor("60"))
-	fake.keyFor(t, provider, modelID, exhaustedConversation)
-	fake.keyFor(t, provider, modelID, limitedConversation)
+	for key, respond := range failures {
+		conversation := fake.conversationOn(t, provider, modelID, key)
+		fake.fail(key, 1, respond)
+		fake.keyFor(t, provider, modelID, conversation)
+	}
 
 	now := clock.Now()
 	want := []KeyAvailability{
-		{KeyID: "org-1", State: KeyExhausted, Until: now.Add(exhaustedRecheckInterval)},
-		{KeyID: "org-2", State: KeyRateLimited, Until: now.Add(time.Minute)},
+		{KeyID: "org-1", State: KeyExhausted, Until: now.Add(downRecheckInterval)},
+		{KeyID: "org-2", State: KeyRateLimited, RateLimitedModels: []ModelRateLimit{
+			{Model: modelID, Until: now.Add(time.Minute)},
+		}},
 		{KeyID: "org-3", State: KeyAvailable},
 		{KeyID: "org-4", State: KeyDisabled},
 	}
-	if got := KeyPoolAvailability(&cfg.KeyPools[0]); !slices.Equal(got, want) {
+	if got := KeyPoolAvailability(&cfg.KeyPools[0]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("KeyPoolAvailability() = %+v, want %+v", got, want)
 	}
 
-	fake.heal("sk-ant-a")
 	ReturnKeyToService("orgs", "org-1")
 	if got := fake.keyFor(t, provider, modelID, exhaustedConversation); got != "sk-ant-a" {
 		t.Fatalf("returned key did not get its conversation back; it went to %s", got)
@@ -363,26 +388,38 @@ func TestKeyPoolAvailabilityReportsKeyStatesAndReturnsAKeyToService(t *testing.T
 }
 
 func TestKeyPoolWithNoAvailableKeyLetsTheRoutingChainAnswerFromItsReserve(t *testing.T) {
-	useKeyPoolClock(t)
-	fake := newPoolAnthropic(t)
-	fake.fail("sk-ant-a", always, exhaustedForms["credit balance 400"])
-	fake.fail("sk-ant-b", always, rateLimitedFor("60"))
-	cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b")
-	provider, _ := createProvider(t, &cfg.ModelList[0])
+	cases := map[string]struct {
+		a, b   func(http.ResponseWriter)
+		reason FailoverReason
+	}{
+		"exhausted and rate limited": {downForms["credit balance 400"], rateLimitedFor("60"), FailoverRateLimit},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			useKeyPoolClock(t)
+			fake := newPoolAnthropic(t)
+			fake.fail("sk-ant-a", always, tc.a)
+			fake.fail("sk-ant-b", always, tc.b)
+			cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b")
+			provider, _ := createProvider(t, &cfg.ModelList[0])
 
-	for _, phase := range []string{"keys fail", "keys known unavailable"} {
-		t.Run(phase, func(t *testing.T) {
-			result, reserveCalls, _, err := runAnthropicThenReserve(t, provider)
-			if err != nil {
-				t.Fatalf("Execute() error = %v, want the reserve to answer", err)
+			for _, phase := range []string{"keys fail", "keys known unavailable"} {
+				result, reserveCalls, _, err := runAnthropicThenReserve(t, provider)
+				if err != nil {
+					t.Fatalf("%s: Execute() error = %v, want the reserve to answer", phase, err)
+				}
+				if reserveCalls != 1 || result.Response.Content != "from reserve" {
+					t.Fatalf("%s: reserve calls = %d, response = %+v; want one reserve answer",
+						phase, reserveCalls, result.Response)
+				}
+				if got := result.Attempts[0].Reason; got != tc.reason {
+					t.Errorf("%s: pool attempt reason = %q, want %q", phase, got, tc.reason)
+				}
 			}
-			if reserveCalls != 1 || result.Response.Content != "from reserve" {
-				t.Fatalf("reserve calls = %d, response = %+v; want one reserve answer", reserveCalls, result.Response)
+			if got := fake.requestsWith("sk-ant-a") + fake.requestsWith("sk-ant-b"); got != 2 {
+				t.Errorf("pool keys received %d requests, want one each before both were marked", got)
 			}
 		})
-	}
-	if got := fake.requestsWith("sk-ant-a") + fake.requestsWith("sk-ant-b"); got != 2 {
-		t.Errorf("pool keys received %d requests, want one each before both were marked", got)
 	}
 }
 

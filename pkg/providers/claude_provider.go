@@ -60,11 +60,12 @@ func newClaudeProviderWithKeyPool(pool *keyPool) *ClaudeProvider {
 // the request's conversation.
 func (p *ClaudeProvider) serve(
 	ctx context.Context,
+	model string,
 	options map[string]any,
 	call func(*anthropicprovider.Provider) (*LLMResponse, error),
 ) (*LLMResponse, error) {
 	if p.pool != nil {
-		return p.pool.serve(ctx, options, call)
+		return p.pool.serve(ctx, model, options, call)
 	}
 	return call(p.delegate)
 }
@@ -72,7 +73,7 @@ func (p *ClaudeProvider) serve(
 func (p *ClaudeProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
-	return p.serve(ctx, options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
+	return p.serve(ctx, model, options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
 		return delegate.Chat(ctx, messages, tools, model, options)
 	})
 }
@@ -85,7 +86,7 @@ func (p *ClaudeProvider) ChatStream(
 	options map[string]any,
 	onUpdate func(content string),
 ) (*LLMResponse, error) {
-	return p.serve(ctx, options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
+	return p.serve(ctx, model, options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
 		return delegate.ChatStream(ctx, messages, tools, model, options, onUpdate)
 	})
 }

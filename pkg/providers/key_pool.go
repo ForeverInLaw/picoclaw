@@ -71,25 +71,27 @@ func (p *keyPool) rank(conversation string) []pooledKey {
 	return ranked
 }
 
-// serve runs one request on the first available key in the conversation's
-// rendezvous order. A key that is out of credit or rate limited is marked so
-// for every model using the pool and the request moves to the next key. With
-// no key left, the error makes the Routing chain move to its reserves.
+// serve runs one request for model on the first available key in the
+// conversation's rendezvous order. A key that is out of credit is marked so
+// for every model using the pool, a rate limit only for model, and
+// the request moves to the next key. With no key left, the error makes the
+// Routing chain move to its reserves.
 func (p *keyPool) serve(
 	ctx context.Context,
+	model string,
 	options map[string]any,
 	call func(*anthropicprovider.Provider) (*LLMResponse, error),
 ) (*LLMResponse, error) {
 	conversation, _ := options[ConversationIdentityOption].(string)
 	for _, key := range p.rank(conversation) {
-		if !p.availability.claim(key.ref) {
+		if !p.availability.claim(key.ref, model) {
 			continue
 		}
-		if response, keyDown, err := p.attempt(ctx, key, call); !keyDown {
+		if response, keyDown, err := p.attempt(ctx, key, model, call); !keyDown {
 			return response, err
 		}
 	}
-	return nil, p.unavailable()
+	return nil, p.unavailable(model)
 }
 
 // attempt runs call on key. One rate limit of at most shortRateLimitWait is
@@ -98,6 +100,7 @@ func (p *keyPool) serve(
 func (p *keyPool) attempt(
 	ctx context.Context,
 	key pooledKey,
+	model string,
 	call func(*anthropicprovider.Provider) (*LLMResponse, error),
 ) (response *LLMResponse, keyDown bool, err error) {
 	for waited := false; ; waited = true {
@@ -106,13 +109,12 @@ func (p *keyPool) attempt(
 			p.availability.served(key.ref)
 			return response, false, nil
 		}
-		failure := ClassifyError(err, "anthropic", "")
+		failure := ClassifyError(err, "anthropic", model)
 		switch {
 		case failure == nil:
 			return nil, false, err
 		case failure.Reason == FailoverBilling:
-			p.availability.exhaust(key.ref)
-			p.logKeyDown(key, KeyExhausted, err)
+			p.takeDown(key, KeyExhausted, err)
 			return nil, true, err
 		case failure.Reason == FailoverRateLimit && failure.Status == http.StatusTooManyRequests:
 			pause := rateLimitPause(err, failure, p.availability.clock.Now())
@@ -122,8 +124,8 @@ func (p *keyPool) attempt(
 				}
 				continue
 			}
-			p.availability.rateLimit(key.ref, pause)
-			p.logKeyDown(key, KeyRateLimited, err)
+			p.availability.rateLimit(key.ref, model, pause)
+			p.logKeyDown(key, KeyRateLimited, model, err)
 			return nil, true, err
 		default:
 			return nil, false, err
@@ -131,27 +133,37 @@ func (p *keyPool) attempt(
 	}
 }
 
-func (p *keyPool) logKeyDown(key pooledKey, state KeyState, err error) {
-	logger.WarnCF("provider.anthropic", "Key pool key unavailable", map[string]any{
-		"pool": p.name, "key": key.label, "state": string(state), "error": err.Error(),
-	})
+func (p *keyPool) takeDown(key pooledKey, state KeyState, err error) {
+	p.availability.takeDown(key.ref, state)
+	p.logKeyDown(key, state, "", err)
+}
+
+func (p *keyPool) logKeyDown(key pooledKey, state KeyState, model string, err error) {
+	fields := map[string]any{"pool": p.name, "key": key.label, "state": string(state), "error": err.Error()}
+	if model != "" {
+		fields["model"] = model
+	}
+	logger.WarnCF("provider.anthropic", "Key pool key unavailable", fields)
 }
 
 // unavailable is the error for a request no key could serve: a skipped
-// candidate whose retry time is the earliest moment a key may serve again.
-func (p *keyPool) unavailable() *CandidateUnavailableError {
+// candidate whose retry time is the earliest moment a key may serve model
+// again. Its reason is a rate limit if any key is rate limited, else billing.
+func (p *keyPool) unavailable(model string) *CandidateUnavailableError {
 	failure := &CandidateUnavailableError{
 		Reason:  FailoverBilling,
 		Message: fmt.Sprintf("every key in Key pool %q is rate limited or exhausted", p.name),
 	}
+	limited := false
 	for _, key := range p.keys {
-		state, until := p.availability.state(key.ref)
-		if state == KeyRateLimited {
-			failure.Reason = FailoverRateLimit
-		}
+		state, until := p.availability.blockedNow(key.ref, model)
+		limited = limited || state == KeyRateLimited
 		if !until.IsZero() && (failure.RetryAt.IsZero() || until.Before(failure.RetryAt)) {
 			failure.RetryAt = until
 		}
+	}
+	if limited {
+		failure.Reason = FailoverRateLimit
 	}
 	if failure.RetryAt.IsZero() {
 		failure.RetryAt = p.availability.clock.Now()
