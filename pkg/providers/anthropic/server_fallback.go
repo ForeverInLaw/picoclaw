@@ -27,7 +27,7 @@ func (p *Provider) serverFallbackOptions(model anthropic.Model) []option.Request
 		return nil
 	}
 	return []option.RequestOption{
-		option.WithHeaderAdd("anthropic-beta", string(anthropic.AnthropicBetaServerSideFallback2026_07_01)),
+		option.WithHeaderAdd("anthropic-beta", anthropic.AnthropicBetaServerSideFallback2026_07_01),
 		option.WithJSONSet("fallbacks", "default"),
 	}
 }
@@ -63,7 +63,7 @@ func servedModel(msg *anthropic.Message) anthropic.Model {
 func refusalResponse(msg *anthropic.Message) *LLMResponse {
 	details := msg.StopDetails
 	logger.WarnCF("provider.anthropic", "Anthropic refusal", map[string]any{
-		"model":    string(servedModel(msg)),
+		"model":    servedModel(msg),
 		"category": string(details.Category),
 	})
 	text := "Claude declined to answer this request"

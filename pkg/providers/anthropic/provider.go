@@ -286,7 +286,7 @@ func mergeDeltaUsage(usage *anthropic.Usage, delta anthropic.MessageDeltaUsage) 
 func (p *Provider) completeResponse(requested anthropic.Model, msg *anthropic.Message) *LLMResponse {
 	served := servedModel(msg)
 	fields := map[string]any{
-		"model":                       string(served),
+		"model":                       served,
 		"input_tokens":                msg.Usage.InputTokens,
 		"output_tokens":               msg.Usage.OutputTokens,
 		"cache_creation_input_tokens": msg.Usage.CacheCreationInputTokens,
@@ -297,8 +297,8 @@ func (p *Provider) completeResponse(requested anthropic.Model, msg *anthropic.Me
 	}
 	resp := parseResponse(msg)
 	if served != requested {
-		fields["requested_model"] = string(requested)
-		resp.ServedModel = string(served)
+		fields["requested_model"] = requested
+		resp.ServedModel = served
 	}
 	logger.InfoCF("provider.anthropic", "Anthropic usage", fields)
 	return resp
@@ -481,7 +481,7 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 	}
 	var content strings.Builder
 	var reasoning strings.Builder
-	var toolCalls []ToolCall
+	toolCalls := make([]ToolCall, 0, 1)
 
 	for _, block := range resp.Content {
 		switch block.Type {
@@ -495,7 +495,7 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 			// The fallback model continues the declined model's text; thinking and
 			// tool calls from before the handoff are not part of the answer.
 			reasoning.Reset()
-			toolCalls = nil
+			toolCalls = toolCalls[:0]
 		case "tool_use":
 			tu := block.AsToolUse()
 			var args map[string]any

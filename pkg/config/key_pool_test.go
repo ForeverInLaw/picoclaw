@@ -45,7 +45,7 @@ func TestAnthropicAPIKeysMigrationIsSavedOnTheNextWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if err := SaveConfig(path, cfg); err != nil {
+	if err = SaveConfig(path, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestKeyPoolSecretsAreSealedWithThePassphrase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if err := SaveConfig(path, cfg); err != nil {
+	if err = SaveConfig(path, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
 

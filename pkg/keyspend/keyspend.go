@@ -39,13 +39,14 @@ type Totals struct {
 	UnpricedTokens   int64   `json:"unpriced_tokens"`
 }
 
-func (t *Totals) add(other Totals) {
+func (t Totals) plus(other Totals) Totals {
 	t.InputTokens += other.InputTokens
 	t.OutputTokens += other.OutputTokens
 	t.CacheWriteTokens += other.CacheWriteTokens
 	t.CacheReadTokens += other.CacheReadTokens
 	t.EstimatedUSD += other.EstimatedUSD
 	t.UnpricedTokens += other.UnpricedTokens
+	return t
 }
 
 // CacheHitRate is the share of prompt tokens read from the prompt cache; 0
@@ -70,7 +71,7 @@ func (l Ledger) Since(poolID, keyID string, start time.Time) Totals {
 	first := start.UTC().Format(dayLayout)
 	for day, totals := range l.Pools[poolID][keyID] {
 		if day >= first {
-			sum.add(totals)
+			sum = sum.plus(totals)
 		}
 	}
 	return sum
@@ -177,7 +178,7 @@ func (s Store) Record(poolID, keyID string, at time.Time, usage Totals) error {
 	}
 	today := at.UTC()
 	totals := days[today.Format(dayLayout)]
-	totals.add(usage)
+	totals = totals.plus(usage)
 	days[today.Format(dayLayout)] = totals
 	ledger.prune(today.AddDate(0, 0, -retainedDays).Format(dayLayout))
 

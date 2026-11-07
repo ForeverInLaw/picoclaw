@@ -49,7 +49,7 @@ var datedSnapshot = regexp.MustCompile(`-\d{8}$`)
 // apiModelID is the Messages API id of a configured model id: the API uses
 // hyphens (claude-sonnet-4-6) where configuration may use dots (claude-sonnet-4.6).
 func apiModelID(model string) anthropic.Model {
-	return anthropic.Model(strings.ReplaceAll(model, ".", "-"))
+	return strings.ReplaceAll(model, ".", "-")
 }
 
 // EstimateCost prices one answer's usage for the model that served it, with

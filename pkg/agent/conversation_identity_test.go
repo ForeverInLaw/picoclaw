@@ -71,7 +71,12 @@ func TestTurnsAndSubTurnsCarryTheirConversationsIdentity(t *testing.T) {
 	parent := newTurnState(agent, processOptions{SessionKey: conversation, Channel: "telegram", ChatID: "42"},
 		al.newTurnEventScope(agent.ID, conversation))
 
-	if _, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{Model: "test-model", Tools: []tools.Tool{}}); err != nil {
+	if _, err := spawnSubTurn(
+		t.Context(),
+		al,
+		parent,
+		SubTurnConfig{Model: "test-model", Tools: []tools.Tool{}},
+	); err != nil {
 		t.Fatalf("spawnSubTurn() error = %v", err)
 	}
 

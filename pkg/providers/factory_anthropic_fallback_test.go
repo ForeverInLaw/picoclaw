@@ -136,7 +136,8 @@ func TestAnthropicAPIKeyModelReturnsAnswerServedByFallbackModel(t *testing.T) {
 				t.Fatalf("call error = %v", err)
 			}
 
-			if resp.Content != "Here is the port scan explanation." || resp.FinishReason != "stop" || resp.Reasoning != "" {
+			if resp.Content != "Here is the port scan explanation." || resp.FinishReason != "stop" ||
+				resp.Reasoning != "" {
 				t.Errorf("response = %q/%q reasoning %q, want the fallback answer, stop, no reasoning",
 					resp.Content, resp.FinishReason, resp.Reasoning)
 			}
@@ -180,10 +181,14 @@ func TestAnthropicAPIKeyModelSurfacesFinalRefusal(t *testing.T) {
 		call    func(*testing.T, LLMProvider, string) (*LLMResponse, error)
 		want    string
 	}{
-		{name: "non-streaming", respond: func(w http.ResponseWriter) { writeJSON(w, anthropicRefusal) }, call: chatHi,
-			want: anthropicRefusalText},
-		{name: "uncategorized", respond: func(w http.ResponseWriter) { writeJSON(w, uncategorized) }, call: chatHi,
-			want: "Claude declined to answer this request."},
+		{
+			name: "non-streaming", respond: func(w http.ResponseWriter) { writeJSON(w, anthropicRefusal) }, call: chatHi,
+			want: anthropicRefusalText,
+		},
+		{
+			name: "uncategorized", respond: func(w http.ResponseWriter) { writeJSON(w, uncategorized) }, call: chatHi,
+			want: "Claude declined to answer this request.",
+		},
 		{
 			name:    "streaming mid-output",
 			respond: func(w http.ResponseWriter) { writeSSE(w, messageStart, partialText, messageDelta, messageStop) },

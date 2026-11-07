@@ -89,9 +89,10 @@ func (c *Config) keyPoolByID(id string) *KeyPool {
 	return nil
 }
 
-func (p KeyPool) clone() *KeyPool {
-	p.Keys = slices.Clone(p.Keys)
-	return &p
+func (p *KeyPool) clone() *KeyPool {
+	c := *p
+	c.Keys = slices.Clone(p.Keys)
+	return &c
 }
 
 // ResolveKeyPools validates Key pools and attaches each referenced pool to its
