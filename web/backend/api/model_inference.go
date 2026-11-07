@@ -76,7 +76,7 @@ func (h *Handler) readInlineModelTest(w http.ResponseWriter, r *http.Request) (c
 			modelTestError(w, http.StatusBadRequest, err.Error())
 			return mc, false
 		}
-		if mc.APIKey == "" && saved.APIKey != "" && !compatibleModelCredentials(mc, saved) {
+		if mc.KeyPoolID == "" && mc.APIKey == "" && saved.APIKey != "" && !compatibleModelCredentials(mc, saved) {
 			modelTestError(w, http.StatusBadRequest, "Enter a new API key for the edited provider, endpoint or proxy.")
 			return mc, false
 		}
@@ -144,6 +144,10 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		modelTestError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if mc.KeyPoolID != "" {
+		h.runKeyPoolModelTest(w, r, mc)
+		return
+	}
 	// These protocols can open subprocesses/connections or use global OAuth
 	// credentials. This action only supports configured OpenAI-compatible HTTP.
 	protocol, modelID := providers.ExtractProtocol(mc.Model)
@@ -165,11 +169,7 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		)
 		return
 	}
-	timeout := 15 * time.Second
-	if mc.RequestTimeout > 0 && mc.RequestTimeout < 15 {
-		timeout = time.Duration(mc.RequestTimeout) * time.Second
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), modelTestTimeout(mc))
 	defer cancel()
 	accountID, sessionVersion := "", ""
 	if protocol == "openai" && (mc.AuthMethod == "oauth" || mc.AuthMethod == "token") {
@@ -215,13 +215,7 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 				setupMessage = "This test requires an OpenAI-compatible HTTP provider."
 				return nil, errors.New(setupMessage)
 			}
-			return provider.Chat(
-				attemptCtx,
-				[]providers.Message{{Role: "user", Content: "Reply with OK."}},
-				nil,
-				modelID,
-				map[string]any{"max_tokens": 32},
-			)
+			return sendModelTest(attemptCtx, provider, modelID)
 		},
 	)
 	if setupMessage != "" {
@@ -254,27 +248,15 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		if accountID != "" && sessionVersion != "" {
 			_ = auth.RecordAccountProbeContext(ctx, accountID, sessionVersion, probe)
 		}
-		message := providers.ErrorGuidance(err)
-		var networkError net.Error
-		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
-			message = "The model test timed out. Check the endpoint's availability or try a faster model."
-		}
-		if message == "" {
-			message = "The selected model could not answer. Check its provider and request settings."
-		}
-		modelTestError(w, http.StatusBadGateway, message)
+		modelTestError(w, http.StatusBadGateway, modelTestFailure(response, err))
 		return
 	}
-	if response == nil || strings.TrimSpace(response.Content) == "" {
+	if failure := modelTestFailure(response, nil); failure != "" {
 		probe.Status = "failed"
 		if accountID != "" && sessionVersion != "" {
 			_ = auth.RecordAccountProbeContext(ctx, accountID, sessionVersion, probe)
 		}
-		modelTestError(
-			w,
-			http.StatusBadGateway,
-			"The selected model returned no answer. Check its model identifier and request settings.",
-		)
+		modelTestError(w, http.StatusBadGateway, failure)
 		return
 	}
 	if accountID != "" && sessionVersion != "" {
@@ -286,6 +268,46 @@ func (h *Handler) runModelInference(w http.ResponseWriter, r *http.Request, mc c
 		"message":    "The selected model replied successfully.",
 		"latency_ms": time.Since(started).Milliseconds(),
 	})
+}
+
+// modelTestTimeout bounds one Test model request: 15 seconds, or the model's
+// shorter request timeout.
+func modelTestTimeout(mc config.ModelConfig) time.Duration {
+	if mc.RequestTimeout > 0 && mc.RequestTimeout < 15 {
+		return time.Duration(mc.RequestTimeout) * time.Second
+	}
+	return 15 * time.Second
+}
+
+// sendModelTest sends Test model's one short request.
+func sendModelTest(ctx context.Context, provider providers.LLMProvider, modelID string) (*providers.LLMResponse, error) {
+	return provider.Chat(
+		ctx,
+		[]providers.Message{{Role: "user", Content: "Reply with OK."}},
+		nil,
+		modelID,
+		map[string]any{"max_tokens": 32},
+	)
+}
+
+// modelTestFailure is the sanitized reason a Test model request did not
+// answer, or "" when it did. It never contains provider response bodies,
+// URLs or credentials.
+func modelTestFailure(response *providers.LLMResponse, err error) string {
+	if err != nil {
+		var networkError net.Error
+		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
+			return "The model test timed out. Check the endpoint's availability or try a faster model."
+		}
+		if message := providers.ErrorGuidance(err); message != "" {
+			return message
+		}
+		return "The selected model could not answer. Check its provider and request settings."
+	}
+	if response == nil || strings.TrimSpace(response.Content) == "" {
+		return "The selected model returned no answer. Check its model identifier and request settings."
+	}
+	return ""
 }
 
 func validateModelTestConfiguration(mc config.ModelConfig) error {
