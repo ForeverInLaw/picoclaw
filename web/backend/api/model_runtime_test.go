@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -828,5 +829,45 @@ func TestRuntimeLegacyCodexReportsServedWireModel(t *testing.T) {
 		record.Selected.Model != wireModel ||
 		record.Chain[0].Model != "o1" {
 		t.Fatalf("actual identity must retain configured choice and captured chain: %+v", record)
+	}
+}
+
+func TestRuntimeSnapshotFromTheFutureIsStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.SaveConfig(path, config.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	previous := gatewayHealthGet
+	t.Cleanup(func() { gatewayHealthGet = previous })
+	gatewayHealthGet = func(_ string, _ time.Duration) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(fmt.Sprintf(`{"pid":%d,"status":"ok"}`, os.Getpid()))),
+		}, nil
+	}
+	h := NewHandler(path)
+	for name, tc := range map[string]struct {
+		updated time.Duration
+		want    gatewayState
+	}{
+		"just written":           {0, gatewayRunning},
+		"within clock skew":      {time.Second, gatewayRunning},
+		"after a clock rollback": {time.Hour, gatewayStale},
+		"older than StaleAfter":  {-2 * modelruntime.StaleAfter, gatewayStale},
+	} {
+		t.Run(name, func(t *testing.T) {
+			snapshot, err := json.Marshal(modelruntime.Snapshot{
+				Version: 1, PID: os.Getpid(), UpdatedAt: time.Now().Add(tc.updated),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(modelruntime.Path(path), snapshot, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, state := h.gatewayRuntime(); state != tc.want {
+				t.Fatalf("gateway state = %s, want %s", state, tc.want)
+			}
+		})
 	}
 }

@@ -21,6 +21,11 @@ const (
 	gatewayUnknown gatewayState = "unknown" // no snapshot exists
 )
 
+// snapshotClockSkew is how far in the future a snapshot's UpdatedAt may lie
+// and still count as fresh; anything later means the clock moved back since it
+// was written, so its age says nothing.
+const snapshotClockSkew = 5 * time.Second
+
 // Running reports whether the snapshot is the running gateway's current state.
 func (s gatewayState) Running() bool { return s == gatewayRunning }
 
@@ -35,10 +40,11 @@ func (h *Handler) gatewayRuntime() (modelruntime.Snapshot, gatewayState) {
 		return snapshot, gatewayStale
 	}
 	health, status, healthErr := h.getGatewayHealth(cfg, time.Second)
+	age := time.Since(snapshot.UpdatedAt)
 	switch {
 	case !snapshot.StoppedAt.IsZero() || healthErr != nil || status != http.StatusOK:
 		return snapshot, gatewayOffline
-	case health.Pid == snapshot.PID && time.Since(snapshot.UpdatedAt) < modelruntime.StaleAfter:
+	case health.Pid == snapshot.PID && age > -snapshotClockSkew && age < modelruntime.StaleAfter:
 		return snapshot, gatewayRunning
 	}
 	return snapshot, gatewayStale
