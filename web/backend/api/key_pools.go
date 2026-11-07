@@ -34,6 +34,7 @@ func (h *Handler) registerKeyPoolRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/key-pools", h.handleCreateKeyPool)
 	mux.HandleFunc("PATCH /api/key-pools/{pool}", h.handlePatchKeyPool)
 	mux.HandleFunc("DELETE /api/key-pools/{pool}", h.handleDeleteKeyPool)
+	mux.HandleFunc("GET /api/key-pools/{pool}/models", h.handleListPoolModels)
 	mux.HandleFunc("POST /api/key-pools/{pool}/keys", h.handleAddPoolKey)
 	mux.HandleFunc("PATCH /api/key-pools/{pool}/keys/{key}", h.handlePatchPoolKey)
 	mux.HandleFunc("DELETE /api/key-pools/{pool}/keys/{key}", h.handleDeletePoolKey)
@@ -222,10 +223,7 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 // checkAnthropicKey lists models with apiKey. It returns the HTTP status and
 // message for a key that cannot be saved, or 0 for a valid key.
 func checkAnthropicKey(ctx context.Context, apiKey string) (int, string) {
-	ctx, cancel := context.WithTimeout(ctx, anthropicKeyCheckTimeout)
-	defer cancel()
-	_, err := anthropicprovider.NewProviderWithAPIKey(apiKey, anthropicAPIBase, "", anthropicKeyCheckTimeout).
-		ListModels(ctx)
+	_, err := listAnthropicModels(ctx, apiKey)
 	var apiErr *anthropic.Error
 	switch {
 	case err == nil:
@@ -236,6 +234,44 @@ func checkAnthropicKey(ctx context.Context, apiKey string) (int, string) {
 		return http.StatusBadRequest, "Anthropic does not allow this key to list models."
 	}
 	return http.StatusBadGateway, "Could not check the key with Anthropic. Try again."
+}
+
+// listAnthropicModels lists the models Anthropic offers to apiKey, which
+// costs no credit.
+func listAnthropicModels(ctx context.Context, apiKey string) ([]anthropicprovider.ModelInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, anthropicKeyCheckTimeout)
+	defer cancel()
+	return anthropicprovider.NewProviderWithAPIKey(apiKey, anthropicAPIBase, "", anthropicKeyCheckTimeout).
+		ListModels(ctx)
+}
+
+// handleListPoolModels lists the models Anthropic offers to the pool through
+// its first enabled key that can list them, so the Models page offers models
+// released after this build.
+func (h *Handler) handleListPoolModels(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.LoadConfig(h.configPath)
+	if err != nil {
+		modelTestError(w, http.StatusInternalServerError, "Could not load configuration.")
+		return
+	}
+	pool, err := findKeyPool(cfg, r.PathValue("pool"))
+	if err != nil {
+		modelTestError(w, errPoolNotFound.status, errPoolNotFound.message)
+		return
+	}
+	keys := pool.EnabledKeys()
+	if len(keys) == 0 {
+		modelTestError(w, http.StatusConflict, "Enable a key in this pool to list its models.")
+		return
+	}
+	for _, key := range keys {
+		if models, err := listAnthropicModels(r.Context(), key.APIKey); err == nil {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusOK, map[string]any{"models": models})
+			return
+		}
+	}
+	modelTestError(w, http.StatusBadGateway, "Anthropic did not list models for any enabled key of this pool.")
 }
 
 func (h *Handler) handlePatchPoolKey(w http.ResponseWriter, r *http.Request) {
