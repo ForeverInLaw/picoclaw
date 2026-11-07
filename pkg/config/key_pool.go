@@ -39,7 +39,11 @@ type KeyPoolKey struct {
 // MaxKeyBudgetUSD bounds a key's monthly budget.
 const MaxKeyBudgetUSD = 1_000_000
 
-// ValidBudget reports whether the key's monthly budget and reset day are in range.
+// KeyBudgetRange describes the values ValidBudget accepts, for error messages.
+const KeyBudgetRange = "a monthly budget of $0 to $1,000,000 and a reset day of 1 to 31, where 0 means the 1st"
+
+// ValidBudget reports whether the key's monthly budget and reset day are in
+// range; reset day 0 means the 1st.
 func (k KeyPoolKey) ValidBudget() bool {
 	return k.MonthlyBudgetUSD >= 0 && k.MonthlyBudgetUSD <= MaxKeyBudgetUSD && k.ResetDay >= 0 && k.ResetDay <= 31
 }
@@ -95,8 +99,7 @@ func (c *Config) ResolveKeyPools() error {
 				return fmt.Errorf("key pool %q: keys[%d] needs a unique id", pool.ID, j)
 			}
 			if !key.ValidBudget() {
-				return fmt.Errorf("key pool %q: keys[%d] needs a monthly budget of 0 to %d and a reset day of 1 to 31",
-					pool.ID, j, MaxKeyBudgetUSD)
+				return fmt.Errorf("key pool %q: keys[%d] needs %s", pool.ID, j, KeyBudgetRange)
 			}
 			keyIDs[key.ID] = true
 		}

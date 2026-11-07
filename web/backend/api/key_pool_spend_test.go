@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,11 +90,27 @@ func TestKeyPoolKeysShowSpendSinceTheirResetDayAgainstTheirBudget(t *testing.T) 
 	}
 
 	for _, invalid := range []string{
-		`{"monthly_budget_usd":-1}`, `{"reset_day":0}`, `{"reset_day":32}`, `{"monthly_budget_usd":"200"}`,
+		`{"monthly_budget_usd":-1}`, `{"reset_day":-1}`, `{"reset_day":32}`,
 	} {
-		if rec := serve(mux, http.MethodPatch, "/api/key-pools/orgs/keys/first", invalid); rec.Code != http.StatusBadRequest {
-			t.Errorf("PATCH %s = %d, want 400", invalid, rec.Code)
+		rec := serve(mux, http.MethodPatch, "/api/key-pools/orgs/keys/first", invalid)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), config.KeyBudgetRange) {
+			t.Errorf("PATCH %s = %d %s, want 400 naming the allowed range", invalid, rec.Code, rec.Body.String())
 		}
+	}
+	if rec := serve(mux, http.MethodPatch, "/api/key-pools/orgs/keys/first",
+		`{"monthly_budget_usd":"200"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("PATCH with a string budget = %d, want 400", rec.Code)
+	}
+	// As in config.json, reset day 0 means the 1st.
+	if rec := serve(mux, http.MethodPatch, "/api/key-pools/orgs/keys/first", `{"reset_day":0}`); rec.Code != http.StatusOK {
+		t.Fatalf("reset day 0 = %d %s", rec.Code, rec.Body.String())
+	}
+	if first = listKeySpend(t, mux)["first"]; first.ResetDay != 1 {
+		t.Errorf("reset day after saving 0 = %d, want 1", first.ResetDay)
+	}
+	if rec := serve(mux, http.MethodPatch, "/api/key-pools/orgs/keys/first",
+		`{"reset_day":`+strconv.Itoa(resetDay)+`}`); rec.Code != http.StatusOK {
+		t.Fatalf("restoring the reset day = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := serve(mux, http.MethodPatch, "/api/key-pools/orgs/keys/first",
 		`{"monthly_budget_usd":0}`); rec.Code != http.StatusOK {

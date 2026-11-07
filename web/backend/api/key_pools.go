@@ -372,8 +372,8 @@ func (h *Handler) handlePatchPoolKey(w http.ResponseWriter, r *http.Request) {
 	if patch.ResetDay != nil {
 		requested.ResetDay = *patch.ResetDay
 	}
-	if !requested.ValidBudget() || requested.ResetDay < 1 {
-		modelTestError(w, http.StatusBadRequest, "Use a monthly budget of $0 to $1,000,000 and a reset day of 1 to 31.")
+	if !requested.ValidBudget() {
+		modelTestError(w, http.StatusBadRequest, "Use "+config.KeyBudgetRange+".")
 		return
 	}
 	h.editPoolKey(w, r, func(key *config.KeyPoolKey) {
