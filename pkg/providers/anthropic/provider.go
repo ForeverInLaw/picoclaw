@@ -43,6 +43,8 @@ type Provider struct {
 	requestTimeout time.Duration
 	// promptCache is nil for setup-token providers, whose requests stay as they were.
 	promptCache *promptCache
+	// serverFallback opts supporting models into Anthropic's server-side refusal fallback.
+	serverFallback bool
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -89,6 +91,7 @@ func NewProviderWithAPIKey(apiKey, apiBase, proxy string, requestTimeout time.Du
 		baseURL:        baseURL,
 		requestTimeout: requestTimeout,
 		promptCache:    &promptCache{},
+		serverFallback: true,
 	}
 }
 
@@ -152,6 +155,7 @@ func (p *Provider) Chat(
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, p.serverFallbackOptions(params.Model)...)
 
 	// OAuth/setup-tokens require streaming; API keys use non-streaming.
 	if p.tokenSource != nil {
@@ -193,6 +197,7 @@ func (p *Provider) ChatStream(
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, p.serverFallbackOptions(params.Model)...)
 
 	return p.chatStreaming(ctx, params, opts, onUpdate)
 }
