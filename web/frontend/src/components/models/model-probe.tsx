@@ -87,12 +87,41 @@ export function ModelProbe({
             ? canceled
               ? t("models.probe.canceled")
               : probe.error.message
-            : probe.data?.status === "valid"
-              ? t("models.probe.valid")
-              : probe.data?.status === "success"
-                ? t("models.probe.success", { latency: probe.data.latency_ms })
-                : null}
+            : probe.data?.keys
+              ? t("models.probe.keysReplied", {
+                  replied: probe.data.keys.filter(
+                    ({ status }) => status === "success",
+                  ).length,
+                  total: probe.data.keys.length,
+                })
+              : probe.data?.status === "valid"
+                ? t("models.probe.valid")
+                : probe.data?.status === "success"
+                  ? t("models.probe.success", {
+                      latency: probe.data.latency_ms,
+                    })
+                  : null}
       </p>
+      {!probe.isPending && probe.data?.keys && (
+        <ul className="flex flex-col gap-1 text-sm">
+          {probe.data.keys.map((key, index) => (
+            <li key={index} className="flex flex-wrap gap-x-2">
+              <span className="font-medium">{key.label}</span>
+              <span
+                className={
+                  key.status === "success"
+                    ? "text-muted-foreground"
+                    : "text-destructive"
+                }
+              >
+                {key.status === "success"
+                  ? t("models.probe.keySuccess", { latency: key.latency_ms })
+                  : key.message}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </FieldSet>
   )
 }

@@ -5,10 +5,21 @@ export type ModelTestConfiguration = Omit<
   "id" | "index" | "configured" | "is_default" | "api_key"
 > & { id?: string; api_key?: string; model_index?: number }
 
+// Test model's outcome on one Key pool key, named by its label only.
+export interface KeyTestResult {
+  label: string
+  status: "success" | "error"
+  message: string
+  latency_ms: number
+}
+
+// A pool-backed model is tested on each available key; its status is
+// "failed" unless every key replied.
 export interface ModelTestResult {
-  status: "valid" | "success"
+  status: "valid" | "success" | "failed"
   message: string
   latency_ms?: number
+  keys?: KeyTestResult[]
 }
 
 async function modelTestRequest(
