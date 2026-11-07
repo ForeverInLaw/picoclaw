@@ -14,5 +14,6 @@ Use the connected itsaplan MCP tools for ticket operations.
 - Check for existing tickets before creating duplicates.
 - Use native subtasks (`parentId`) and issue links for blocking relationships.
 
-Tickets created before the move were imported from Linear. Older docs still cite
-their `IVO-*` identifiers; a ticket keeps its title, so search KOROBKA by title to find it.
+Tickets created before the move were imported from Linear. Branch names and older
+commits still cite `IVO-*` identifiers; each imported description starts with
+`Перенесено из Linear: IVO-N`, so search KOROBKA for that marker to find the ticket.
