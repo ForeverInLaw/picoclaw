@@ -446,6 +446,29 @@ func TestKeyPoolAvailabilityReportsKeyStatesAndReturnsAKeyToService(t *testing.T
 	}
 }
 
+func TestKeyPoolKeyStateFollowsItsSecret(t *testing.T) {
+	useKeyPoolClock(t)
+	fake := newPoolAnthropic(t)
+	cfg := keyPoolConfig(t, fake.URL, "sk-ant-a", "sk-ant-b")
+	provider, modelID := createProvider(t, &cfg.ModelList[0])
+	conversation := fake.conversationOn(t, provider, modelID, "sk-ant-a")
+	fake.fail("sk-ant-a", always, downForms["credit balance 400"])
+	fake.keyFor(t, provider, modelID, conversation)
+
+	// The administrator pastes a new secret into the same key.
+	cfg.KeyPools[0].Keys[0].APIKey = "sk-ant-new"
+	if err := cfg.ResolveKeyPools(); err != nil {
+		t.Fatal(err)
+	}
+	if got := KeyPoolAvailability(&cfg.KeyPools[0])[0]; got.KeyID != "org-1" || got.State != KeyAvailable {
+		t.Fatalf("key with a new secret reports %+v, want org-1 available", got)
+	}
+	provider, modelID = createProvider(t, &cfg.ModelList[0])
+	if got := fake.keyFor(t, provider, modelID, conversation); got != "sk-ant-new" {
+		t.Fatalf("conversation used %s, want its key's new secret", got)
+	}
+}
+
 func TestKeyPoolWithNoAvailableKeyLetsTheRoutingChainAnswerFromItsReserve(t *testing.T) {
 	cases := map[string]struct {
 		a, b   func(http.ResponseWriter)

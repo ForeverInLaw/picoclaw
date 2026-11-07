@@ -3,6 +3,8 @@ package providers
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"sync"
@@ -64,7 +66,7 @@ func KeyPoolAvailability(pool *config.KeyPool) []KeyAvailability {
 			states = append(states, KeyAvailability{KeyID: key.ID, State: KeyDisabled})
 			continue
 		}
-		states = append(states, keyPools.availability.report(keyRef{pool: pool.ID, key: key.ID}))
+		states = append(states, keyPools.availability.report(newKeyRef(pool.ID, key)))
 	}
 	return states
 }
@@ -81,8 +83,18 @@ type systemClock struct{}
 func (systemClock) Now() time.Time                         { return time.Now() }
 func (systemClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
-// keyRef identifies a key across every configured model using its pool.
-type keyRef struct{ pool, key string }
+// keyRef identifies a key across every configured model using its pool. Its
+// secret is a fingerprint of the key's value, so availability recorded for one
+// secret never follows the key to a replacement; conversations and spend
+// follow the key ID alone.
+type keyRef struct{ pool, key, secret string }
+
+// newKeyRef refers to key of the pool with poolID. The fingerprint is a
+// truncated SHA-256 of the secret and never reveals it.
+func newKeyRef(poolID string, key config.KeyPoolKey) keyRef {
+	sum := sha256.Sum256([]byte(key.APIKey))
+	return keyRef{pool: poolID, key: key.ID, secret: hex.EncodeToString(sum[:8])}
+}
 
 // keyHealth is a key's recorded trouble; a key without an entry is available.
 type keyHealth struct {
@@ -109,7 +121,7 @@ func (r *keyAvailabilityRegistry) applyReturns(pool *config.KeyPool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, key := range pool.Keys {
-		ref := keyRef{pool: pool.ID, key: key.ID}
+		ref := newKeyRef(pool.ID, key)
 		if !key.ReturnedAt.IsZero() && !key.ReturnedAt.Equal(r.returned[ref]) {
 			delete(r.keys, ref)
 			r.returned[ref] = key.ReturnedAt

@@ -42,8 +42,9 @@ type keyPool struct {
 	cacheTTL     string // prices this model's cache writes
 }
 
-// pooledKey is one serving key: its pool and stable key ID, which rendezvous
-// hashing and availability use, its label and a client that logs usage under it.
+// pooledKey is one serving key: its reference (rendezvous hashing and spend use
+// the stable key ID, availability also the secret's fingerprint), its label and
+// a client that logs usage under it.
 type pooledKey struct {
 	ref    keyRef
 	label  string
@@ -66,7 +67,7 @@ func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig, runtime keyPoolRun
 	keys := make([]pooledKey, 0, len(serving))
 	for _, key := range serving {
 		keys = append(keys, pooledKey{
-			ref:    keyRef{pool: pool.ID, key: key.ID},
+			ref:    newKeyRef(pool.ID, key),
 			label:  key.Label,
 			client: newAnthropicAPIKeyClient(key.APIKey, mc).WithKeyLabel(key.Label),
 		})
@@ -88,7 +89,7 @@ func NewKeyPoolKeyProbe(pool *config.KeyPool, key config.KeyPoolKey, mc *config.
 	client := newAnthropicAPIKeyClient(key.APIKey, mc).WithKeyLabel(key.Label).WithoutServerFallback()
 	return &keyPoolKeyProbe{pool: &keyPool{
 		name: pool.Name,
-		keys: []pooledKey{{ref: keyRef{pool: pool.ID, key: key.ID}, label: key.Label, client: client}},
+		keys: []pooledKey{{ref: newKeyRef(pool.ID, key), label: key.Label, client: client}},
 		// A registry of its own, so the probe never changes the key's availability.
 		availability: newKeyAvailabilityRegistry(systemClock{}),
 		spend:        keyPools.spend,
