@@ -87,3 +87,69 @@ func TestAnthropicAPIKeyModelOptsSupportingModelsIntoServerFallback(t *testing.T
 		}
 	}
 }
+
+func TestAnthropicAPIKeyModelReturnsAnswerServedByFallbackModel(t *testing.T) {
+	const (
+		// A non-streaming decline comes back with the fallback block first and
+		// the fallback model's answer after it.
+		nonStreaming = `{"id":"msg_fb","type":"message","role":"assistant","model":"claude-opus-4-8",
+			"stop_reason":"end_turn","stop_details":null,"content":[
+				{"type":"fallback","from":{"model":"claude-opus-5-5"},"to":{"model":"claude-opus-4-8"},
+				 "trigger":{"type":"refusal","category":"cyber"}},
+				{"type":"text","text":"Here is the port scan explanation."}],
+			"usage":{"input_tokens":12,"output_tokens":6,
+				"iterations":[{"type":"message","model":"claude-opus-5-5","input_tokens":12,"output_tokens":0},
+					{"type":"fallback_message","model":"claude-opus-4-8","input_tokens":12,"output_tokens":6}]}}`
+		// A mid-output decline on a stream: message_start already named the
+		// requested model, the fallback block marks the handoff, and the fallback
+		// model continues the partial text. Thinking before the handoff is dropped.
+		messageStart  = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fs\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-opus-5-5\",\"stop_reason\":null,\"usage\":{\"input_tokens\":12,\"output_tokens\":0}}}\n\n"
+		thinking      = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"declined reasoning\",\"signature\":\"\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+		partialText   = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"Here is \"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n"
+		fallbackBlock = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"fallback\",\"from\":{\"model\":\"claude-opus-5-5\"},\"to\":{\"model\":\"claude-opus-4-8\"},\"trigger\":{\"type\":\"refusal\",\"category\":\"cyber\"}}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}\n\n"
+		restText      = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"text\",\"text\":\"the port scan explanation.\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":3}\n\n"
+		messageDelta  = "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_details\":null},\"usage\":{\"output_tokens\":6}}\n\n"
+		messageStop   = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	)
+	for _, tc := range []struct {
+		name    string
+		respond func(w http.ResponseWriter)
+		call    func(*testing.T, LLMProvider, string) (*LLMResponse, error)
+	}{
+		{name: "non-streaming", respond: func(w http.ResponseWriter) { writeJSON(w, nonStreaming) }, call: chatHi},
+		{
+			name: "streaming mid-output",
+			respond: func(w http.ResponseWriter) {
+				writeSSE(w, messageStart, thinking, partialText, fallbackBlock, restText, messageDelta, messageStop)
+			},
+			call: streamHi,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeAnthropic(t, tc.respond)
+			provider, modelID := anthropicModelProvider(t, fake, "claude-opus-5-5")
+
+			var resp *LLMResponse
+			var err error
+			logged := usageLog(t, func() { resp, err = tc.call(t, provider, modelID) })
+			if err != nil {
+				t.Fatalf("call error = %v", err)
+			}
+
+			if resp.Content != "Here is the port scan explanation." || resp.FinishReason != "stop" || resp.Reasoning != "" {
+				t.Errorf("response = %q/%q reasoning %q, want the fallback answer, stop, no reasoning",
+					resp.Content, resp.FinishReason, resp.Reasoning)
+			}
+			if resp.ServedModel != "claude-opus-4-8" {
+				t.Errorf("served model = %q, want claude-opus-4-8", resp.ServedModel)
+			}
+			if len(logged) != 1 {
+				t.Fatalf("logged %d usage lines, want 1", len(logged))
+			}
+			if logged[0]["model"] != "claude-opus-4-8" || logged[0]["requested_model"] != "claude-opus-5-5" {
+				t.Errorf("logged model = %v, requested_model = %v; want claude-opus-4-8 serving claude-opus-5-5",
+					logged[0]["model"], logged[0]["requested_model"])
+			}
+		})
+	}
+}

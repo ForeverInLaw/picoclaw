@@ -29,3 +29,20 @@ func (p *Provider) serverFallbackOptions(model anthropic.Model) []option.Request
 		option.WithJSONSet("fallbacks", "default"),
 	}
 }
+
+// servedModel is the model that produced msg: the target of its last fallback
+// block, or else the model the response names. A stream declined mid-output
+// still names the requested model, from message_start.
+func servedModel(msg *anthropic.Message) anthropic.Model {
+	for i := len(msg.Content) - 1; i >= 0; i-- {
+		if msg.Content[i].Type != "fallback" {
+			continue
+		}
+		var block anthropic.BetaFallbackBlock
+		if err := block.UnmarshalJSON([]byte(msg.Content[i].RawJSON())); err == nil && block.To.Model != "" {
+			return block.To.Model
+		}
+		break
+	}
+	return msg.Model
+}

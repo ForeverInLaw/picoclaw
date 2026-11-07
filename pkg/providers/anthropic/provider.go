@@ -170,7 +170,7 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return completeResponse(resp), nil
+	return completeResponse(params.Model, resp), nil
 }
 
 func (p *Provider) ChatStream(
@@ -253,7 +253,7 @@ func (p *Provider) chatStreaming(
 	if !completed {
 		return nil, fmt.Errorf("claude stream ended before message_stop: %w", io.ErrUnexpectedEOF)
 	}
-	return completeResponse(&msg), nil
+	return completeResponse(params.Model, &msg), nil
 }
 
 // mergeDeltaUsage applies the cumulative counts of a message_delta event. The
@@ -271,16 +271,25 @@ func mergeDeltaUsage(usage *anthropic.Usage, delta anthropic.MessageDeltaUsage) 
 	}
 }
 
-// completeResponse logs a finished message's usage and maps it to an LLMResponse.
-func completeResponse(msg *anthropic.Message) *LLMResponse {
-	logger.InfoCF("provider.anthropic", "Anthropic usage", map[string]any{
-		"model":                       string(msg.Model),
+// completeResponse logs a finished message's usage against the model that
+// served it, naming the requested model too when they differ (for example after
+// a server-side fallback), and maps the message to an LLMResponse.
+func completeResponse(requested anthropic.Model, msg *anthropic.Message) *LLMResponse {
+	served := servedModel(msg)
+	fields := map[string]any{
+		"model":                       string(served),
 		"input_tokens":                msg.Usage.InputTokens,
 		"output_tokens":               msg.Usage.OutputTokens,
 		"cache_creation_input_tokens": msg.Usage.CacheCreationInputTokens,
 		"cache_read_input_tokens":     msg.Usage.CacheReadInputTokens,
-	})
-	return parseResponse(msg)
+	}
+	resp := parseResponse(msg)
+	if served != requested {
+		fields["requested_model"] = string(requested)
+		resp.ServedModel = string(served)
+	}
+	logger.InfoCF("provider.anthropic", "Anthropic usage", fields)
+	return resp
 }
 
 func (p *Provider) GetDefaultModel() string {
@@ -528,6 +537,11 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		case "text":
 			tb := block.AsText()
 			content.WriteString(tb.Text)
+		case "fallback":
+			// The fallback model continues the declined model's text; thinking and
+			// tool calls from before the handoff are not part of the answer.
+			reasoning.Reset()
+			toolCalls = nil
 		case "tool_use":
 			tu := block.AsToolUse()
 			var args map[string]any
