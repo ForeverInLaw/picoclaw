@@ -72,6 +72,7 @@ var (
 		substr("credit balance"),
 		substr("plans & billing"),
 		substr("insufficient balance"),
+		rxp(`specified (workspace )?api usage limits`), // Anthropic: an administrator-set spend limit
 	}
 
 	billingPatterns = append([]errorPattern{rxp(`\b402\b`)}, billingPhrasePatterns...)
@@ -176,7 +177,8 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		strings.Contains(msg, "quota_exceeded") ||
 		strings.Contains(msg, "quota exceeded") ||
 		strings.Contains(msg, "insufficient credit") ||
-		strings.Contains(msg, "credits exhausted") {
+		strings.Contains(msg, "credits exhausted") ||
+		strings.Contains(msg, "enforced_spend_limit_reached") { // Anthropic's monthly tier spend cap
 		return &FailoverError{
 			Reason:     FailoverBilling,
 			Provider:   provider,

@@ -38,11 +38,12 @@ func keyPoolConfig(t *testing.T, apiBase string, keys ...string) *config.Config 
 	return cfg
 }
 
+// okAnswer is a successful Messages API response.
+const okAnswer = `{"id":"msg_p","type":"message","role":"assistant","model":"claude-opus-5-5",
+	"stop_reason":"end_turn","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`
+
 func newAnswering(t *testing.T) *fakeAnthropic {
-	return newFakeAnthropic(t, func(w http.ResponseWriter) {
-		writeJSON(w, `{"id":"msg_p","type":"message","role":"assistant","model":"claude-opus-5-5",
-			"stop_reason":"end_turn","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)
-	})
+	return newFakeAnthropic(t, func(w http.ResponseWriter) { writeJSON(w, okAnswer) })
 }
 
 // keyFor sends one request of the conversation through provider and returns

@@ -30,6 +30,12 @@ type recordedAnthropicRequest struct {
 // writer after recording it.
 func newFakeAnthropic(t *testing.T, respond func(w http.ResponseWriter)) *fakeAnthropic {
 	t.Helper()
+	return newFakeAnthropicFor(t, func(w http.ResponseWriter, _ *http.Request) { respond(w) })
+}
+
+// newFakeAnthropicFor is newFakeAnthropic for answers that depend on the request.
+func newFakeAnthropicFor(t *testing.T, respond func(w http.ResponseWriter, r *http.Request)) *fakeAnthropic {
+	t.Helper()
 	fake := &fakeAnthropic{}
 	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -47,7 +53,7 @@ func newFakeAnthropic(t *testing.T, respond func(w http.ResponseWriter)) *fakeAn
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		respond(w)
+		respond(w, r)
 	}))
 	t.Cleanup(fake.Close)
 	return fake

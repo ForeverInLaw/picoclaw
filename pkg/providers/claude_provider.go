@@ -59,11 +59,12 @@ func newClaudeProviderWithKeyPool(pool *keyPool) *ClaudeProvider {
 // serve runs one request on the single delegate or on the pool key bound to
 // the request's conversation.
 func (p *ClaudeProvider) serve(
+	ctx context.Context,
 	options map[string]any,
 	call func(*anthropicprovider.Provider) (*LLMResponse, error),
 ) (*LLMResponse, error) {
 	if p.pool != nil {
-		return p.pool.serve(options, call)
+		return p.pool.serve(ctx, options, call)
 	}
 	return call(p.delegate)
 }
@@ -71,7 +72,7 @@ func (p *ClaudeProvider) serve(
 func (p *ClaudeProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
-	return p.serve(options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
+	return p.serve(ctx, options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
 		return delegate.Chat(ctx, messages, tools, model, options)
 	})
 }
@@ -84,7 +85,7 @@ func (p *ClaudeProvider) ChatStream(
 	options map[string]any,
 	onUpdate func(content string),
 ) (*LLMResponse, error) {
-	return p.serve(options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
+	return p.serve(ctx, options, func(delegate *anthropicprovider.Provider) (*LLMResponse, error) {
 		return delegate.ChatStream(ctx, messages, tools, model, options, onUpdate)
 	})
 }
