@@ -240,7 +240,10 @@ func (c *TelegramChannel) handleInlineResult(ctx *th.Context, result telego.Chos
 		c.inlineMu.Unlock()
 		return nil
 	}
-	if err := c.saveInlinePages(result.InlineMessageID, telegramInlinePages{OwnerID: result.From.ID, Guest: guest}); err != nil {
+	if err := c.saveInlinePages(
+		result.InlineMessageID,
+		telegramInlinePages{OwnerID: result.From.ID, Guest: guest},
+	); err != nil {
 		c.inlineMu.Unlock()
 		return fmt.Errorf("persist selected inline result identity: %w", err)
 	}

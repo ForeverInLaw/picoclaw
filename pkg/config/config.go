@@ -1145,7 +1145,7 @@ type ReadFileToolConfig struct {
 
 // ImageGenerationConfig binds native image requests to one saved Codex connection.
 type ImageGenerationConfig struct {
-	Enabled   bool   `json:"enabled" env:"ENABLED"`
+	Enabled   bool   `json:"enabled"    env:"ENABLED"`
 	AccountID string `json:"account_id" env:"ACCOUNT_ID"`
 }
 
@@ -1174,7 +1174,7 @@ type ToolsConfig struct {
 	ListDir         ToolConfig            `json:"list_dir"                                                 envPrefix:"PICOCLAW_TOOLS_LIST_DIR_"`
 	Message         ToolConfig            `json:"message"                                                  envPrefix:"PICOCLAW_TOOLS_MESSAGE_"`
 	ReadFile        ReadFileToolConfig    `json:"read_file"                                                envPrefix:"PICOCLAW_TOOLS_READ_FILE_"`
-	GenerateImage   ImageGenerationConfig `json:"generate_image" envPrefix:"PICOCLAW_TOOLS_GENERATE_IMAGE_"`
+	GenerateImage   ImageGenerationConfig `json:"generate_image"                                           envPrefix:"PICOCLAW_TOOLS_GENERATE_IMAGE_"`
 	SendFile        ToolConfig            `json:"send_file"                                                envPrefix:"PICOCLAW_TOOLS_SEND_FILE_"`
 	Spawn           ToolConfig            `json:"spawn"                                                    envPrefix:"PICOCLAW_TOOLS_SPAWN_"`
 	SpawnStatus     ToolConfig            `json:"spawn_status"                                             envPrefix:"PICOCLAW_TOOLS_SPAWN_STATUS_"`

@@ -47,13 +47,20 @@ func (t *GenerateImageTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"prompt": map[string]any{"type": "string", "description": "Detailed description of the desired image or edits."},
+			"prompt": map[string]any{
+				"type":        "string",
+				"description": "Detailed description of the desired image or edits.",
+			},
 			"images": map[string]any{
-				"type": "array", "maxItems": providers.MaxCodexImageInputs,
+				"type":        "array",
+				"maxItems":    providers.MaxCodexImageInputs,
 				"items":       map[string]any{"type": "string"},
 				"description": "Optional PNG/JPEG/WebP references for editing: attachment:// references from this conversation or allowed local file paths. Omit to generate a new image.",
 			},
-			"transparent_background": map[string]any{"type": "boolean", "description": "Request transparency, for example for a cutout or background removal."},
+			"transparent_background": map[string]any{
+				"type":        "boolean",
+				"description": "Request transparency, for example for a cutout or background removal.",
+			},
 		},
 		"required": []string{"prompt"},
 	}
@@ -67,7 +74,9 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 	scope := ToolRequestScope(ctx)
 	guest := scope.Inline && scope.Guest
 	if (scope.Inline && !guest) || scope.NoHistory {
-		return ErrorResult("image generation is unavailable in ordinary inline or no-history requests; use a regular chat or guest mention")
+		return ErrorResult(
+			"image generation is unavailable in ordinary inline or no-history requests; use a regular chat or guest mention",
+		)
 	}
 	if ToolChannel(ctx) == "" || ToolChatID(ctx) == "" || t.sender.mediaStore == nil {
 		return ErrorResult("image delivery requires a current chat and media store")
@@ -141,9 +150,18 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]any) *T
 	keep = true
 	result := t.sender.Execute(ctx, map[string]any{"path": path, "filename": filepath.Base(path) + extension})
 	if result.IsError {
-		return ErrorResult(fmt.Sprintf("Image generated and saved at %s, but delivery failed: %s. Use send_file to resend it; do not generate it again.", path, result.ForLLM))
+		return ErrorResult(
+			fmt.Sprintf(
+				"Image generated and saved at %s, but delivery failed: %s. Use send_file to resend it; do not generate it again.",
+				path,
+				result.ForLLM,
+			),
+		)
 	}
-	result.ForLLM = fmt.Sprintf("Image generated and queued for delivery to the current chat. Saved at %s. Do not send it again.", path)
+	result.ForLLM = fmt.Sprintf(
+		"Image generated and queued for delivery to the current chat. Saved at %s. Do not send it again.",
+		path,
+	)
 	if guest {
 		result.ForLLM = "Image generated and queued for this guest reply. Do not generate it again."
 		result.Terminal = true

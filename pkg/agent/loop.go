@@ -1195,7 +1195,7 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	registry := al.GetRegistry()
 	for _, name := range []string{"send_file", "generate_image"} {
 		registry.ForEachTool(name, func(t tools.Tool) {
-			if producer, ok := t.(interface{ SetMediaStore(media.MediaStore) }); ok {
+			if producer, ok := t.(interface{ SetMediaStore(store media.MediaStore) }); ok {
 				producer.SetMediaStore(s)
 			}
 		})
@@ -1541,7 +1541,8 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		DisableToolFeedback: inlineMode,
 		ConversationContext: ConversationContext{
 			Inline: inlineMode,
-			Guest:  inlineMode && isTelegramMessage(msg) && strings.EqualFold(msg.Metadata[telegramGuestMetadataKey], "true"),
+			Guest: inlineMode && isTelegramMessage(msg) &&
+				strings.EqualFold(msg.Metadata[telegramGuestMetadataKey], "true"),
 		},
 	}
 	if inlineMode {
