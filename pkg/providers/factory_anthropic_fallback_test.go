@@ -9,9 +9,9 @@ import (
 const serverFallbackBeta = "server-side-fallback-2026-07-01"
 
 // anthropicModelProvider creates the configured anthropic/<model> provider against fake.
-func anthropicModelProvider(t *testing.T, fake *fakeAnthropic, model string) (LLMProvider, string) {
+func anthropicModelProvider(t *testing.T, apiBase, model string) (LLMProvider, string) {
 	t.Helper()
-	cfg := anthropicAPIKeyModel(fake.URL)
+	cfg := anthropicAPIKeyModel(apiBase)
 	cfg.Model = "anthropic/" + model
 	provider, modelID, err := CreateProviderFromConfig(cfg)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestAnthropicAPIKeyModelOptsSupportingModelsIntoServerFallback(t *testing.T
 					}
 					writeJSON(w, cacheTestReply)
 				})
-				provider, modelID := anthropicModelProvider(t, fake, tc.model)
+				provider, modelID := anthropicModelProvider(t, fake.URL, tc.model)
 
 				if _, err := call(t, provider, modelID); err != nil {
 					t.Fatalf("call error = %v", err)
@@ -127,7 +127,7 @@ func TestAnthropicAPIKeyModelReturnsAnswerServedByFallbackModel(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeAnthropic(t, tc.respond)
-			provider, modelID := anthropicModelProvider(t, fake, "claude-opus-5-5")
+			provider, modelID := anthropicModelProvider(t, fake.URL, "claude-opus-5-5")
 
 			var resp *LLMResponse
 			var err error
@@ -193,7 +193,7 @@ func TestAnthropicAPIKeyModelSurfacesFinalRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeAnthropic(t, tc.respond)
-			provider, modelID := anthropicModelProvider(t, fake, "claude-opus-5-5")
+			provider, modelID := anthropicModelProvider(t, fake.URL, "claude-opus-5-5")
 
 			resp, err := tc.call(t, provider, modelID)
 			if err != nil {

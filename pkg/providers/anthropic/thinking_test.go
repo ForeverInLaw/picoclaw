@@ -2,126 +2,65 @@ package anthropicprovider
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-func TestApplyThinkingConfig_Adaptive(t *testing.T) {
-	params := anthropic.MessageNewParams{MaxTokens: 16000}
-	applyThinkingConfig(&params, "adaptive")
+// The setup-token path maps thinking_level too, and its capability lookup
+// carries the subscription token rather than an API key.
+func TestProvider_SetupTokenMapsThinkingLevel(t *testing.T) {
+	var lookupAuth, lookupBeta string
+	var thinking, outputConfig json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models/claude-opus-5-5" {
+			lookupAuth, lookupBeta = r.Header.Get("Authorization"), r.Header.Get("Anthropic-Beta")
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(
+				w,
+				`{"type":"model","id":"claude-opus-5-5","display_name":"Opus","created_at":"2026-01-01T00:00:00Z",
+				"capabilities":{"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},
+					"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},
+				"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"between_tools":{"supported":false},
+					"disabled":{"supported":false},"enabled":{"supported":false}}}}}`,
+			)
+			return
+		}
+		var body struct {
+			Thinking     json.RawMessage `json:"thinking"`
+			OutputConfig json.RawMessage `json:"output_config"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		thinking, outputConfig = body.Thinking, body.OutputConfig
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(
+			w,
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\","+
+				"\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"+
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		)
+	}))
+	defer server.Close()
+	p := NewProviderWithTokenSourceAndBaseURL("stale", func() (string, error) { return "setup-token", nil }, server.URL)
 
-	if params.Thinking.OfAdaptive == nil {
-		t.Fatal("expected adaptive thinking")
-	}
-	if params.Thinking.OfEnabled != nil {
-		t.Error("should not set enabled thinking in adaptive mode")
-	}
-	if params.OutputConfig.Effort != anthropic.OutputConfigEffortHigh {
-		t.Errorf("effort = %q, want %q", params.OutputConfig.Effort, anthropic.OutputConfigEffortHigh)
-	}
-}
-
-func TestApplyThinkingConfig_BudgetLevels(t *testing.T) {
-	tests := []struct {
-		level      string
-		wantBudget int64
-	}{
-		{"low", 4096},
-		{"medium", 16384},
-		{"high", 32000},
-		{"xhigh", 64000},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.level, func(t *testing.T) {
-			params := anthropic.MessageNewParams{MaxTokens: 200000}
-			applyThinkingConfig(&params, tt.level)
-
-			if params.Thinking.OfEnabled == nil {
-				t.Fatal("expected enabled thinking")
-			}
-			if params.Thinking.OfAdaptive != nil {
-				t.Error("should not set adaptive thinking")
-			}
-			if params.Thinking.OfEnabled.BudgetTokens != tt.wantBudget {
-				t.Errorf("budget_tokens = %d, want %d", params.Thinking.OfEnabled.BudgetTokens, tt.wantBudget)
-			}
-			if params.OutputConfig.Effort != "" {
-				t.Errorf("effort = %q, want empty", params.OutputConfig.Effort)
-			}
-		})
-	}
-}
-
-func TestApplyThinkingConfig_BudgetClamp(t *testing.T) {
-	// budget_tokens must be < max_tokens; clamp budget down to respect user's max_tokens.
-	params := anthropic.MessageNewParams{MaxTokens: 4096}
-	applyThinkingConfig(&params, "high") // budget=32000 > maxTokens=4096
-
-	if params.Thinking.OfEnabled == nil {
-		t.Fatal("expected enabled thinking")
-	}
-	if params.Thinking.OfEnabled.BudgetTokens != 4095 {
-		t.Errorf("budget_tokens = %d, want 4095 (maxTokens-1)", params.Thinking.OfEnabled.BudgetTokens)
-	}
-	if params.MaxTokens != 4096 {
-		t.Errorf("max_tokens should not be modified, got %d", params.MaxTokens)
-	}
-}
-
-func TestApplyThinkingConfig_UnknownLevel(t *testing.T) {
-	params := anthropic.MessageNewParams{MaxTokens: 16000}
-	applyThinkingConfig(&params, "unknown")
-
-	if params.Thinking.OfEnabled != nil {
-		t.Error("should not set enabled thinking for unknown level")
-	}
-	if params.Thinking.OfAdaptive != nil {
-		t.Error("should not set adaptive thinking for unknown level")
-	}
-}
-
-func TestLevelToBudget(t *testing.T) {
-	tests := []struct {
-		name  string
-		level string
-		want  int
-	}{
-		{"low", "low", 4096},
-		{"medium", "medium", 16384},
-		{"high", "high", 32000},
-		{"xhigh", "xhigh", 64000},
-		{"off", "off", 0},
-		{"empty", "", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := levelToBudget(tt.level); got != tt.want {
-				t.Errorf("levelToBudget(%q) = %d, want %d", tt.level, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestBuildParams_ThinkingLevelSetsBudget(t *testing.T) {
-	msgs := []Message{{Role: "user", Content: "hello"}}
-	opts := map[string]any{
-		"max_tokens":     200000,
-		"thinking_level": "medium",
-	}
-
-	params, err := buildParams(msgs, nil, "claude-sonnet-4-6", opts)
+	_, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, "claude-opus-5-5",
+		map[string]any{"thinking_level": "off"})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Chat() error: %v", err)
 	}
 
-	if params.Thinking.OfEnabled == nil {
-		t.Fatal("expected enabled thinking")
+	if lookupAuth != "Bearer setup-token" || lookupBeta != anthropicBetaHeader {
+		t.Errorf(
+			"capability lookup auth = %q / beta %q, want the setup token with the OAuth beta",
+			lookupAuth,
+			lookupBeta,
+		)
 	}
-	if params.Thinking.OfEnabled.BudgetTokens != 16384 {
-		t.Errorf("budget_tokens = %d, want 16384", params.Thinking.OfEnabled.BudgetTokens)
+	if string(thinking) != `{"type":"adaptive"}` || string(outputConfig) != `{"effort":"low"}` {
+		t.Errorf("thinking = %s, output_config = %s; want adaptive with low effort", thinking, outputConfig)
 	}
 }
 
