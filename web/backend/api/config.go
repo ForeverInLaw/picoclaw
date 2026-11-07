@@ -82,6 +82,10 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if status, message := checkNewKeyPoolSecrets(r.Context(), &cfg, current); status != 0 {
+		writeJSON(w, status, map[string]any{"status": "validation_error", "errors": []string{message}})
+		return
+	}
 
 	if err := saveValidatedModels(h.configPath, &cfg); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
@@ -207,6 +211,10 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if status, message := checkNewKeyPoolSecrets(r.Context(), &newCfg, cfg); status != 0 {
+		writeJSON(w, status, map[string]any{"status": "validation_error", "errors": []string{message}})
+		return
+	}
 
 	if err := saveValidatedModels(h.configPath, &newCfg); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
@@ -260,15 +268,21 @@ func preserveRegistryCredentials(next, current *config.Config, body []byte) {
 	}
 }
 
-// Public config masks Key pool secrets. A masked or omitted secret keeps the
-// stored one of the same pool and key; any other value replaces it.
-func preserveKeyPoolSecrets(next, current *config.Config) {
+// storedKeyPoolSecrets indexes cfg's Key pool secrets by pool and key ID.
+func storedKeyPoolSecrets(cfg *config.Config) map[[2]string]string {
 	stored := map[[2]string]string{}
-	for _, pool := range current.KeyPools {
+	for _, pool := range cfg.KeyPools {
 		for _, key := range pool.Keys {
 			stored[[2]string{pool.ID, key.ID}] = key.APIKey
 		}
 	}
+	return stored
+}
+
+// Public config masks Key pool secrets. A masked or omitted secret keeps the
+// stored one of the same pool and key; any other value replaces it.
+func preserveKeyPoolSecrets(next, current *config.Config) {
+	stored := storedKeyPoolSecrets(current)
 	for i := range next.KeyPools {
 		pool := &next.KeyPools[i]
 		for j := range pool.Keys {

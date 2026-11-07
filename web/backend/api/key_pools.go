@@ -1,9 +1,11 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -238,7 +240,12 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 		modelTestError(w, http.StatusBadRequest, "Paste the complete Anthropic API key.")
 		return
 	}
-	if status, message := checkAnthropicKey(r.Context(), request.APIKey); status != 0 {
+	cfg, err := config.LoadConfig(h.configPath)
+	if err != nil {
+		modelTestError(w, http.StatusInternalServerError, "Could not load configuration.")
+		return
+	}
+	if status, message := keyPoolEndpoint(cfg, r.PathValue("pool")).checkKey(r.Context(), request.APIKey); status != 0 {
 		modelTestError(w, status, message)
 		return
 	}
@@ -253,10 +260,26 @@ func (h *Handler) handleAddPoolKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// checkAnthropicKey lists models with apiKey. It returns the HTTP status and
-// message for a key that cannot be saved, or 0 for a valid key.
-func checkAnthropicKey(ctx context.Context, apiKey string) (int, string) {
-	_, err := listAnthropicModels(ctx, apiKey)
+// anthropicEndpoint is the API base and proxy that a Key pool's requests
+// outside answers, key checks and model lists, travel.
+type anthropicEndpoint struct{ apiBase, proxy string }
+
+// keyPoolEndpoint is the network path of the first configured model on the
+// pool, so a pool reached through a gateway or proxy is checked the same way;
+// without one it is Anthropic's API through the environment's proxy.
+func keyPoolEndpoint(cfg *config.Config, poolID string) anthropicEndpoint {
+	for _, model := range cfg.ModelList {
+		if model.KeyPoolID == poolID {
+			return anthropicEndpoint{apiBase: cmp.Or(model.APIBase, anthropicAPIBase), proxy: model.Proxy}
+		}
+	}
+	return anthropicEndpoint{apiBase: anthropicAPIBase}
+}
+
+// checkKey lists models with apiKey. It returns the HTTP status and message
+// for a key that cannot be saved, or 0 for a valid key.
+func (e anthropicEndpoint) checkKey(ctx context.Context, apiKey string) (int, string) {
+	_, err := e.listModels(ctx, apiKey)
 	var apiErr *anthropic.Error
 	switch {
 	case err == nil:
@@ -269,13 +292,31 @@ func checkAnthropicKey(ctx context.Context, apiKey string) (int, string) {
 	return http.StatusBadGateway, "Could not check the key with Anthropic. Try again."
 }
 
-// listAnthropicModels lists the models Anthropic offers to apiKey, which
-// costs no credit.
-func listAnthropicModels(ctx context.Context, apiKey string) ([]anthropicprovider.ModelInfo, error) {
+// listModels lists the models Anthropic offers to apiKey, which costs no credit.
+func (e anthropicEndpoint) listModels(ctx context.Context, apiKey string) ([]anthropicprovider.ModelInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, anthropicKeyCheckTimeout)
 	defer cancel()
-	return anthropicprovider.NewProviderWithAPIKey(apiKey, anthropicAPIBase, "", anthropicKeyCheckTimeout).
+	return anthropicprovider.NewProviderWithAPIKey(apiKey, e.apiBase, e.proxy, anthropicKeyCheckTimeout).
 		ListModels(ctx)
+}
+
+// checkNewKeyPoolSecrets checks every Key pool secret of next that current
+// does not hold for the same pool and key. It returns the HTTP status and
+// message for the first one Anthropic refuses, or 0 when all can be saved.
+func checkNewKeyPoolSecrets(ctx context.Context, next, current *config.Config) (int, string) {
+	stored := storedKeyPoolSecrets(current)
+	for _, pool := range next.KeyPools {
+		endpoint := keyPoolEndpoint(next, pool.ID)
+		for _, key := range pool.Keys {
+			if key.APIKey == "" || key.APIKey == stored[[2]string{pool.ID, key.ID}] {
+				continue
+			}
+			if status, message := endpoint.checkKey(ctx, key.APIKey); status != 0 {
+				return status, fmt.Sprintf("Key pool %q, key %q: %s", pool.Name, key.Label, message)
+			}
+		}
+	}
+	return 0, ""
 }
 
 // handleListPoolModels lists the models Anthropic offers to the pool through
@@ -297,8 +338,9 @@ func (h *Handler) handleListPoolModels(w http.ResponseWriter, r *http.Request) {
 		modelTestError(w, http.StatusConflict, "Enable a key in this pool to list its models.")
 		return
 	}
+	endpoint := keyPoolEndpoint(cfg, pool.ID)
 	for _, key := range keys {
-		if models, err := listAnthropicModels(r.Context(), key.APIKey); err == nil {
+		if models, err := endpoint.listModels(r.Context(), key.APIKey); err == nil {
 			w.Header().Set("Cache-Control", "no-store")
 			writeJSON(w, http.StatusOK, map[string]any{"models": models})
 			return

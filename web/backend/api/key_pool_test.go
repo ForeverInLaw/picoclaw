@@ -56,6 +56,7 @@ func assertNoPoolSecret(t *testing.T, listing, body string) {
 }
 
 func TestKeyPoolSecretsStayMaskedInConfigurationListings(t *testing.T) {
+	fakeAnthropicModels(t, "sk-ant-api03-replacement")
 	path := keyPoolConfigPath(t)
 	mux := http.NewServeMux()
 	NewHandler(path).RegisterRoutes(mux)
@@ -186,13 +187,12 @@ func TestKeyPoolsAreCreatedRenamedAndDeletedOnlyWhenUnused(t *testing.T) {
 	}
 }
 
-// fakeAnthropicModels plays Anthropic's model listing: validKey lists models,
-// any other key is refused as Anthropic refuses a revoked one.
-func fakeAnthropicModels(t *testing.T, validKey string) *[]string {
-	t.Helper()
-	var requests []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests = append(requests, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Api-Key"))
+// anthropicModelsHandler plays Anthropic's model listing: validKey lists
+// models, any other key is refused as Anthropic refuses a revoked one. Each
+// request's host, path and key are recorded.
+func anthropicModelsHandler(validKey string, requests *[]string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		*requests = append(*requests, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Api-Key"))
 		w.Header().Set("Content-Type", "application/json")
 		if r.Header.Get("X-Api-Key") != validKey {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -203,12 +203,98 @@ func fakeAnthropicModels(t *testing.T, validKey string) *[]string {
 		}
 		_, _ = w.Write([]byte(`{"data":[{"type":"model","id":"claude-opus-5-5","display_name":"Claude Opus 5.5",` +
 			`"created_at":"2026-09-21T00:00:00Z"}],"first_id":"claude-opus-5-5","last_id":"claude-opus-5-5","has_more":false}`))
-	}))
+	}
+}
+
+// fakeAnthropicModels serves anthropicModelsHandler as Anthropic's default API base.
+func fakeAnthropicModels(t *testing.T, validKey string) *[]string {
+	t.Helper()
+	var requests []string
+	server := httptest.NewServer(anthropicModelsHandler(validKey, &requests))
 	t.Cleanup(server.Close)
 	previous := anthropicAPIBase
 	anthropicAPIBase = server.URL
 	t.Cleanup(func() { anthropicAPIBase = previous })
 	return &requests
+}
+
+// Key checks and model lists for a pool travel the api_base and proxy of a
+// model on the pool, not Anthropic's default base.
+func TestKeyPoolRequestsUseTheNetworkPathOfAModelOnThePool(t *testing.T) {
+	const validSecret = "sk-ant-api03-third-organization-3333"
+	direct := fakeAnthropicModels(t, validSecret)
+	var proxied []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.URL.Path = r.Host + r.URL.Path // a proxied request names its destination
+		anthropicModelsHandler(validSecret, &proxied)(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+	path := keyPoolConfigPath(t)
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ModelList[0].APIBase = "http://anthropic-gateway.internal/v1"
+	cfg.ModelList[0].Proxy = proxy.URL
+	if err = config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	NewHandler(path).RegisterRoutes(mux)
+
+	if rec := serve(mux, http.MethodPost, "/api/key-pools/orgs/keys",
+		`{"label":"Third org","api_key":"`+validSecret+`"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("adding a key = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := serve(mux, http.MethodGet, "/api/key-pools/orgs/models", ""); rec.Code != http.StatusOK {
+		t.Fatalf("listing pool models = %d %s", rec.Code, rec.Body.String())
+	}
+
+	want := []string{
+		"GET anthropic-gateway.internal/v1/models " + validSecret,
+		"GET anthropic-gateway.internal/v1/models " + firstPoolSecret,
+		"GET anthropic-gateway.internal/v1/models " + secondPoolSecret,
+		"GET anthropic-gateway.internal/v1/models " + validSecret,
+	}
+	if !slices.Equal(proxied, want) {
+		t.Fatalf("proxy received %q, want %q", proxied, want)
+	}
+	if len(*direct) != 0 {
+		t.Fatalf("Anthropic's default base received %q, want nothing", *direct)
+	}
+}
+
+// Raw configuration saves check new and changed Key pool secrets like the
+// Credentials page does.
+func TestRawConfigSaveRefusesAKeyPoolSecretAnthropicRejects(t *testing.T) {
+	const validSecret = "sk-ant-api03-third-organization-3333"
+	requests := fakeAnthropicModels(t, validSecret)
+	path := keyPoolConfigPath(t)
+	mux := http.NewServeMux()
+	NewHandler(path).RegisterRoutes(mux)
+	listed := serve(mux, http.MethodGet, "/api/config", "").Body.String()
+
+	revoked := strings.Replace(listed, maskAPIKey(secondPoolSecret), "sk-ant-api03-revoked-key-0000", 1)
+	if rec := serve(mux, http.MethodPut, "/api/config", revoked); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "rejected") || strings.Contains(rec.Body.String(), "revoked-key") {
+		t.Fatalf("saving a revoked key = %d %s", rec.Code, rec.Body.String())
+	}
+	loaded, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.KeyPools[0].Keys[1].APIKey; got != secondPoolSecret {
+		t.Fatalf("a refused save replaced the key with %q", got)
+	}
+
+	if rec := serve(mux, http.MethodPut, "/api/config",
+		strings.Replace(listed, maskAPIKey(secondPoolSecret), validSecret, 1)); rec.Code != http.StatusOK {
+		t.Fatalf("saving a valid replacement = %d %s", rec.Code, rec.Body.String())
+	}
+	want := []string{"GET /v1/models sk-ant-api03-revoked-key-0000", "GET /v1/models " + validSecret}
+	if !slices.Equal(*requests, want) {
+		t.Fatalf("Anthropic received %q, want only the new secrets checked %q", *requests, want)
+	}
 }
 
 func TestKeyPoolKeysAreValidatedWithAnthropicBeforeTheyAreSaved(t *testing.T) {
