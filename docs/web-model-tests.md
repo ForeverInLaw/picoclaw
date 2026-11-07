@@ -9,7 +9,8 @@ checks; its configured status does not establish that a model can answer.
 The inference test supports OpenAI-compatible HTTP models with an API key or an
 anonymous/local endpoint, and OpenAI OAuth models bound to a saved Codex account. It uses the selected configuration directly through the
 existing provider factory. It does not switch credentials, retry, fall back to
-another model, send chat history, execute tools or attach images. CLI and other native provider protocols are outside this test. Codex OAuth tests
+another model, send chat history, execute tools or attach images. CLI and other native provider protocols are outside this test, except `anthropic/`
+models that use a Key pool (below). Codex OAuth tests
 refresh only the selected saved connection when needed, and never borrow another
 account. A successful test requires a
 nonempty answer; provider content and credentials are never included in the
@@ -35,6 +36,23 @@ an edit retain only that compatible selected saved key. New references should be
 saved before testing, and inline tests accept one key rather than a key list.
 A configured multi-key entry tests its first resolved key without rotation.
 
+**Anthropic models with a Key pool.** For an `anthropic/` API-key model, the form
+offers **Credentials**: its own API key or a Key pool from the Credentials page. A
+pool-backed model never asks for a key. Its **Model** list comes from Anthropic's
+Models API through the pool's first enabled key that can list them, so new models
+appear without a Picoclaw update; listing costs no credit and sends no inference
+request. When the list cannot be fetched, the form shows the error and keeps the
+current model, so an existing model can still be edited and saved.
+
+**Test model** on a pool-backed model sends the same short request through each
+available key at once and shows one result per key, named by its label only. Keys
+the running gateway reports as out of credit or rejected are skipped, as are
+disabled keys; without a running gateway every enabled key is tested. Each request
+uses its key alone: no other key of the pool, no Routing chain reserve and no
+Anthropic server-side refusal fallback answers for it, and the test does not change
+the gateway's key states. The result is `success` only when every tested key
+replied, otherwise `failed`, with each key's sanitized reason.
+
 Cancel aborts the current HTTP request. Closing the form or changing a field
 also aborts the request and clears its result. Cancellation cannot undo usage
 already accepted by the provider. Errors explain authentication, endpoint,
@@ -49,9 +67,10 @@ Authenticated endpoints:
 | `POST /api/models/{index}/test` | Compatibility index probe for the configured entry |
 | `POST /api/models/test-inline` | Test submitted `ModelConfig` fields, with optional `model_index` for compatible credential retention |
 | `POST /api/models/validate` | Validate the same submitted configuration without a network request |
+| `GET /api/key-pools/{pool}/models` | List the models Anthropic offers to a Key pool, through its first working enabled key |
 
 Deterministic checks use temporary configuration stores and fake compatible HTTP
-endpoints. Run `go test -tags stdjson ./web/backend/api -run '(Test.*Model.*Inference|TestEditedModel)'`
+endpoints. Run `go test -tags stdjson ./web/backend/api -run '(Test.*Model.*Inference|TestEditedModel|KeyPoolModels|PoolKey|PoolBacked)'`
 and `pnpm --dir web/frontend test:models`; neither requires paid credentials.
 
 Registered ChatGPT connections use the public Responses endpoint and preserve
