@@ -224,6 +224,9 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 
 		var reqBody map[string]any
 		json.NewDecoder(r.Body).Decode(&reqBody)
+		if cacheControl, ok := reqBody["cache_control"]; ok {
+			t.Errorf("setup-token request carried top-level cache_control %v, want none", cacheControl)
+		}
 
 		resp := map[string]any{
 			"id":          "msg_test",
