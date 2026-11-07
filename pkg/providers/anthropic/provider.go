@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
 
@@ -33,6 +36,9 @@ type Provider struct {
 	client      *anthropic.Client
 	tokenSource func(context.Context) (string, error)
 	baseURL     string
+	// requestTimeout bounds non-streaming requests; streams rely on the
+	// caller's context and inactivity tracking instead.
+	requestTimeout time.Duration
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -52,6 +58,28 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 	return &Provider{
 		client:  &client,
 		baseURL: baseURL,
+	}
+}
+
+// NewProviderWithAPIKey authenticates with an Anthropic API key (x-api-key)
+// rather than a bearer token. A zero requestTimeout uses the shared default.
+func NewProviderWithAPIKey(apiKey, apiBase, proxy string, requestTimeout time.Duration) *Provider {
+	if requestTimeout <= 0 {
+		requestTimeout = common.DefaultRequestTimeout
+	}
+	baseURL := normalizeBaseURL(apiBase)
+	// The SDK applies requestTimeout per request; a client-wide timeout would cut long streams.
+	httpClient := &http.Client{Transport: common.NewHTTPClient(proxy).Transport}
+	client := anthropic.NewClient(
+		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(0),
+		option.WithBaseURL(baseURL),
+		option.WithHTTPClient(httpClient),
+	)
+	return &Provider{
+		client:         &client,
+		baseURL:        baseURL,
+		requestTimeout: requestTimeout,
 	}
 }
 
@@ -112,6 +140,9 @@ func (p *Provider) Chat(
 		return p.chatStreaming(ctx, params, opts, nil)
 	}
 
+	if p.requestTimeout > 0 {
+		opts = append(opts, option.WithRequestTimeout(p.requestTimeout))
+	}
 	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("claude API call: %w", err)

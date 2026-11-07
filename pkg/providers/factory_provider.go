@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -241,22 +242,16 @@ func CreateProviderFromConfigContext(ctx context.Context, cfg *config.ModelConfi
 			}
 			return provider, modelID, nil
 		}
-		// Use API key with HTTP API
-		apiBase := cfg.APIBase
-		if apiBase == "" {
-			apiBase = "https://api.anthropic.com/v1"
-		}
+		// API keys use the native Messages API, which accepts cache_control (ADR 0004).
 		if cfg.APIKey == "" {
 			return nil, "", fmt.Errorf("api_key is required for anthropic protocol (model: %s)", cfg.Model)
 		}
-		return NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		return newClaudeProviderWithDelegate(anthropicprovider.NewProviderWithAPIKey(
 			cfg.APIKey,
-			apiBase,
+			cfg.APIBase,
 			cfg.Proxy,
-			cfg.MaxTokensField,
-			cfg.RequestTimeout,
-			cfg.ExtraBody,
-		).withModelConfig(cfg), modelID, nil
+			time.Duration(cfg.RequestTimeout)*time.Second,
+		)).withModelConfig(cfg), modelID, nil
 
 	case "anthropic-messages":
 		// Anthropic Messages API with native format (HTTP-based, no SDK)

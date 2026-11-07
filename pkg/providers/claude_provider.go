@@ -4,11 +4,21 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/sipeed/picoclaw/pkg/config"
 	anthropicprovider "github.com/sipeed/picoclaw/pkg/providers/anthropic"
 )
 
 type ClaudeProvider struct {
-	delegate *anthropicprovider.Provider
+	delegate  *anthropicprovider.Provider
+	configKey string
+}
+
+// ModelConfigKey lets agent resolution retain the exact factory selection.
+func (p *ClaudeProvider) ModelConfigKey() string { return p.configKey }
+
+func (p *ClaudeProvider) withModelConfig(mc *config.ModelConfig) *ClaudeProvider {
+	p.configKey = ModelConfigKey(mc)
+	return p
 }
 
 func NewClaudeProvider(token string) *ClaudeProvider {
