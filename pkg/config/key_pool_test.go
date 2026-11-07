@@ -127,3 +127,24 @@ func TestPlaintextSecretWarningsCoverKeyPoolSecrets(t *testing.T) {
 		t.Fatalf("warnings = %q, want the plaintext model key and pool key", got)
 	}
 }
+
+func TestAModelHoldsItsKeyPoolAsResolved(t *testing.T) {
+	cfg := &Config{
+		KeyPools:  []KeyPool{{ID: "orgs", Name: "Orgs", Keys: []KeyPoolKey{{ID: "a", Enabled: true, APIKey: "sk-a"}}}},
+		ModelList: []ModelConfig{{ModelName: "opus", Model: "anthropic/claude-opus-5-5", KeyPoolID: "orgs"}},
+	}
+	if err := cfg.ResolveKeyPools(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.KeyPools[0].Keys[0].APIKey = "sk-edited"
+	cfg.KeyPools = append(cfg.KeyPools, KeyPool{ID: "spare"})
+	if got := cfg.ModelList[0].KeyPool().Keys[0].APIKey; got != "sk-a" {
+		t.Fatalf("pool after unresolved edits = %q, want the resolved key", got)
+	}
+	if err := cfg.ResolveKeyPools(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ModelList[0].KeyPool().Keys[0].APIKey; got != "sk-edited" {
+		t.Fatalf("pool after resolving again = %q, want the edited key", got)
+	}
+}

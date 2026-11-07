@@ -66,17 +66,24 @@ func (p *KeyPool) EnabledKeys() []KeyPoolKey {
 	return slices.DeleteFunc(slices.Clone(p.Keys), func(k KeyPoolKey) bool { return !k.Enabled })
 }
 
-// KeyPool returns the Key pool this model references, once Config.ResolveKeyPools
-// has attached it; nil for models with their own credentials.
+// KeyPool returns the Key pool this model references as Config.ResolveKeyPools
+// last attached it; nil for models with their own credentials. It is a copy,
+// so later edits to Config.KeyPools never reach it until the next resolve.
 func (c *ModelConfig) KeyPool() *KeyPool { return c.keyPool }
 
+// keyPoolByID returns a copy of the pool with id, or nil.
 func (c *Config) keyPoolByID(id string) *KeyPool {
-	for i := range c.KeyPools {
-		if id != "" && c.KeyPools[i].ID == id {
-			return &c.KeyPools[i]
+	for _, pool := range c.KeyPools {
+		if id != "" && pool.ID == id {
+			return pool.clone()
 		}
 	}
 	return nil
+}
+
+func (p KeyPool) clone() *KeyPool {
+	p.Keys = slices.Clone(p.Keys)
+	return &p
 }
 
 // ResolveKeyPools validates Key pools and attaches each referenced pool to its
@@ -121,7 +128,7 @@ func (c *Config) ResolveKeyPools() error {
 		if m.APIKey != "" || len(m.APIKeys) > 0 {
 			return fmt.Errorf("model_list[%d] (%s): use either key_pool_id or api_key/api_keys", i, m.ModelName)
 		}
-		m.keyPool = pool
+		m.keyPool = pool.clone()
 	}
 	return nil
 }

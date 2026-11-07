@@ -426,6 +426,9 @@ func TestKeyPoolAvailabilityReportsKeyStatesAndReturnsAKeyToService(t *testing.T
 	// The dashboard returns a key to service by saving the time it did so; the
 	// next provider built from that configuration applies it once.
 	cfg.KeyPools[0].Keys[0].ReturnedAt = time.Date(2026, 11, 7, 13, 0, 0, 0, time.UTC)
+	if err := cfg.ResolveKeyPools(); err != nil {
+		t.Fatal(err)
+	}
 	provider, modelID = createProvider(t, &cfg.ModelList[0])
 	if got := fake.keyFor(t, provider, modelID, exhaustedConversation); got != "sk-ant-a" {
 		t.Fatalf("returned key did not get its conversation back; it went to %s", got)

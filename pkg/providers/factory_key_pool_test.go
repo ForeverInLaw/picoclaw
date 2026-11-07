@@ -203,6 +203,9 @@ func TestAnthropicModelWithAPIKeysLoadsAsAKeyPoolModel(t *testing.T) {
 func TestKeyPoolWithoutEnabledKeysLeavesTheCandidateUnavailable(t *testing.T) {
 	cfg := keyPoolConfig(t, "http://127.0.0.1:1", "sk-ant-a")
 	cfg.KeyPools[0].Keys[0].Enabled = false
+	if err := cfg.ResolveKeyPools(); err != nil {
+		t.Fatal(err)
+	}
 
 	_, _, err := CreateProviderFromConfig(&cfg.ModelList[0])
 
