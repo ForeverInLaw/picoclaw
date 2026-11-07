@@ -302,7 +302,16 @@
       "testing": "正在等待当前模型回复…",
       "valid": "配置有效。未发送模型请求。",
       "success": "模型已成功回复（{{latency}} 毫秒）。",
-      "canceled": "模型测试已取消。"
+      "canceled": "模型测试已取消。",
+      "keysReplied": "{{total}} 个密钥中有 {{replied}} 个已回复。",
+      "keySuccess": "已回复（{{latency}} 毫秒）"
+    },
+    "keyPool": {
+      "credentials": "凭据",
+      "pool": "密钥池：{{name}}",
+      "model": "模型",
+      "selectModel": "选择模型",
+      "loadingModels": "正在从 Anthropic 加载模型…"
     }
   },
   "channels": {

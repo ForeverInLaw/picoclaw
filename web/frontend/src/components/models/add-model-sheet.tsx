@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { getCodexAccounts } from "@/api/codex-accounts"
+import { canUseKeyPool } from "@/api/key-pools"
 import type { ModelTestConfiguration } from "@/api/model-probe"
 import { addModel, setDefaultModel } from "@/api/models"
 import { maskedSecretPlaceholder } from "@/components/secret-placeholder"
@@ -32,6 +33,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
+import { KeyPoolModelFields } from "./key-pool-model-fields"
 import { ModelProbe } from "./model-probe"
 
 interface AddForm {
@@ -39,6 +41,7 @@ interface AddForm {
   model: string
   apiBase: string
   apiKey: string
+  keyPoolID: string
   proxy: string
   authMethod: string
   accountID: string
@@ -55,6 +58,7 @@ const EMPTY_ADD_FORM: AddForm = {
   model: "",
   apiBase: "",
   apiKey: "",
+  keyPoolID: "",
   proxy: "",
   authMethod: "",
   accountID: "",
@@ -148,11 +152,14 @@ function AddModelForm({
       }
     }
 
+  const poolCapable = canUseKeyPool(form.model.trim(), form.authMethod.trim())
+  const keyPoolID = poolCapable ? form.keyPoolID : ""
   const configuration: ModelTestConfiguration = {
     model_name: form.modelName.trim(),
     model: form.model.trim(),
     api_base: form.apiBase.trim() || undefined,
-    api_key: form.apiKey.trim() || undefined,
+    api_key: (!keyPoolID && form.apiKey.trim()) || undefined,
+    key_pool_id: keyPoolID || undefined,
     proxy: form.proxy.trim() || undefined,
     auth_method: form.authMethod.trim() || undefined,
     account_id: form.accountID || undefined,
@@ -258,13 +265,25 @@ function AddModelForm({
                 </Select>
               </Field>
             )}
-            <Field label={t("models.field.apiKey")}>
-              <KeyInput
-                value={form.apiKey}
-                onChange={(v) => setForm((f) => ({ ...f, apiKey: v }))}
-                placeholder={apiKeyPlaceholder}
+            {poolCapable && (
+              <KeyPoolModelFields
+                poolID={keyPoolID}
+                model={form.model.trim()}
+                onPoolChange={(id) =>
+                  setForm((f) => ({ ...f, keyPoolID: id, apiKey: "" }))
+                }
+                onModelChange={(model) => setForm((f) => ({ ...f, model }))}
               />
-            </Field>
+            )}
+            {!keyPoolID && (
+              <Field label={t("models.field.apiKey")}>
+                <KeyInput
+                  value={form.apiKey}
+                  onChange={(v) => setForm((f) => ({ ...f, apiKey: v }))}
+                  placeholder={apiKeyPlaceholder}
+                />
+              </Field>
+            )}
 
             <Field label={t("models.field.apiBase")}>
               <Input
