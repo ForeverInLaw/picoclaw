@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Track issues in Linear’s Ivoxygen / Picoclaw project.
+Track issues in itsaplan’s Redstone / Korobka (`KOROBKA`) project.
 Read `docs/agents/issue-tracker.md` before ticket operations.
 
 ### Triage labels
