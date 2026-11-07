@@ -10,21 +10,30 @@ import (
 	"github.com/sipeed/picoclaw/pkg/modelruntime"
 )
 
-func (h *Handler) handleModelRuntime(w http.ResponseWriter, r *http.Request) {
+// gatewayRuntime reads the gateway's runtime snapshot and whether it describes
+// the gateway running now: "running", "stale", "offline", or "unknown" when
+// no snapshot exists. Only a running snapshot reflects in-memory state.
+func (h *Handler) gatewayRuntime() (modelruntime.Snapshot, string) {
 	snapshot, err := modelruntime.Read(h.configPath)
-	state := "unknown"
-	if err == nil {
-		state = "stale"
-		cfg, configErr := config.LoadConfig(h.configPath)
-		if configErr == nil {
-			health, status, healthErr := h.getGatewayHealth(cfg, time.Second)
-			if !snapshot.StoppedAt.IsZero() || healthErr != nil || status != http.StatusOK {
-				state = "offline"
-			} else if health.Pid == snapshot.PID && snapshot.StoppedAt.IsZero() && time.Since(snapshot.UpdatedAt) < modelruntime.StaleAfter {
-				state = "running"
-			}
-		}
+	if err != nil {
+		return snapshot, "unknown"
 	}
+	cfg, err := config.LoadConfig(h.configPath)
+	if err != nil {
+		return snapshot, "stale"
+	}
+	health, status, healthErr := h.getGatewayHealth(cfg, time.Second)
+	switch {
+	case !snapshot.StoppedAt.IsZero() || healthErr != nil || status != http.StatusOK:
+		return snapshot, "offline"
+	case health.Pid == snapshot.PID && time.Since(snapshot.UpdatedAt) < modelruntime.StaleAfter:
+		return snapshot, "running"
+	}
+	return snapshot, "stale"
+}
+
+func (h *Handler) handleModelRuntime(w http.ResponseWriter, r *http.Request) {
+	snapshot, state := h.gatewayRuntime()
 	for i := range snapshot.Availability {
 		item := &snapshot.Availability[i]
 		if state != "running" {

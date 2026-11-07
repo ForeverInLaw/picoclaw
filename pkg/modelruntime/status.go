@@ -52,7 +52,19 @@ type Snapshot struct {
 	StoppedAt      time.Time                       `json:"stopped_at,omitzero"`
 	Records        []Record                        `json:"records"`
 	Availability   []providers.RoutingAvailability `json:"availability"`
+	KeyPools       []KeyPoolStatus                 `json:"key_pools,omitempty"`
 }
+
+// KeyPoolStatus is the in-memory availability of one Key pool's keys, which
+// only the gateway process holds.
+type KeyPoolStatus struct {
+	ID   string                      `json:"id"`
+	Keys []providers.KeyAvailability `json:"keys"`
+}
+
+// Availability reports the routing availability of configured models and the
+// state of each Key pool's keys at flush time.
+type Availability func() ([]providers.RoutingAvailability, []KeyPoolStatus)
 
 // Collector updates memory synchronously and coalesces disk writes on one worker.
 type Collector struct {
@@ -60,14 +72,14 @@ type Collector struct {
 	writeMu      sync.Mutex
 	path         string
 	snapshot     Snapshot
-	availability func() []providers.RoutingAvailability
+	availability Availability
 	dirty        chan struct{}
 	stop         chan struct{}
 	done         chan struct{}
 	closeOnce    sync.Once
 }
 
-func New(configPath string, availability func() []providers.RoutingAvailability) (*Collector, error) {
+func New(configPath string, availability Availability) (*Collector, error) {
 	now := time.Now().UTC()
 	c := &Collector{
 		path: Path(configPath),
@@ -229,16 +241,23 @@ func (c *Collector) Flush() error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	available := []providers.RoutingAvailability{}
+	var keyPools []KeyPoolStatus
 	if c.availability != nil {
-		available = c.availability()
+		available, keyPools = c.availability()
 	}
 	available = available[:min(len(available), MaxCandidates)]
+	keyPools = keyPools[:min(len(keyPools), MaxCandidates)]
+	for i := range keyPools {
+		keyPools[i].ID = bounded(keyPools[i].ID)
+		keyPools[i].Keys = keyPools[i].Keys[:min(len(keyPools[i].Keys), MaxCandidates)]
+	}
 	for i := range available {
 		available[i].Candidate = identity(available[i].Candidate)
 	}
 	c.mu.Lock()
 	c.snapshot.UpdatedAt = time.Now().UTC()
 	c.snapshot.Availability = available
+	c.snapshot.KeyPools = keyPools
 	data, err := json.Marshal(c.snapshot)
 	for err == nil && len(data) > maxSnapshotBytes && len(c.snapshot.Records) > 1 {
 		c.snapshot.Records = c.snapshot.Records[1:]
@@ -281,8 +300,14 @@ func Read(configPath string) (Snapshot, error) {
 	if err := decoder.Decode(&snapshot); err != nil {
 		return Snapshot{}, err
 	}
-	if snapshot.Version != 1 || len(snapshot.Records) > MaxRecords || len(snapshot.Availability) > MaxCandidates {
+	if snapshot.Version != 1 || len(snapshot.Records) > MaxRecords || len(snapshot.Availability) > MaxCandidates ||
+		len(snapshot.KeyPools) > MaxCandidates {
 		return Snapshot{}, errors.New("unsupported runtime snapshot")
+	}
+	for _, pool := range snapshot.KeyPools {
+		if len(pool.Keys) > MaxCandidates {
+			return Snapshot{}, errors.New("invalid runtime snapshot bounds")
+		}
 	}
 	for _, record := range snapshot.Records {
 		if len(record.Attempts) > MaxAttempts || len(record.Chain) > MaxCandidates {

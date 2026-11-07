@@ -20,19 +20,26 @@ func (al *AgentLoop) EnableRuntimeStatus(configPath string) (*modelruntime.Colle
 	return collector, nil
 }
 
-func (al *AgentLoop) runtimeAvailability() []providers.RoutingAvailability {
+// runtimeAvailability reports the saved models' routing availability and the
+// Key pool key states that only this process holds, for the dashboard.
+func (al *AgentLoop) runtimeAvailability() ([]providers.RoutingAvailability, []modelruntime.KeyPoolStatus) {
 	al.mu.RLock()
 	source, cfg, chain := al.routingSource, al.cfg, al.fallback
 	al.mu.RUnlock()
 	if source != nil {
 		loaded, err := source()
 		if err != nil {
-			return nil
+			return nil, nil
 		}
 		cfg = loaded
 	}
 	if cfg == nil {
-		return nil
+		return nil, nil
+	}
+	pools := make([]modelruntime.KeyPoolStatus, 0, len(cfg.KeyPools))
+	for i := range cfg.KeyPools {
+		pool := &cfg.KeyPools[i]
+		pools = append(pools, modelruntime.KeyPoolStatus{ID: pool.ID, Keys: providers.KeyPoolAvailability(pool)})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -40,11 +47,11 @@ func (al *AgentLoop) runtimeAvailability() []providers.RoutingAvailability {
 	for _, model := range cfg.ModelList[:min(len(cfg.ModelList), modelruntime.MaxCandidates)] {
 		item, err := chain.Availability(ctx, candidateFromConfig(&model))
 		if err != nil {
-			return nil
+			return nil, pools
 		}
 		result = append(result, item)
 	}
-	return result
+	return result, pools
 }
 
 func routingIdentities(candidates []providers.FallbackCandidate) []providers.RoutingIdentity {
