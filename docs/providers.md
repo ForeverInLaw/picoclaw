@@ -155,6 +155,8 @@ This design also enables **multi-agent support** with flexible provider selectio
 
 With an API key, requests use prompt caching: the tool definitions and the static part of the system prompt are cached, and so is the growing conversation. Cached entries live for 5 minutes by default. Set `"cache_ttl": "1h"` on the model to keep them for an hour, which costs more per cache write but avoids rewrites after longer pauses.
 
+On Claude Fable 5.1, Fable 5, Opus 5.5, Opus 5 and Sonnet 5.5, requests also opt into Anthropic's server-side refusal fallback, so a request that the model's safety classifier declines is answered by the fallback model Anthropic recommends, within the same call. When that happens, the usage log names the model that answered alongside the one you configured. A request that is still declined after the fallback reaches the user as a refusal from Claude; it is not treated as a provider failure, so the routing chain does not move on to its reserves.
+
 > Run `picoclaw auth login --provider anthropic` to paste your API token.
 
 **Anthropic Messages API (native format)**
