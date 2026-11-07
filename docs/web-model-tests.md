@@ -47,11 +47,20 @@ current model, so an existing model can still be edited and saved.
 **Test model** on a pool-backed model sends the same short request through each
 available key at once and shows one result per key, named by its label only. Keys
 the running gateway reports as out of credit or rejected are skipped, as are
-disabled keys; without a running gateway every enabled key is tested. Each request
-uses its key alone: no other key of the pool, no Routing chain reserve and no
-Anthropic server-side refusal fallback answers for it, and the test does not change
-the gateway's key states. The result is `success` only when every tested key
-replied, otherwise `failed`, with each key's sanitized reason.
+disabled keys and keys rate limited for the tested model; without a running
+gateway every enabled key is tested. Each request uses its key alone: no other key
+of the pool, no Routing chain reserve and no Anthropic server-side refusal fallback
+answers for it. It asks for the lowest thinking effort with room for a reply, so
+models that always think still answer. The test does not change the gateway's key
+states, but its requests are billed and add to each key's spend. Each key's result
+and the overall result are `success` or `failed`; the overall result is `success`
+only when every tested key replied, and a failed key shows its sanitized reason.
+
+Adding a key to a pool, on the Credentials page or in a raw configuration save,
+first lists models with it, which costs no credit, and refuses a key Anthropic
+rejects. Those checks and the model list use the `api_base` and `proxy` of the
+first model on the pool, or Anthropic's API through the environment's proxy when no
+model uses the pool yet.
 
 Cancel aborts the current HTTP request. Closing the form or changing a field
 also aborts the request and clears its result. Cancellation cannot undo usage
