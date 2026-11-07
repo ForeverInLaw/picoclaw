@@ -131,15 +131,21 @@ func capabilityServer(t *testing.T, goodKey string, status *int) (*httptest.Serv
 				io.WriteString(w, `{"type":"error","error":{"type":"error","message":"no"}}`)
 				return
 			}
-			io.WriteString(w, `{"type":"model","id":"claude-sonnet-4-6","display_name":"Sonnet","created_at":"2026-01-01T00:00:00Z",
+			io.WriteString(
+				w,
+				`{"type":"model","id":"claude-sonnet-4-6","display_name":"Sonnet","created_at":"2026-01-01T00:00:00Z",
 				"capabilities":{"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},
 					"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":true}},
 				"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"between_tools":{"supported":false},
-					"disabled":{"supported":true},"enabled":{"supported":true}}}}}`)
+					"disabled":{"supported":true},"enabled":{"supported":true}}}}}`,
+			)
 			return
 		}
-		io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude-sonnet-4-6","stop_reason":"end_turn",
-			"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+		io.WriteString(
+			w,
+			`{"id":"m","type":"message","role":"assistant","model":"claude-sonnet-4-6","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`,
+		)
 	}))
 	t.Cleanup(server.Close)
 	return server, &lookups
@@ -188,10 +194,16 @@ func TestCapabilityLookupRejectedByOneKeyDoesNotDecideForOthers(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			server, _ := capabilityServer(t, "sk-ant-good", &status)
-			if thinking := thinkingOf(t, NewProviderWithAPIKey("sk-ant-bad", server.URL, "", 0)); thinking.OfAdaptive == nil {
+			if thinking := thinkingOf(
+				t,
+				NewProviderWithAPIKey("sk-ant-bad", server.URL, "", 0),
+			); thinking.OfAdaptive == nil {
 				t.Fatalf("rejected lookup: thinking = %+v, want adaptive with the lowest effort", thinking)
 			}
-			if thinking := thinkingOf(t, NewProviderWithAPIKey("sk-ant-good", server.URL, "", 0)); thinking.OfDisabled == nil {
+			if thinking := thinkingOf(
+				t,
+				NewProviderWithAPIKey("sk-ant-good", server.URL, "", 0),
+			); thinking.OfDisabled == nil {
 				t.Fatalf("other key after a rejected lookup: thinking = %+v, want disabled", thinking)
 			}
 		})

@@ -238,7 +238,11 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 	}
 
 	gatewayHealth(t, true)
-	second := providers.KeyAvailability{KeyID: "second", State: providers.KeyExhausted, Until: time.Now().Add(time.Hour)}
+	second := providers.KeyAvailability{
+		KeyID: "second",
+		State: providers.KeyExhausted,
+		Until: time.Now().Add(time.Hour),
+	}
 	status, err := modelruntime.New(path, func() ([]providers.RoutingAvailability, []modelruntime.KeyPoolStatus) {
 		return nil, []modelruntime.KeyPoolStatus{{ID: "orgs", Keys: []providers.KeyAvailability{second}}}
 	})
@@ -254,8 +258,10 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 
 	rateLimited := func(model string) {
 		t.Helper()
-		second = providers.KeyAvailability{KeyID: "second", State: providers.KeyRateLimited,
-			RateLimitedModels: []providers.ModelRateLimit{{Model: model, Until: time.Now().Add(time.Minute)}}}
+		second = providers.KeyAvailability{
+			KeyID: "second", State: providers.KeyRateLimited,
+			RateLimitedModels: []providers.ModelRateLimit{{Model: model, Until: time.Now().Add(time.Minute)}},
+		}
 		if err := status.Flush(); err != nil {
 			t.Fatal(err)
 		}

@@ -102,7 +102,12 @@ func TestKeyPoolKeysShowSpendSinceTheirResetDayAgainstTheirBudget(t *testing.T) 
 		t.Errorf("PATCH with a string budget = %d, want 400", rec.Code)
 	}
 	// As in config.json, reset day 0 means the 1st.
-	if rec := serve(mux, http.MethodPatch, "/api/key-pools/orgs/keys/first", `{"reset_day":0}`); rec.Code != http.StatusOK {
+	if rec := serve(
+		mux,
+		http.MethodPatch,
+		"/api/key-pools/orgs/keys/first",
+		`{"reset_day":0}`,
+	); rec.Code != http.StatusOK {
 		t.Fatalf("reset day 0 = %d %s", rec.Code, rec.Body.String())
 	}
 	if first = listKeySpend(t, mux)["first"]; first.ResetDay != 1 {
