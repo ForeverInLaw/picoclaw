@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/sipeed/picoclaw/pkg/credential"
 )
 
 // KeyPool is a named, instance-level set of interchangeable Anthropic API keys,
@@ -146,15 +148,25 @@ func (c *Config) ResolveKeyPools() error {
 // for those models (ADR 0004). Entries with the same key list share one pool.
 // IDs derive from the model ID, so an unsaved migration binds conversations
 // identically on every load until the next configuration write persists it.
-func (c *Config) migrateAnthropicAPIKeysToPools() {
-	pools := map[string]string{} // key list -> pool ID
+func (c *Config) migrateAnthropicAPIKeysToPools(configDir string) {
+	resolver := credential.NewResolver(configDir)
+	pools := map[string]string{} // resolved key list -> pool ID
 	for i := range c.ModelList {
 		m := &c.ModelList[i]
 		keys := MergeAPIKeys(m.APIKey, m.APIKeys)
 		if !m.IsAnthropicAPIKeyModel() || m.KeyPoolID != "" || len(keys) < 2 {
 			continue
 		}
-		signature := strings.Join(keys, "\x00")
+		// Each enc:// value has its own nonce, so equal key lists are compared
+		// by what they resolve to; the pool keeps the references themselves.
+		resolved := make([]string, len(keys))
+		for j, key := range keys {
+			resolved[j] = key
+			if value, err := resolver.Resolve(key); err == nil {
+				resolved[j] = value
+			}
+		}
+		signature := strings.Join(resolved, "\x00")
 		if pools[signature] == "" {
 			pool := KeyPool{ID: derivedID("key-pool", m.ID), Name: m.ModelName}
 			for j, key := range keys {

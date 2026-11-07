@@ -1367,7 +1367,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Migration keeps credential references (enc://, file://) intact; they resolve below.
 	cfg.EnsureModelIDs()
-	cfg.migrateAnthropicAPIKeysToPools()
+	cfg.migrateAnthropicAPIKeysToPools(filepath.Dir(path))
 
 	if err := cfg.resolveCredentials(filepath.Dir(path)); err != nil {
 		return nil, err
@@ -1459,7 +1459,7 @@ func isPlaintextSecret(secret string) bool {
 func (c *Config) plaintextSecretWarnings() []string {
 	var warnings []string
 	for _, m := range c.ModelList {
-		if isPlaintextSecret(m.APIKey) {
+		if isPlaintextSecret(m.APIKey) || slices.ContainsFunc(m.APIKeys, isPlaintextSecret) {
 			warnings = append(warnings, fmt.Sprintf(
 				"picoclaw: warning: model %q has a plaintext api_key; call SaveConfig to encrypt it", m.ModelName))
 		}
