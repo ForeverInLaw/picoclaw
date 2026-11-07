@@ -307,6 +307,16 @@ func TestModelConfig_Validate(t *testing.T) {
 			config:  ModelConfig{},
 			wantErr: true,
 		},
+		{
+			name:    "one-hour prompt cache",
+			config:  ModelConfig{ModelName: "test", Model: "anthropic/claude-opus-5-5", CacheTTL: "1h"},
+			wantErr: false,
+		},
+		{
+			name:    "unsupported prompt cache lifetime",
+			config:  ModelConfig{ModelName: "test", Model: "anthropic/claude-opus-5-5", CacheTTL: "30m"},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
