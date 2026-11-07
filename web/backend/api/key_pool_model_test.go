@@ -158,31 +158,38 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 		}
 		return result
 	}
-	outcomes := func(result keyPoolTestResult) []string {
-		got := []string{result.Status}
+	assertOutcomes := func(situation string, result keyPoolTestResult, want ...string) {
+		t.Helper()
+		got := make([]string, 0, 1+len(result.Keys))
+		got = append(got, result.Status)
 		for _, key := range result.Keys {
 			got = append(got, key.Label+": "+key.Status)
 		}
-		return got
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s: %q, want %q", situation, got, want)
+		}
 	}
-	probe := func(key string) string {
-		return "POST /v1/messages " + key + ` model=claude-opus-5-5 beta="" fallbacks=false`
+	// assertProbedKeys checks Anthropic got one request per key, for the chosen
+	// model and without server-side fallbacks.
+	assertProbedKeys := func(keys ...string) {
+		t.Helper()
+		want := make([]string, 0, len(keys))
+		for _, key := range keys {
+			want = append(want, "POST /v1/messages "+key+` model=claude-opus-5-5 beta="" fallbacks=false`)
+		}
+		if got := received(); !slices.Equal(got, want) {
+			t.Fatalf("Anthropic received\n%q\nwant\n%q", got, want)
+		}
 	}
 
 	gatewayHealth(t, false)
 	result := testModel("/api/models/by-id/claude/test", "")
-	want := []string{"failed", "First org: success", "Second org: success", "Third org: error"}
-	if got := outcomes(result); !slices.Equal(got, want) {
-		t.Fatalf("without a gateway every enabled key is tested: %q, want %q", got, want)
-	}
+	assertOutcomes("without a gateway every enabled key is tested", result,
+		"failed", "First org: success", "Second org: success", "Third org: error")
 	if !strings.Contains(result.Keys[2].Message, "credit") {
 		t.Errorf("out-of-credit key message = %q", result.Keys[2].Message)
 	}
-	if got, want := received(), []string{
-		probe(firstPoolSecret), probe(secondPoolSecret), probe(thirdPoolSecret),
-	}; !slices.Equal(got, want) {
-		t.Fatalf("Anthropic received\n%q\nwant one request per key without fallbacks\n%q", got, want)
-	}
+	assertProbedKeys(firstPoolSecret, secondPoolSecret, thirdPoolSecret)
 	if reserveCalls.Load() != 0 {
 		t.Fatalf("Test model used the Routing chain reserve %d times", reserveCalls.Load())
 	}
@@ -197,15 +204,11 @@ func TestTestModelAnswersPerAvailablePoolKeyWithoutFallbacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(status.Close)
-	result = testModel("/api/models/test-inline",
-		`{"model_name":"unsaved","model":"anthropic/claude-opus-5-5","api_base":"`+anthropicBase+`","key_pool_id":"orgs"}`)
-	want = []string{"failed", "First org: success", "Third org: error"}
-	if got := outcomes(result); !slices.Equal(got, want) {
-		t.Fatalf("an exhausted key is not tested: %q, want %q", got, want)
-	}
-	if got, want := received(), []string{probe(firstPoolSecret), probe(thirdPoolSecret)}; !slices.Equal(got, want) {
-		t.Fatalf("Anthropic received %q, want %q", got, want)
-	}
+	unsaved := `{"model_name":"unsaved","model":"anthropic/claude-opus-5-5","api_base":"` + anthropicBase +
+		`","key_pool_id":"orgs"}`
+	assertOutcomes("an exhausted key is not tested", testModel("/api/models/test-inline", unsaved),
+		"failed", "First org: success", "Third org: error")
+	assertProbedKeys(firstPoolSecret, thirdPoolSecret)
 }
 
 func TestSavedPoolBackedModelsReferenceThePoolAndAnswer(t *testing.T) {
@@ -221,7 +224,7 @@ func TestSavedPoolBackedModelsReferenceThePoolAndAnswer(t *testing.T) {
 		ID: "own-key", ModelName: "own-key", Model: "anthropic/claude-haiku-5-5", APIBase: anthropicBase,
 		APIKey: "sk-ant-api03-own-key-5555",
 	})
-	if err := config.SaveConfig(path, cfg); err != nil {
+	if err = config.SaveConfig(path, cfg); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -235,11 +238,15 @@ func TestSavedPoolBackedModelsReferenceThePoolAndAnswer(t *testing.T) {
 	var created struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(added.Body.Bytes(), &created); err != nil {
+	if err = json.Unmarshal(added.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	moved := serve(mux, http.MethodPut, "/api/models/by-id/own-key",
-		`{"model_name":"own-key","model":"anthropic/claude-haiku-5-5","api_base":"`+anthropicBase+`","key_pool_id":"orgs"}`)
+	moved := serve(
+		mux,
+		http.MethodPut,
+		"/api/models/by-id/own-key",
+		`{"model_name":"own-key","model":"anthropic/claude-haiku-5-5","api_base":"`+anthropicBase+`","key_pool_id":"orgs"}`,
+	)
 	if moved.Code != http.StatusOK {
 		t.Fatalf("moving a single-key model onto the pool = %d %s", moved.Code, moved.Body.String())
 	}

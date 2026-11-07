@@ -280,7 +280,11 @@ func modelTestTimeout(mc config.ModelConfig) time.Duration {
 }
 
 // sendModelTest sends Test model's one short request.
-func sendModelTest(ctx context.Context, provider providers.LLMProvider, modelID string) (*providers.LLMResponse, error) {
+func sendModelTest(
+	ctx context.Context,
+	provider providers.LLMProvider,
+	modelID string,
+) (*providers.LLMResponse, error) {
 	return provider.Chat(
 		ctx,
 		[]providers.Message{{Role: "user", Content: "Reply with OK."}},
