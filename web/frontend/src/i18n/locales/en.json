@@ -330,7 +330,9 @@
       "testing": "Waiting for this model to reply…",
       "valid": "Configuration is valid. No model request was sent.",
       "success": "Model replied successfully ({{latency}} ms).",
-      "canceled": "Model test canceled."
+      "canceled": "Model test canceled.",
+      "keysReplied": "{{replied}} of {{total}} keys replied.",
+      "keySuccess": "Replied ({{latency}} ms)"
     },
     "routing": {
       "title": "Model order",
@@ -404,6 +406,13 @@
         "provider_error": "Provider server error"
       },
       "attempts": "Attempts: {{count}}"
+    },
+    "keyPool": {
+      "credentials": "Credentials",
+      "pool": "Key pool: {{name}}",
+      "model": "Model",
+      "selectModel": "Select a model",
+      "loadingModels": "Loading models from Anthropic…"
     }
   },
   "channels": {

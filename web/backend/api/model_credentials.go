@@ -29,7 +29,11 @@ func compatibleModelCredentials(edited, saved config.ModelConfig) bool {
 		edited.Proxy == saved.Proxy && edited.AccountID == saved.AccountID
 }
 
+// A Key pool replaces the entry's own keys, so none are retained for it.
 func retainModelCredential(edited *config.ModelConfig, saved config.ModelConfig) error {
+	if edited.KeyPoolID != "" {
+		return nil
+	}
 	compatible := compatibleModelCredentials(*edited, saved)
 	if edited.APIKey == "" || modelCredentialPlaceholder(edited.APIKey) {
 		if compatible {

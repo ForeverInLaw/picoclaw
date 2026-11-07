@@ -62,6 +62,14 @@ func newKeyPool(pool *config.KeyPool, mc *config.ModelConfig) (*keyPool, error) 
 	return &keyPool{name: pool.Name, keys: keys, availability: keyAvailability, cacheTTL: mc.CacheTTL}, nil
 }
 
+// NewKeyPoolKeyProbe builds a provider that sends mc's requests through key
+// alone: no other key of its pool, no key availability tracking and no
+// server-side refusal fallback, so each result belongs to that key and model.
+func NewKeyPoolKeyProbe(key config.KeyPoolKey, mc *config.ModelConfig) LLMProvider {
+	client := newAnthropicAPIKeyClient(key.APIKey, mc).WithKeyLabel(key.Label)
+	return newClaudeProviderWithDelegate(client.WithoutServerFallback())
+}
+
 // rank orders the keys for a conversation by rendezvous (highest random weight)
 // hashing of its identity and each key ID. The first key serves the
 // conversation; removing a key moves only the conversations it ranked first.

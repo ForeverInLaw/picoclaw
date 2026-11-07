@@ -62,6 +62,17 @@ export const keyStatesOutOfService: ReadonlySet<KeyPoolKeyState> = new Set([
   "rejected",
 ])
 
+export const ANTHROPIC_PREFIX = "anthropic/"
+
+// Key pools serve only anthropic/ models that authenticate with API keys.
+export function canUseKeyPool(model: string, authMethod: string) {
+  return (
+    model.startsWith(ANTHROPIC_PREFIX) &&
+    authMethod !== "oauth" &&
+    authMethod !== "token"
+  )
+}
+
 const poolPath = (poolID: string) =>
   `/api/key-pools/${encodeURIComponent(poolID)}`
 const keyPath = (poolID: string, keyID: string) =>
@@ -134,4 +145,19 @@ export function removePoolKey(poolID: string, keyID: string) {
 
 export function returnPoolKeyToService(poolID: string, keyID: string) {
   return request(`${keyPath(poolID, keyID)}/return`, "POST")
+}
+
+// One model Anthropic offers to a Key pool's keys.
+export interface PoolModel {
+  id: string
+  display_name: string
+}
+
+// Lists the models Anthropic offers through the pool's first working key.
+export async function getPoolModels(poolID: string) {
+  const { models } = await request<{ models: PoolModel[] }>(
+    `${poolPath(poolID)}/models`,
+    "GET",
+  )
+  return models
 }

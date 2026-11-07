@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { getCodexAccounts } from "@/api/codex-accounts"
+import { canUseKeyPool } from "@/api/key-pools"
 import type { ModelTestConfiguration } from "@/api/model-probe"
 import {
   type ModelInfo,
@@ -37,9 +38,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
+import { KeyPoolModelFields } from "./key-pool-model-fields"
 import { ModelProbe } from "./model-probe"
 
 interface EditForm {
+  model: string
+  keyPoolID: string
   apiKey: string
   apiBase: string
   proxy: string
@@ -68,6 +72,8 @@ export function EditModelSheet(props: EditModelSheetProps) {
 function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
   const { t } = useTranslation()
   const [form, setForm] = useState<EditForm>(() => ({
+    model: model?.model ?? "",
+    keyPoolID: model?.key_pool_id ?? "",
     apiKey: "",
     apiBase: model?.api_base ?? "",
     proxy: model?.proxy ?? "",
@@ -108,13 +114,17 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
     (key: keyof EditForm) => (e: React.ChangeEvent<HTMLInputElement>) =>
       setForm((f) => ({ ...f, [key]: e.target.value }))
 
+  const poolCapable = canUseKeyPool(form.model, form.authMethod)
+  const keyPoolID = poolCapable ? form.keyPoolID : ""
   const configuration: ModelTestConfiguration | null = model
     ? {
         id: model.id,
         model_name: model.model_name,
-        model: model.model,
+        model: form.model,
         api_base: form.apiBase,
-        api_key: form.apiKey || undefined,
+        api_key: (!keyPoolID && form.apiKey) || undefined,
+        // Always sent, so choosing an own API key detaches the saved pool.
+        key_pool_id: keyPoolID,
         proxy: form.proxy,
         auth_method: form.authMethod,
         account_id: form.accountID,
@@ -141,12 +151,13 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
   const isCodex =
     isOAuth &&
     (model?.model.startsWith("openai/") || !model?.model.includes("/"))
-  const apiKeyPlaceholder = model?.configured
-    ? maskedSecretPlaceholder(
-        model.api_key,
-        t("models.field.apiKeyPlaceholderSet"),
-      )
-    : t("models.field.apiKeyPlaceholder")
+  const apiKeyPlaceholder =
+    model?.configured && !model.key_pool_id
+      ? maskedSecretPlaceholder(
+          model.api_key,
+          t("models.field.apiKeyPlaceholderSet"),
+        )
+      : t("models.field.apiKeyPlaceholder")
 
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
@@ -159,7 +170,7 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
             {t("models.edit.title", { name: model?.model_name })}
           </SheetTitle>
           <SheetDescription className="font-mono text-xs">
-            {model?.model}
+            {form.model}
           </SheetDescription>
         </SheetHeader>
 
@@ -194,11 +205,25 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
                 {accounts.error && <p role="alert">{accounts.error.message}</p>}
               </Field>
             )}
-            {!isOAuth && (
+            {poolCapable && (
+              <KeyPoolModelFields
+                poolID={keyPoolID}
+                model={form.model}
+                onPoolChange={(id) =>
+                  setForm((f) => ({ ...f, keyPoolID: id, apiKey: "" }))
+                }
+                onModelChange={(next) =>
+                  setForm((f) => ({ ...f, model: next }))
+                }
+              />
+            )}
+            {!isOAuth && !keyPoolID && (
               <Field
                 label={t("models.field.apiKey")}
                 hint={
-                  model?.configured ? t("models.edit.apiKeyHint") : undefined
+                  model?.configured && !model.key_pool_id
+                    ? t("models.edit.apiKeyHint")
+                    : undefined
                 }
               >
                 <KeyInput
