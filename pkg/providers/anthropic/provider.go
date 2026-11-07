@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -270,9 +271,7 @@ func buildParams(
 					anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
 				)
 			} else {
-				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)),
-				)
+				anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(userContent(msg)...))
 			}
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
@@ -398,6 +397,28 @@ func levelToBudget(level string) int {
 	default:
 		return 0
 	}
+}
+
+// userContent renders a user message's text followed by its image media.
+// Media the Messages API cannot take as an image (e.g. audio) is skipped, and
+// an image-only message carries no empty text block, which the API rejects.
+func userContent(msg Message) []anthropic.ContentBlockParamUnion {
+	var blocks []anthropic.ContentBlockParamUnion
+	for _, media := range msg.Media {
+		if header, data, ok := strings.Cut(strings.TrimPrefix(media, "data:"), ","); ok &&
+			strings.HasPrefix(media, "data:image/") && strings.HasSuffix(header, ";base64") {
+			blocks = append(blocks, anthropic.NewImageBlockBase64(strings.TrimSuffix(header, ";base64"), data))
+			continue
+		}
+		if parsed, err := url.Parse(media); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") &&
+			parsed.Hostname() != "" {
+			blocks = append(blocks, anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: media}))
+		}
+	}
+	if msg.Content != "" || len(blocks) == 0 {
+		blocks = append([]anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(msg.Content)}, blocks...)
+	}
+	return blocks
 }
 
 func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {

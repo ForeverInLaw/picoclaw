@@ -260,3 +260,28 @@ func TestAnthropicAPIKeyModelStreamsTextAndToolCalls(t *testing.T) {
 		t.Errorf("usage = %+v, want 20 prompt / 9 completion", resp.Usage)
 	}
 }
+
+func TestAnthropicAPIKeyModelSendsUserImages(t *testing.T) {
+	fake := newFakeAnthropic(t, func(w http.ResponseWriter) {
+		writeJSON(w, `{"id":"msg_4","type":"message","role":"assistant","model":"claude-sonnet-4-6",
+			"stop_reason":"end_turn","content":[{"type":"text","text":"A cat."}],"usage":{"input_tokens":5,"output_tokens":2}}`)
+	})
+	provider, modelID, err := CreateProviderFromConfig(anthropicAPIKeyModel(fake.URL))
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig() error = %v", err)
+	}
+
+	_, err = provider.Chat(t.Context(), []Message{{
+		Role:    "user",
+		Content: "What is this?",
+		Media:   []string{"data:image/png;base64,iVBORw0KGgo=", "https://example.com/cat.jpg"},
+	}}, nil, modelID, nil)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	assertJSON(t, "messages", fake.only(t).body["messages"], `[{"role":"user","content":[
+		{"type":"text","text":"What is this?"},
+		{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}},
+		{"type":"image","source":{"type":"url","url":"https://example.com/cat.jpg"}}]}]`)
+}
