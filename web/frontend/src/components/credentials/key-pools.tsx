@@ -10,11 +10,11 @@ import {
   deleteKeyPool,
   renameKeyPool,
 } from "@/api/key-pools"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { keyPoolsQueryOptions, useKeyPoolMutation } from "@/hooks/use-key-pools"
 
-import { ConfirmRemovalDialog } from "./confirm-removal-dialog"
 import { EditableName } from "./editable-name"
 import { KeyPoolKeyRow } from "./key-pool-key-row"
 
@@ -135,7 +135,7 @@ function KeyPoolCard({ pool }: { pool: KeyPool }) {
           {t("credentials.keyPools.deletePool")}
         </Button>
       </div>
-      <ConfirmRemovalDialog
+      <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title={t("credentials.keyPools.deletePoolTitle", { name: pool.name })}

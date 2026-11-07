@@ -9,11 +9,11 @@ import {
   returnPoolKeyToService,
   updatePoolKey,
 } from "@/api/key-pools"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useKeyPoolMutation } from "@/hooks/use-key-pools"
 
-import { ConfirmRemovalDialog } from "./confirm-removal-dialog"
 import { EditableName } from "./editable-name"
 import { KeyBudget } from "./key-budget"
 
@@ -124,7 +124,7 @@ export function KeyPoolKeyRow({
           {actionError.message}
         </p>
       )}
-      <ConfirmRemovalDialog
+      <ConfirmDialog
         open={removeOpen}
         onOpenChange={setRemoveOpen}
         title={t("credentials.keyPools.removeKeyTitle", {

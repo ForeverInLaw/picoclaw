@@ -12,20 +12,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 
-interface ConfirmRemovalDialogProps {
+interface ConfirmDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   title: string
   description: string
   confirmLabel: string
   pending: boolean
-  error: Error | null
+  error?: Error | null
   onConfirm: () => void
 }
 
-// Asks before a destructive Key pool edit and keeps the dialog open to show
-// a refusal, such as the models still using a pool.
-export function ConfirmRemovalDialog({
+// Asks before a destructive action. The dialog stays open while the action
+// runs and shows its refusal; the caller closes it once the action succeeds.
+export function ConfirmDialog({
   open,
   onOpenChange,
   title,
@@ -34,7 +34,7 @@ export function ConfirmRemovalDialog({
   pending,
   error,
   onConfirm,
-}: ConfirmRemovalDialogProps) {
+}: ConfirmDialogProps) {
   const { t } = useTranslation()
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>

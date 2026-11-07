@@ -1,6 +1,7 @@
 import { IconLoader2 } from "@tabler/icons-react"
 import { useTranslation } from "react-i18next"
 
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { PageHeader } from "@/components/page-header"
 import { useCredentialsPage } from "@/hooks/use-credentials-page"
 
@@ -8,7 +9,6 @@ import { AnthropicCredentialCard } from "./anthropic-credential-card"
 import { AntigravityCredentialCard } from "./antigravity-credential-card"
 import { DeviceCodeSheet } from "./device-code-sheet"
 import { KeyPools } from "./key-pools"
-import { LogoutConfirmDialog } from "./logout-confirm-dialog"
 import { OpenAICredentialCard } from "./openai-credential-card"
 
 export function CredentialsPage() {
@@ -102,12 +102,18 @@ export function CredentialsPage() {
         <KeyPools />
       </div>
 
-      <LogoutConfirmDialog
+      <ConfirmDialog
         open={logoutDialogOpen}
-        providerLabel={logoutProviderLabel}
-        isSubmitting={activeAction === `${logoutConfirmProvider}:logout`}
         onOpenChange={handleLogoutDialogOpenChange}
-        onConfirm={handleConfirmLogout}
+        title={t("credentials.logoutDialog.title")}
+        description={t(
+          "credentials.logoutDialog.description",
+          "This will remove your saved credential for {{provider}}.",
+          { provider: logoutProviderLabel },
+        )}
+        confirmLabel={t("credentials.actions.logout")}
+        pending={activeAction === `${logoutConfirmProvider}:logout`}
+        onConfirm={() => void handleConfirmLogout()}
       />
 
       <DeviceCodeSheet
