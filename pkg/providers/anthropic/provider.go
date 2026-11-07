@@ -14,6 +14,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers/common"
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
@@ -40,6 +41,8 @@ type Provider struct {
 	// requestTimeout bounds non-streaming requests; streams rely on the
 	// caller's context and inactivity tracking instead.
 	requestTimeout time.Duration
+	// promptCache is nil for setup-token providers, whose requests stay as they were.
+	promptCache *promptCache
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -83,7 +86,17 @@ func NewProviderWithAPIKey(apiKey, apiBase, proxy string, requestTimeout time.Du
 		client:         &client,
 		baseURL:        baseURL,
 		requestTimeout: requestTimeout,
+		promptCache:    &promptCache{},
 	}
+}
+
+// WithPromptCacheTTL sets the lifetime of both prompt-cache points: "1h", or
+// "5m"/"" for Anthropic's 5-minute default. Providers that do not cache ignore it.
+func (p *Provider) WithPromptCacheTTL(ttl string) *Provider {
+	if p.promptCache != nil {
+		p.promptCache.ttl = anthropic.CacheControlEphemeralTTL(ttl)
+	}
+	return p
 }
 
 func NewProviderWithClient(client *anthropic.Client) *Provider {
@@ -133,7 +146,7 @@ func (p *Provider) Chat(
 		)
 	}
 
-	params, err := buildParams(messages, tools, model, options)
+	params, err := p.requestParams(messages, tools, model, options)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +164,7 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return parseResponse(resp), nil
+	return completeResponse(resp), nil
 }
 
 func (p *Provider) ChatStream(
@@ -174,7 +187,7 @@ func (p *Provider) ChatStream(
 		)
 	}
 
-	params, err := buildParams(messages, tools, model, options)
+	params, err := p.requestParams(messages, tools, model, options)
 	if err != nil {
 		return nil, err
 	}
@@ -218,6 +231,9 @@ func (p *Provider) chatStreaming(
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
 		}
+		if event.Type == "message_delta" {
+			mergeDeltaUsage(&msg.Usage, event.AsMessageDelta().Usage)
+		}
 		if event.Type == "message_stop" {
 			completed = true
 			break
@@ -230,7 +246,34 @@ func (p *Provider) chatStreaming(
 	if !completed {
 		return nil, fmt.Errorf("claude stream ended before message_stop: %w", io.ErrUnexpectedEOF)
 	}
-	return parseResponse(&msg), nil
+	return completeResponse(&msg), nil
+}
+
+// mergeDeltaUsage applies the cumulative counts of a message_delta event. The
+// SDK's Accumulate copies only output_tokens, which would drop the final input
+// and cache counts.
+func mergeDeltaUsage(usage *anthropic.Usage, delta anthropic.MessageDeltaUsage) {
+	if delta.JSON.InputTokens.Valid() {
+		usage.InputTokens = delta.InputTokens
+	}
+	if delta.JSON.CacheCreationInputTokens.Valid() {
+		usage.CacheCreationInputTokens = delta.CacheCreationInputTokens
+	}
+	if delta.JSON.CacheReadInputTokens.Valid() {
+		usage.CacheReadInputTokens = delta.CacheReadInputTokens
+	}
+}
+
+// completeResponse logs a finished message's usage and maps it to an LLMResponse.
+func completeResponse(msg *anthropic.Message) *LLMResponse {
+	logger.InfoCF("provider.anthropic", "Anthropic usage", map[string]any{
+		"model":                       string(msg.Model),
+		"input_tokens":                msg.Usage.InputTokens,
+		"output_tokens":               msg.Usage.OutputTokens,
+		"cache_creation_input_tokens": msg.Usage.CacheCreationInputTokens,
+		"cache_read_input_tokens":     msg.Usage.CacheReadInputTokens,
+	})
+	return parseResponse(msg)
 }
 
 func (p *Provider) GetDefaultModel() string {
@@ -239,6 +282,22 @@ func (p *Provider) GetDefaultModel() string {
 
 func (p *Provider) BaseURL() string {
 	return p.baseURL
+}
+
+// requestParams builds the Messages API request and, for providers that cache,
+// places the prompt-cache points on it.
+func (p *Provider) requestParams(
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+) (anthropic.MessageNewParams, error) {
+	params, err := buildParams(messages, tools, model, options)
+	if err != nil || p.promptCache == nil {
+		return params, err
+	}
+	p.promptCache.apply(&params)
+	return params, nil
 }
 
 func buildParams(
@@ -492,11 +551,20 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		Reasoning:    reasoning.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
-		Usage: &UsageInfo{
-			PromptTokens:     int(resp.Usage.InputTokens),
-			CompletionTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
-		},
+		Usage:        usageInfo(resp.Usage),
+	}
+}
+
+// usageInfo counts the whole prompt: Anthropic's input_tokens covers only the
+// tokens after the last cache breakpoint.
+func usageInfo(usage anthropic.Usage) *UsageInfo {
+	prompt := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	return &UsageInfo{
+		PromptTokens:        int(prompt),
+		CompletionTokens:    int(usage.OutputTokens),
+		TotalTokens:         int(prompt + usage.OutputTokens),
+		CacheCreationTokens: int(usage.CacheCreationInputTokens),
+		CacheReadTokens:     int(usage.CacheReadInputTokens),
 	}
 }
 

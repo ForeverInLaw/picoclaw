@@ -23,6 +23,7 @@ type recordedAnthropicRequest struct {
 	path   string
 	header http.Header
 	body   map[string]any
+	raw    []byte
 }
 
 // newFakeAnthropic answers every /v1/messages request with the given response
@@ -39,6 +40,7 @@ func newFakeAnthropic(t *testing.T, respond func(w http.ResponseWriter)) *fakeAn
 			path:   r.URL.Path,
 			header: r.Header.Clone(),
 			body:   body,
+			raw:    raw,
 		})
 		fake.mu.Unlock()
 		if r.URL.Path != "/v1/messages" {

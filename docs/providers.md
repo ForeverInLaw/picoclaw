@@ -153,6 +153,8 @@ This design also enables **multi-agent support** with flexible provider selectio
 }
 ```
 
+With an API key, requests use prompt caching: the tool definitions and the static part of the system prompt are cached, and so is the growing conversation. Cached entries live for 5 minutes by default. Set `"cache_ttl": "1h"` on the model to keep them for an hour, which costs more per cache write but avoids rewrites after longer pauses.
+
 > Run `picoclaw auth login --provider anthropic` to paste your API token.
 
 **Anthropic Key pools (several organizations)**

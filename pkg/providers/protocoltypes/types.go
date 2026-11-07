@@ -60,10 +60,15 @@ type ReasoningDetail struct {
 	Text   string `json:"text"`
 }
 
+// UsageInfo counts one response's tokens. PromptTokens covers the whole prompt;
+// the cache counts are the parts of it written to and read from a prompt cache,
+// for providers that report them.
 type UsageInfo struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.

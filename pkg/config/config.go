@@ -968,6 +968,7 @@ type ModelConfig struct {
 	RequestTimeout           int                `json:"request_timeout,omitempty"`
 	InactivityTimeoutSeconds int                `json:"inactivity_timeout_seconds,omitempty"`
 	ThinkingLevel            string             `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
+	CacheTTL                 string             `json:"cache_ttl,omitempty"`      // Anthropic prompt cache lifetime: 5m (default) or 1h
 	ExtraBody                map[string]any     `json:"extra_body,omitempty"`     // Additional fields to inject into request body
 
 	// from security
@@ -990,6 +991,9 @@ func (c *ModelConfig) InactivityTimeout() time.Duration {
 func (c *ModelConfig) Validate() error {
 	if c.InactivityTimeoutSeconds < 0 || int64(c.InactivityTimeoutSeconds) > int64((1<<63-1)/time.Second) {
 		return fmt.Errorf("inactivity_timeout_seconds must be a nonnegative duration in seconds")
+	}
+	if c.CacheTTL != "" && c.CacheTTL != "5m" && c.CacheTTL != "1h" {
+		return fmt.Errorf("cache_ttl must be 5m or 1h")
 	}
 	if c.Capabilities != nil && c.Capabilities.ContextWindow < 0 {
 		return fmt.Errorf("capabilities.context_window must not be negative")
@@ -1807,6 +1811,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 				RequestTimeout:           m.RequestTimeout,
 				InactivityTimeoutSeconds: m.InactivityTimeoutSeconds,
 				ThinkingLevel:            m.ThinkingLevel,
+				CacheTTL:                 m.CacheTTL,
 				ExtraBody:                m.ExtraBody,
 			}
 			expanded = append(expanded, additionalEntry)
@@ -1831,6 +1836,7 @@ func ExpandMultiKeyModels(models []ModelConfig) []ModelConfig {
 			RequestTimeout:           m.RequestTimeout,
 			InactivityTimeoutSeconds: m.InactivityTimeoutSeconds,
 			ThinkingLevel:            m.ThinkingLevel,
+			CacheTTL:                 m.CacheTTL,
 			ExtraBody:                m.ExtraBody,
 			apiKeys:                  []string{keys[0]},
 		}
