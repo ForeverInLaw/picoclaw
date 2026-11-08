@@ -92,7 +92,7 @@ func TestBuildParams_StoredToolCallKeepsToolUse(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var assistant Message
-	if err := json.Unmarshal(stored, &assistant); err != nil {
+	if err = json.Unmarshal(stored, &assistant); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	messages := []Message{
