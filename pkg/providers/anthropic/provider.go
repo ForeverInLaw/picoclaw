@@ -375,8 +375,13 @@ func buildParams(
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
+					// Stored history keeps the name only in Function.Name.
+					name := tc.Name
+					if name == "" && tc.Function != nil {
+						name = tc.Function.Name
+					}
 					// Skip tool calls with empty names to avoid API errors
-					if tc.Name == "" {
+					if name == "" {
 						continue
 					}
 					args := tc.Arguments
@@ -388,7 +393,7 @@ func buildParams(
 					if args == nil {
 						args = map[string]any{}
 					}
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, tc.Name))
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {

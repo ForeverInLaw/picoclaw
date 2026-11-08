@@ -78,6 +78,45 @@ func TestBuildParams_ToolCallMessage(t *testing.T) {
 	}
 }
 
+// Stored history drops ToolCall.Name (json:"-"), leaving the name only in
+// Function.Name; the tool_use must survive so its tool_result is not orphaned.
+func TestBuildParams_StoredToolCallKeepsToolUse(t *testing.T) {
+	stored, err := json.Marshal(Message{
+		Role: "assistant",
+		ToolCalls: []ToolCall{{
+			ID: "p90nm7nv", Type: "function",
+			Function: &FunctionCall{Name: "web_search", Arguments: `{"query":"btc"}`},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var assistant Message
+	if err = json.Unmarshal(stored, &assistant); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	messages := []Message{
+		{Role: "user", Content: "news?"},
+		assistant,
+		{Role: "tool", Content: "results", ToolCallID: "p90nm7nv"},
+	}
+	params, err := buildParams(messages, nil, "claude-haiku-5-5", map[string]any{})
+	if err != nil {
+		t.Fatalf("buildParams() error: %v", err)
+	}
+	content := params.Messages[1].Content
+	if len(content) != 1 || content[0].OfToolUse == nil {
+		t.Fatalf("assistant content = %+v, want one tool_use block", content)
+	}
+	toolUse := content[0].OfToolUse
+	if toolUse.ID != "p90nm7nv" || toolUse.Name != "web_search" {
+		t.Errorf("tool_use = (%q, %q), want (p90nm7nv, web_search)", toolUse.ID, toolUse.Name)
+	}
+	if got := toolUse.Input.(map[string]any)["query"]; got != "btc" {
+		t.Errorf("tool_use input query = %v, want btc", got)
+	}
+}
+
 func TestBuildParams_WithTools(t *testing.T) {
 	tools := []ToolDefinition{
 		{
