@@ -85,6 +85,18 @@ func newTestAgentLoop(
 	return al, cfg, msgBus, provider, func() { os.RemoveAll(tmpDir) }
 }
 
+// acceptImagesOnTestModel declares newTestAgentLoop's model image-capable, as a
+// version 4 config would, and points the agent's chain at that entry.
+func acceptImagesOnTestModel(cfg *config.Config, agent *AgentInstance) {
+	acceptsImages := true
+	cfg.ModelList = []config.ModelConfig{{
+		ModelName:    "test-model",
+		Model:        "test-model",
+		Capabilities: &config.ModelCapabilities{Images: &acceptsImages},
+	}}
+	agent.Candidates = []providers.FallbackCandidate{{Model: "test-model", ConfigName: "test-model"}}
+}
+
 func TestSameTargetReplyToMessageID_OnlyForSameChannelAndChat(t *testing.T) {
 	ctx := tools.WithToolReplyToMessageID(
 		tools.WithToolContext(context.Background(), "telegram", "6669548787"),

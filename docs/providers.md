@@ -513,17 +513,29 @@ Declare known limits on each `model_list` entry when mixing model families:
 }
 ```
 
-`images: false` excludes that candidate when Active context contains images.
-`tools: false` excludes it when the request needs tool definitions, native search,
-or recorded tool calls/results. `context_window` includes estimated input and
-reserved output tokens; a smaller reserve is skipped without truncating history.
-The existing ContextManager and compaction settings still manage Active context.
-Text-only CLI, Copilot, Antigravity, and the legacy Codex Responses adapter are
-skipped for image requests, including images retained from earlier turns.
+`images` is the only record of image support: a model accepts images when it is
+`true`, and an omitted flag means text-only. When Active context contains images,
+including images retained from earlier turns, the agent keeps the image-capable
+models of its own chain; only when none of them accepts images does the turn move
+to `image_model` and `image_model_fallbacks`. If no model in either chain accepts
+images, the user is told to enable the flag. The text-only CLI, Copilot and
+Antigravity adapters cannot carry images over their transport and are skipped
+whatever the flag says.
 
-Omitted capabilities preserve existing adapter behavior and the agent's configured
-context window. Picoclaw does not infer a model's actual limits or entitlement
-from its name or endpoint; configure known limits explicitly. Skipped candidates
+Configs written before version 4 get the flag on load: Anthropic models, models on
+OpenAI's own endpoint or OpenAI OAuth, and models already named by `image_model`
+or `image_model_fallbacks` become `true`; every other unset entry becomes `false`.
+The next save writes these values out.
+
+`tools: false` excludes a candidate when the request needs tool definitions, native
+search, or recorded tool calls/results. `context_window` includes estimated input
+and reserved output tokens; a smaller reserve is skipped without truncating history.
+The existing ContextManager and compaction settings still manage Active context.
+
+An omitted `tools` flag preserves the adapter's behavior, and an omitted
+`context_window` keeps the agent's configured window. Picoclaw does not infer a
+model's actual limits or entitlement from its name or endpoint; configure known
+limits explicitly. Skipped candidates
 appear in agent logs and `llm_retry` events with reason `incompatible` and an
 explanation. Compatibility failures do not mean the credentials are invalid.
 

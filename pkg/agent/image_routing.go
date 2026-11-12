@@ -1,26 +1,20 @@
 package agent
 
 import (
-	"net/url"
-	"strings"
+	"slices"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/common"
 )
 
 // requestHasImageInput reports whether any message carries an image the
 // provider must transmit: an inline data URL or a remote http(s) URL.
 func requestHasImageInput(messages []providers.Message) bool {
 	for _, message := range messages {
-		for _, media := range message.Media {
-			if strings.HasPrefix(media, "data:image/") {
-				return true
-			}
-			parsed, err := url.Parse(media)
-			if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" {
-				return true
-			}
+		if slices.ContainsFunc(message.Media, common.IsImageURL) {
+			return true
 		}
 	}
 	return false

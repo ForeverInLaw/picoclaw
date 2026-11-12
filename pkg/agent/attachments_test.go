@@ -17,7 +17,6 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
-	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -26,16 +25,10 @@ func TestImageDocumentWithGenericMIMERetainsVisionInput(t *testing.T) {
 	defer cleanup()
 	defer mb.Close()
 	defer al.Close()
-	acceptsImages := true
-	cfg.ModelList = []config.ModelConfig{{
-		ModelName:    "test-model",
-		Model:        "test-model",
-		Capabilities: &config.ModelCapabilities{Images: &acceptsImages},
-	}}
 	p := &recordingProvider{}
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.Provider = p
-	agent.Candidates = []providers.FallbackCandidate{{Model: "test-model", ConfigName: "test-model"}}
+	acceptImagesOnTestModel(cfg, agent)
 	image, err := base64.StdEncoding.DecodeString(
 		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0XQAAAAASUVORK5CYII=",
 	)

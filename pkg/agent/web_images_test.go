@@ -129,6 +129,7 @@ func runWebImageScenario(t *testing.T, rejectVision bool, channelName string) {
 	defer modelServer.Close()
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.Provider = providers.NewHTTPProvider("fixture-key", modelServer.URL, "")
+	acceptImagesOnTestModel(cfg, agent)
 	agent.ImageProvider = &mockProvider{}
 	agent.ImageModel = "different-image-model"
 	agent.ImageCandidates = []providers.FallbackCandidate{{Provider: "openai", Model: "different-image-model"}}

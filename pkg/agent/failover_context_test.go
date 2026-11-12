@@ -316,9 +316,11 @@ func TestFailoverSkipsAdapterThatCannotTransmitImageInput(t *testing.T) {
 		)
 	}))
 	defer backup.Close()
+	acceptsImages := true
+	images := &config.ModelCapabilities{Images: &acceptsImages}
 	al, _ := configuredProviderLoop(t, []config.ModelConfig{
-		{ModelName: "primary", Model: "openai/primary", APIBase: backup.URL},
-		{ModelName: "backup", Model: "openai/backup", APIBase: backup.URL},
+		{ModelName: "primary", Model: "openai/primary", APIBase: backup.URL, Capabilities: images},
+		{ModelName: "backup", Model: "openai/backup", APIBase: backup.URL, Capabilities: images},
 	}, []string{"backup"})
 	primary := &textOnlyImageProvider{}
 	al.registry.GetDefaultAgent().Provider = primary
