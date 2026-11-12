@@ -3382,7 +3382,6 @@ func (al *AgentLoop) selectCandidates(
 	)
 }
 
-
 func sameTargetReplyToMessageID(ctx context.Context, channel, chatID string) string {
 	if strings.TrimSpace(channel) != strings.TrimSpace(tools.ToolChannel(ctx)) {
 		return ""
