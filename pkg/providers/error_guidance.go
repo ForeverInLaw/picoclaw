@@ -16,6 +16,9 @@ func ErrorGuidance(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "Model request canceled."
 	}
+	if noCandidateAcceptsImages(err) {
+		return "None of the selected models accepts images. Enable \"Supports images\" on a model in the chain or configure an image model."
+	}
 	status, _, _ := errorHTTPMetadata(err)
 	text := strings.ToLower(err.Error())
 	if (status == 400 || status == 422) &&
@@ -61,4 +64,21 @@ func ErrorGuidance(err error) string {
 		return "The model endpoint could not be reached. Check api_base, DNS, proxy and TLS certificate settings."
 	}
 	return ""
+}
+
+// noCandidateAcceptsImages reports a request that every candidate skipped
+// because none of them reads image input.
+func noCandidateAcceptsImages(err error) bool {
+	var exhausted *FallbackExhaustedError
+	if !errors.As(err, &exhausted) || len(exhausted.Attempts) == 0 {
+		return false
+	}
+	for _, attempt := range exhausted.Attempts {
+		var incompatible *IncompatibleCandidateError
+		if !attempt.Skipped || !errors.As(attempt.Error, &incompatible) ||
+			!strings.Contains(incompatible.Reason, ReasonImageInputUnsupported) {
+			return false
+		}
+	}
+	return true
 }

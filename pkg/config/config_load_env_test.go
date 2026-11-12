@@ -18,7 +18,9 @@ func TestLoadConfig_EmptyModelListInheritsDefaultsAfterDecoding(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(cfg.ModelList, DefaultConfig().ModelList) {
+			defaults := DefaultConfig()
+			defaults.migrateImageCapabilities()
+			if !reflect.DeepEqual(cfg.ModelList, defaults.ModelList) {
 				t.Fatal("empty model_list must inherit the default model configurations")
 			}
 		})

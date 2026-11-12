@@ -13,7 +13,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 )
 
-const CurrentVersion = 3
+// CurrentVersion 4 makes capabilities.images explicit on every model entry.
+const CurrentVersion = 4
 
 // Channel holds the v3 instance identity and common channel policy. Existing
 // adapter settings stay in their established structs behind Decode.
@@ -311,8 +312,9 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	if c.Version < 0 || c.Version > CurrentVersion {
 		return fmt.Errorf("unsupported config version %d (maximum %d)", c.Version, CurrentVersion)
 	}
+	c.sourceVersion = c.Version
 	if wire.Channels != nil {
-		if c.Version == CurrentVersion {
+		if c.Version >= 3 {
 			return fmt.Errorf("version 3 uses channel_list; migrate legacy channels before setting version to 3")
 		}
 		if c.ChannelList != nil {

@@ -27,8 +27,8 @@ func TestLegacyForkConfigMigratesWithoutChangingSource(t *testing.T) {
 	if decodeErr := json.Unmarshal(data, &saved); decodeErr != nil {
 		t.Fatal(decodeErr)
 	}
-	if string(saved["version"]) != "3" || saved["channel_list"] == nil || saved["channels"] != nil {
-		t.Fatalf("expected v3 channel_list, got %s", data)
+	if string(saved["version"]) != "4" || saved["channel_list"] == nil || saved["channels"] != nil {
+		t.Fatalf("expected v4 channel_list, got %s", data)
 	}
 	if cfg.Channels.Telegram.Token != "telegram-secret" || !cfg.Channels.Telegram.Inline.Enabled ||
 		cfg.Channels.Email.Password != "email-secret" ||
