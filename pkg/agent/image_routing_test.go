@@ -47,7 +47,12 @@ func TestImageTurnKeepsOnlyImageCapableModelsFromPrimaryChain(t *testing.T) {
 
 	// The primary provider served "text", so "vision" resolves its own provider.
 	if provider != nil || model != "vision" || len(candidates) != 1 || candidates[0].Model != "vision" {
-		t.Fatalf("got provider %T, model %q, candidates %#v; want vision alone with its own provider", provider, model, candidates)
+		t.Fatalf(
+			"got provider %T, model %q, candidates %#v; want vision alone with its own provider",
+			provider,
+			model,
+			candidates,
+		)
 	}
 }
 

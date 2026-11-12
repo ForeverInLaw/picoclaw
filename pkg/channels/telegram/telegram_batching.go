@@ -284,7 +284,12 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 		attach(c.downloadFile(ctx, message.Voice.FileID, ".ogg"), "voice.ogg", message.Voice.MimeType, "voice")
 	}
 	if message.Audio != nil {
-		attach(c.downloadFile(ctx, message.Audio.FileID, ".mp3"), message.Audio.FileName, message.Audio.MimeType, "audio")
+		attach(
+			c.downloadFile(ctx, message.Audio.FileID, ".mp3"),
+			message.Audio.FileName,
+			message.Audio.MimeType,
+			"audio",
+		)
 	}
 	if message.Document != nil {
 		attach(

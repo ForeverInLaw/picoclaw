@@ -1069,6 +1069,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, provider)
 	al.SetMediaStore(store)
+	acceptImagesOnTestModel(cfg, al.GetRegistry().GetDefaultAgent())
 
 	if err = al.Steer(providers.Message{
 		Role:    "user",

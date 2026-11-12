@@ -82,6 +82,8 @@ func newTestAgentLoop(
 	msgBus = bus.NewMessageBus()
 	provider = &mockProvider{}
 	al = NewAgentLoop(cfg, msgBus, provider)
+	// The mock stands in for a multimodal model, as a version 4 config declares it.
+	acceptImagesOnTestModel(cfg, al.GetRegistry().GetDefaultAgent())
 	return al, cfg, msgBus, provider, func() { os.RemoveAll(tmpDir) }
 }
 

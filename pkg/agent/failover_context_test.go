@@ -64,12 +64,25 @@ func TestFailoverRestoresClientSearchForCandidateWithoutNativeSearch(t *testing.
 	require.Equal(t, "search retained", answer)
 }
 
+// imageCapableModel is an OpenAI-compatible test model that reads images.
+func imageCapableModel(name, apiBase string) config.ModelConfig {
+	acceptsImages := true
+	return config.ModelConfig{
+		ModelName:    name,
+		Model:        "openai/" + name,
+		APIBase:      apiBase,
+		Capabilities: &config.ModelCapabilities{Images: &acceptsImages},
+	}
+}
+
 func TestFailoverSkipsIncompatibleCandidatesWithoutDroppingActiveContext(t *testing.T) {
 	for _, scenario := range []struct{ name, capabilities, reason string }{
-		{"images", `{"images":false}`, "image"},
-		{"historical-images", `{"images":false}`, "image"},
-		{"tools", `{"tools":false}`, "tool"},
-		{"context", `{"context_window":1}`, "context"},
+		// Image routing drops a model without image support before any attempt,
+		// so only the tool and context checks report a skipped candidate.
+		{"images", `{"images":false}`, ""},
+		{"historical-images", `{"images":false}`, ""},
+		{"tools", `{"images":true,"tools":false}`, "tool"},
+		{"context", `{"images":true,"context_window":1}`, "context"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			calls := 0
@@ -110,9 +123,9 @@ func TestFailoverSkipsIncompatibleCandidatesWithoutDroppingActiveContext(t *test
 			)
 			incompatible.APIBase = skipped.URL
 			al, _ := configuredProviderLoop(t, []config.ModelConfig{
-				{ModelName: "primary", Model: "openai/primary", APIBase: backup.URL},
+				imageCapableModel("primary", backup.URL),
 				incompatible,
-				{ModelName: "backup", Model: "openai/backup", APIBase: backup.URL},
+				imageCapableModel("backup", backup.URL),
 			}, []string{"limited", "backup"})
 			al.registry.GetDefaultAgent().Provider = &nativeSearchFailureProvider{}
 			events := al.SubscribeEvents(64)
@@ -140,7 +153,8 @@ func TestFailoverSkipsIncompatibleCandidatesWithoutDroppingActiveContext(t *test
 							payload.Reason == "incompatible" && strings.Contains(payload.Error, scenario.reason)
 					}
 				default:
-					require.True(t, foundReason, "operator must be told why a candidate was skipped")
+					require.True(t, foundReason || scenario.reason == "",
+						"operator must be told why a candidate was skipped")
 					return
 				}
 			}
@@ -196,8 +210,8 @@ func TestFailoverReplacesTruncatedStreamAndRetainsCompletedWorkInDirectAndInline
 			}))
 			defer backup.Close()
 			al, mb := configuredProviderLoop(t, []config.ModelConfig{
-				{ModelName: "primary", Model: "openai/primary", APIBase: primary.URL},
-				{ModelName: "backup", Model: "openai/backup", APIBase: backup.URL},
+				imageCapableModel("primary", primary.URL),
+				imageCapableModel("backup", backup.URL),
 			}, []string{"backup"})
 			tool := &failoverActionTool{}
 			al.RegisterTool(tool)
@@ -253,8 +267,8 @@ func TestFailoverRetainsConversationResetAndInlineIsolation(t *testing.T) {
 			}))
 			defer backup.Close()
 			al, _ := configuredProviderLoop(t, []config.ModelConfig{
-				{ModelName: "primary", Model: "openai/primary", APIBase: backup.URL},
-				{ModelName: "backup", Model: "openai/backup", APIBase: backup.URL},
+				imageCapableModel("primary", backup.URL),
+				imageCapableModel("backup", backup.URL),
 			}, []string{"backup"})
 			agent := al.registry.GetDefaultAgent()
 			agent.Provider = &recordingProvider{}

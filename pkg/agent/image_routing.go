@@ -44,9 +44,12 @@ func imageCapableCandidates(
 				map[string]any{"model": candidate.Model, "error": err.Error()})
 			continue
 		}
-		if mc.AcceptsImages() {
-			capable = append(capable, candidate)
+		if !mc.AcceptsImages() {
+			logger.InfoCF("agent", "Image routing: skipping model without image support",
+				map[string]any{"model": candidate.Model, "config_name": candidate.ConfigName})
+			continue
 		}
+		capable = append(capable, candidate)
 	}
 	return capable
 }
@@ -60,7 +63,14 @@ func selectImageCandidates(
 	agent *AgentInstance,
 ) (providers.LLMProvider, []providers.FallbackCandidate, string) {
 	if capable := imageCapableCandidates(cfg, agent.Workspace, agent.Candidates); len(capable) > 0 {
-		return chainProvider(agent.Provider, agent.Candidates, capable), capable, resolvedCandidateModel(capable, agent.Model)
+		return chainProvider(
+				agent.Provider,
+				agent.Candidates,
+				capable,
+			), capable, resolvedCandidateModel(
+				capable,
+				agent.Model,
+			)
 	}
 	if agent.ImageProvider != nil {
 		if capable := imageCapableCandidates(cfg, agent.Workspace, agent.ImageCandidates); len(capable) > 0 {

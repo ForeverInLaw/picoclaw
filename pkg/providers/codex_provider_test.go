@@ -37,7 +37,9 @@ func TestBuildCodexParams_BasicMessage(t *testing.T) {
 
 func TestBuildCodexParams_UserImagesBecomeInputImageParts(t *testing.T) {
 	image := "data:image/png;base64,aW1hZ2U="
-	messages := []Message{{Role: "user", Content: "What is this?", Media: []string{image, "data:audio/wav;base64,YQ=="}}}
+	messages := []Message{
+		{Role: "user", Content: "What is this?", Media: []string{image, "data:audio/wav;base64,YQ=="}},
+	}
 
 	params := buildCodexParams(messages, nil, "gpt-4o", map[string]any{}, false)
 	body, err := json.Marshal(params.Input)

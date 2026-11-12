@@ -21,14 +21,13 @@ import (
 )
 
 func TestImageDocumentWithGenericMIMERetainsVisionInput(t *testing.T) {
-	al, cfg, mb, _, cleanup := newTestAgentLoop(t)
+	al, _, mb, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 	defer mb.Close()
 	defer al.Close()
 	p := &recordingProvider{}
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.Provider = p
-	acceptImagesOnTestModel(cfg, agent)
 	image, err := base64.StdEncoding.DecodeString(
 		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0XQAAAAASUVORK5CYII=",
 	)

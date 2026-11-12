@@ -423,7 +423,9 @@ func codexUserContent(msg Message) responses.EasyInputMessageContentUnionParam {
 		return responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.Content)}
 	}
 	if msg.Content != "" {
-		text := responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: msg.Content}}
+		text := responses.ResponseInputContentUnionParam{
+			OfInputText: &responses.ResponseInputTextParam{Text: msg.Content},
+		}
 		parts = append(responses.ResponseInputMessageContentListParam{text}, parts...)
 	}
 	return responses.EasyInputMessageContentUnionParam{OfInputItemContentList: parts}

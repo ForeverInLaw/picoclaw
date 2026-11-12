@@ -34,7 +34,7 @@ func TestPrepareConfigForReadOnlyMountPreservesSource(t *testing.T) {
 		t.Fatal("preparation modified the source sidecar")
 	}
 	cfg, err := config.LoadConfig(output)
-	if err != nil || cfg.Version != 3 || cfg.Channels.Telegram.Token != "sidecar-secret" {
+	if err != nil || cfg.Version != config.CurrentVersion || cfg.Channels.Telegram.Token != "sidecar-secret" {
 		t.Fatalf("prepared config is unusable: %v", err)
 	}
 }
