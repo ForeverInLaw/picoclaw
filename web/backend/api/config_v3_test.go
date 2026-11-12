@@ -47,7 +47,7 @@ func TestDashboardV3ConfigReadsAndEditsNamedInstances(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response["channel_list"] == nil || response["channels"] != nil || string(response["version"]) != "3" {
-		t.Fatalf("dashboard config is not v3: %s", recorder.Body.String())
+	if response["channel_list"] == nil || response["channels"] != nil || string(response["version"]) != "4" {
+		t.Fatalf("dashboard config is not v4: %s", recorder.Body.String())
 	}
 }

@@ -2069,10 +2069,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (result turnRes
 
 	activeProvider, activeCandidates := ts.agent.Provider, ts.agent.Candidates
 	activeModel := resolvedCandidateModel(activeCandidates, ts.agent.Model)
-	if !cfg.IsChannelType(ts.channel, "pico") || len(ts.media) == 0 {
-		activeProvider, activeCandidates, activeModel = al.selectCandidates(ts.agent, ts.userMessage, messages)
+	var resolveCandidateProvider func(context.Context, providers.FallbackCandidate) (providers.LLMProvider, error)
+	// selectChain runs at turn start and again when steering brings in images,
+	// so an image never lands on a chain chosen for text.
+	selectChain := func() {
+		if !cfg.IsChannelType(ts.channel, "pico") || len(ts.media) == 0 {
+			activeProvider, activeCandidates, activeModel = al.selectCandidates(cfg, ts.agent, ts.userMessage, messages)
+		}
+		resolveCandidateProvider = candidateProviderResolver(cfg, ts.agent.Workspace, activeProvider, activeCandidates)
 	}
-	resolveCandidateProvider := candidateProviderResolver(cfg, ts.agent.Workspace, activeProvider, activeCandidates)
+	selectChain()
 
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
@@ -2179,6 +2185,9 @@ turnLoop:
 					TotalContentLen: totalContentLen,
 				},
 			)
+			if requestHasImageInput(resolvedPending) {
+				selectChain()
+			}
 			pendingMessages = nil
 		}
 
@@ -3336,28 +3345,22 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 }
 
 // selectCandidates returns the model candidates and resolved model name to use
-// for a conversation turn. When model routing is configured and the incoming
-// message scores below the complexity threshold, it returns the light model
-// candidates instead of the primary ones.
+// for a conversation turn. A request carrying images goes to the models whose
+// capabilities.images flag is set. Otherwise, when model routing is configured
+// and the incoming message scores below the complexity threshold, it returns
+// the light model candidates instead of the primary ones.
 //
 // The returned (candidates, model) pair is used for all LLM calls within one
 // turn — tool follow-up iterations use the same tier as the initial call so
 // that a multi-step tool chain doesn't switch models mid-way.
 func (al *AgentLoop) selectCandidates(
+	cfg *config.Config,
 	agent *AgentInstance,
 	userMsg string,
 	history []providers.Message,
 ) (provider providers.LLMProvider, candidates []providers.FallbackCandidate, model string) {
-	if messageHasRichMediaInput(history) && agent.ImageProvider != nil && len(agent.ImageCandidates) > 0 {
-		logger.InfoCF("agent", "Model routing: rich media model selected",
-			map[string]any{
-				"agent_id":    agent.ID,
-				"image_model": agent.ImageModel,
-			})
-		return agent.ImageProvider, agent.ImageCandidates, resolvedCandidateModel(
-			agent.ImageCandidates,
-			agent.ImageModel,
-		)
+	if requestHasImageInput(history) {
+		return selectImageCandidates(cfg, agent)
 	}
 
 	if agent.Router == nil || len(agent.LightCandidates) == 0 {
@@ -3386,22 +3389,6 @@ func (al *AgentLoop) selectCandidates(
 		agent.LightCandidates,
 		agent.Router.LightModel(),
 	)
-}
-
-func messageHasRichMediaInput(messages []providers.Message) bool {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role != "user" {
-			continue
-		}
-		for _, mediaRef := range msg.Media {
-			if strings.HasPrefix(mediaRef, "data:image/") {
-				return true
-			}
-		}
-		return false
-	}
-	return false
 }
 
 func sameTargetReplyToMessageID(ctx context.Context, channel, chatID string) string {

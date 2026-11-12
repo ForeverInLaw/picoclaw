@@ -38,6 +38,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
+import { transportCarriesImages } from "./image-input"
 import { ModelCredentialFields } from "./key-pool-model-fields"
 import { ModelProbe } from "./model-probe"
 
@@ -108,6 +109,9 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
   })
   const saving = save.isPending
   const [setAsDefault, setSetAsDefault] = useState(model?.is_default ?? false)
+  const [acceptsImages, setAcceptsImages] = useState(
+    model?.capabilities?.images ?? false,
+  )
   const [error, setError] = useState("")
 
   const setField =
@@ -115,6 +119,7 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
       setForm((f) => ({ ...f, [key]: e.target.value }))
 
   const keyPoolID = selectedKeyPool(form.model, form.authMethod, form.keyPoolID)
+  const carriesImages = transportCarriesImages(form.model)
   const configuration: ModelTestConfiguration | null = model
     ? {
         id: model.id,
@@ -137,7 +142,10 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
           : 0,
         thinking_level: form.thinkingLevel,
         extra_body: model.extra_body,
-        capabilities: model.capabilities,
+        capabilities: {
+          ...model.capabilities,
+          images: carriesImages && acceptsImages,
+        },
       }
     : null
 
@@ -244,6 +252,14 @@ function EditModelForm({ model, open, onClose, onSaved }: EditModelSheetProps) {
                 disabled={isOAuth}
               />
             </Field>
+
+            <SwitchCardField
+              label={t("models.imageInput.label")}
+              hint={t("models.imageInput.description")}
+              checked={carriesImages && acceptsImages}
+              onCheckedChange={setAcceptsImages}
+              disabled={!carriesImages}
+            />
 
             <SwitchCardField
               label={t("models.defaultOnSave.label")}

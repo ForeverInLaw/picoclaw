@@ -32,7 +32,7 @@ func TestWebImageUploadReachesCurrentModelWithText(t *testing.T) {
 }
 
 func runWebImageScenario(t *testing.T, rejectVision bool, channelName string) {
-	al, cfg, mb, _, cleanup := newTestAgentLoop(t)
+	al, cfg, mb, _, cleanup := newImageTestAgentLoop(t)
 	defer cleanup()
 	defer al.Close()
 	defer mb.Close()

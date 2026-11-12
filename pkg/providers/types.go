@@ -157,4 +157,8 @@ func (e *FailoverError) IsTransient() bool {
 // declaring its credentials or endpoint unhealthy.
 type IncompatibleCandidateError struct{ Reason string }
 
+// ReasonImageInputUnsupported marks a candidate skipped because the request
+// carries images and the model or its adapter cannot read them.
+const ReasonImageInputUnsupported = "model does not accept image input"
+
 func (e *IncompatibleCandidateError) Error() string { return "incompatible candidate: " + e.Reason }

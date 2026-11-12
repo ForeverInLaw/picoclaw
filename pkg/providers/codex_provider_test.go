@@ -35,6 +35,25 @@ func TestBuildCodexParams_BasicMessage(t *testing.T) {
 	}
 }
 
+func TestBuildCodexParams_UserImagesBecomeInputImageParts(t *testing.T) {
+	image := "data:image/png;base64,aW1hZ2U="
+	messages := []Message{
+		{Role: "user", Content: "What is this?", Media: []string{image, "data:audio/wav;base64,YQ=="}},
+	}
+
+	params := buildCodexParams(messages, nil, "gpt-4o", map[string]any{}, false)
+	body, err := json.Marshal(params.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := `[{"content":[{"text":"What is this?","type":"input_text"},` +
+		`{"detail":"auto","image_url":"` + image + `","type":"input_image"}],"role":"user"}]`
+	if string(body) != want {
+		t.Fatalf("input = %s\nwant %s", body, want)
+	}
+}
+
 func TestBuildCodexParams_SystemAsInstructions(t *testing.T) {
 	messages := []Message{
 		{Role: "system", Content: "You are helpful"},

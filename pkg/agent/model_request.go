@@ -3,8 +3,6 @@ package agent
 import (
 	"fmt"
 	"maps"
-	"net/url"
-	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/providers"
@@ -72,25 +70,17 @@ func checkCandidateContext(
 	options map[string]any,
 	defaultWindow, outputReserve int,
 ) error {
+	// A candidate outside model_list has no declared capabilities, so it is
+	// treated as text-only with the adapter's default context window.
+	mc, lookupErr := modelConfigForCandidate(cfg, candidate, "")
 	var limits *config.ModelCapabilities
-	if mc, err := modelConfigForCandidate(cfg, candidate, ""); err == nil {
+	if lookupErr == nil {
 		limits = mc.Capabilities
 	}
-	images := false
-	for _, message := range messages {
-		for _, media := range message.Media {
-			parsed, err := url.Parse(media)
-			images = images || strings.HasPrefix(media, "data:image/") ||
-				err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != ""
-		}
-	}
-	if capable, ok := client.(providers.ImageInputCapable); images && ok && !capable.SupportsImageInput() {
-		return &providers.IncompatibleCandidateError{Reason: "provider adapter cannot transmit image input"}
+	if requestHasImageInput(messages) && (lookupErr != nil || !candidateAcceptsImages(mc, client)) {
+		return &providers.IncompatibleCandidateError{Reason: providers.ReasonImageInputUnsupported}
 	}
 	if limits != nil {
-		if images && limits.Images != nil && !*limits.Images {
-			return &providers.IncompatibleCandidateError{Reason: "model does not support required image input"}
-		}
 		requiresTools := len(definitions) > 0 || options["native_search"] == true
 		for _, message := range messages {
 			requiresTools = requiresTools || len(message.ToolCalls) > 0 || message.Role == "tool"

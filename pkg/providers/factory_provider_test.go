@@ -603,3 +603,30 @@ func TestGetDefaultAPIBase_QwenUSAliases(t *testing.T) {
 		}
 	}
 }
+
+// TestTextOnlyTransportsMatchAdapters keeps config.TextOnlyTransport in step
+// with the adapters that cannot transmit images.
+func TestTextOnlyTransportsMatchAdapters(t *testing.T) {
+	carries := func(provider LLMProvider) bool {
+		capable, ok := provider.(ImageInputCapable)
+		return !ok || capable.SupportsImageInput()
+	}
+	for _, protocol := range []string{"antigravity", "claude-cli", "claudecli", "codex-cli", "codexcli", "openai", "anthropic"} {
+		provider, _, err := CreateProviderFromConfig(&config.ModelConfig{
+			ModelName: protocol, Model: protocol + "/model", APIKey: "key",
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", protocol, err)
+		}
+		if carries(provider) == config.TextOnlyTransport(protocol) {
+			t.Errorf("%s: adapter carries images = %v, config.TextOnlyTransport = %v",
+				protocol, carries(provider), config.TextOnlyTransport(protocol))
+		}
+	}
+	// The Copilot constructor dials its CLI server, so its adapter is checked directly.
+	for _, protocol := range []string{"github-copilot", "copilot"} {
+		if carries(&GitHubCopilotProvider{}) || !config.TextOnlyTransport(protocol) {
+			t.Errorf("%s: Copilot transport must be text-only", protocol)
+		}
+	}
+}

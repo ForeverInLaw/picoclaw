@@ -264,6 +264,10 @@
       "setDefault": "Set as default",
       "delete": "Delete model"
     },
+    "imageInput": {
+      "label": "Supports images",
+      "description": "Images from chats are sent to this model. Leave it off for text-only models, and image turns will go to a model that can read them."
+    },
     "defaultOnSave": {
       "label": "Default Model",
       "description": "Automatically set this model as default after saving."

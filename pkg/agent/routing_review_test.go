@@ -115,7 +115,7 @@ func TestRemoteImageInputSkipsIncompatibleConfiguredPrimary(t *testing.T) {
 				)
 			}))
 			defer endpoint.Close()
-			noImages := false
+			noImages, acceptsImages := false, true
 			al, _ := configuredProviderLoop(t, []config.ModelConfig{
 				{
 					ModelName:    "text",
@@ -124,7 +124,13 @@ func TestRemoteImageInputSkipsIncompatibleConfiguredPrimary(t *testing.T) {
 					APIKey:       "text-key",
 					Capabilities: &config.ModelCapabilities{Images: &noImages},
 				},
-				{ModelName: "image", Model: "openai/image", APIBase: endpoint.URL, APIKey: "image-key"},
+				{
+					ModelName:    "image",
+					Model:        "openai/image",
+					APIBase:      endpoint.URL,
+					APIKey:       "image-key",
+					Capabilities: &config.ModelCapabilities{Images: &acceptsImages},
+				},
 			}, []string{"image"})
 			answer, err := al.runAgentLoop(t.Context(), al.registry.GetDefaultAgent(), processOptions{
 				SessionKey: "media", Channel: "cli", ChatID: "media", UserMessage: "describe", Media: []string{media},

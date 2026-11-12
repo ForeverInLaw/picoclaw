@@ -23,3 +23,15 @@ func TestRejectedAttachmentsDoNotClaimTheModelLacksVision(t *testing.T) {
 		require.NotContains(t, guidance, "model does not support")
 	}
 }
+
+func TestImageRequestWithoutImageCapableModelExplainsTheFlag(t *testing.T) {
+	skipped := func() FallbackAttempt {
+		return FallbackAttempt{Skipped: true, Error: &IncompatibleCandidateError{Reason: ReasonImageInputUnsupported}}
+	}
+	err := &FallbackExhaustedError{Attempts: []FallbackAttempt{skipped(), skipped()}}
+
+	require.Contains(t, ErrorGuidance(err), "Supports images")
+
+	err.Attempts = append(err.Attempts, FallbackAttempt{Error: errors.New("upstream failed")})
+	require.NotContains(t, ErrorGuidance(err), "Supports images")
+}

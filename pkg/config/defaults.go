@@ -654,5 +654,7 @@ func DefaultConfig() *Config {
 		},
 	}
 	cfg.EnsureModelIDs()
+	// The templates are current-version models, so their image flags are explicit.
+	cfg.fillImageCapabilities()
 	return cfg
 }

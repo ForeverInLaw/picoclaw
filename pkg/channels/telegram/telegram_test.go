@@ -634,3 +634,23 @@ func TestHandleMessage_GroupIncludesChatLabelMetadata(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "Memory Lab", inbound.Metadata["chat_label"])
 }
+
+func TestPhotoThatFailsToDownloadStaysVisibleToTheModel(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			require.Contains(t, url, "getFile")
+			return nil, errors.New("connection reset")
+		},
+	}
+	ch := newTestChannel(t, caller)
+	message := &telego.Message{Caption: "what does it say?", Photo: []telego.PhotoSize{{FileID: "photo"}}}
+
+	content, media := ch.buildTelegramMessagePayload(t.Context(), message, func(string, string, string) string {
+		t.Fatal("a failed download must not be stored")
+		return ""
+	})
+
+	assert.Equal(t, "what does it say?\n[image: photo, download failed]", content)
+	assert.Empty(t, media)
+	assert.True(t, isTelegramMediaOnlySegment("[image: photo, download failed]"))
+}

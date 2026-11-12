@@ -104,6 +104,7 @@ type Config struct {
 	BuildInfo BuildInfo `json:"build_info,omitempty"`
 
 	security              *SecurityConfig
+	sourceVersion         int
 	legacyChannelBaseline map[string]json.RawMessage
 	configuredModels      []ModelConfig
 	runtimeModelBaseline  json.RawMessage
@@ -925,7 +926,8 @@ type OpenAIProviderConfig struct {
 const LegacyOpenAIAccountID = "codex-default"
 
 // ModelCapabilities declares model limits that cannot be inferred from an endpoint.
-// Nil booleans preserve the protocol adapter's existing compatibility defaults.
+// Images is the only source of image-input support: unset means the model is
+// text-only. A nil Tools flag preserves the adapter's tool-calling default.
 type ModelCapabilities struct {
 	Images        *bool `json:"images,omitempty"`
 	Tools         *bool `json:"tools,omitempty"`
@@ -1367,6 +1369,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Migration keeps credential references (enc://, file://) intact; they resolve below.
 	cfg.EnsureModelIDs()
+	cfg.migrateImageCapabilities()
 	cfg.migrateAnthropicAPIKeysToPools(filepath.Dir(path))
 
 	if err := cfg.resolveCredentials(filepath.Dir(path)); err != nil {
@@ -1570,7 +1573,7 @@ func SaveConfig(path string, cfg *Config) error {
 	return saveConfig(path, cfg, true)
 }
 
-// PrepareConfig writes a standalone v3 snapshot without editing the source or
+// PrepareConfig writes a standalone current-version snapshot without editing the source or
 // any shared security sidecar. Callers choose a separate, new output path.
 func PrepareConfig(source, output string) error {
 	cfg, err := LoadConfig(source)

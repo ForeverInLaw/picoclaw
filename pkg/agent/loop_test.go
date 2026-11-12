@@ -85,68 +85,27 @@ func newTestAgentLoop(
 	return al, cfg, msgBus, provider, func() { os.RemoveAll(tmpDir) }
 }
 
-func TestSelectCandidates_UsesImageModelForImageInput(t *testing.T) {
-	textProvider := &mockProvider{}
-	imageProvider := &recordingProvider{}
-	agent := &AgentInstance{
-		ID:            "main",
-		Model:         "text-alias",
-		Provider:      textProvider,
-		Candidates:    []providers.FallbackCandidate{{Provider: "openai", Model: "resolved-text-model"}},
-		ImageModel:    "vision-alias",
-		ImageProvider: imageProvider,
-		ImageCandidates: []providers.FallbackCandidate{
-			{Provider: "openai", Model: "resolved-vision-model"},
-		},
-	}
-	messages := []providers.Message{
-		{Role: "system", Content: "system"},
-		{Role: "user", Content: "what is in this image?", Media: []string{"data:image/png;base64,abc"}},
-	}
-
-	gotProvider, gotCandidates, gotModel := (&AgentLoop{}).selectCandidates(agent, "what is in this image?", messages)
-
-	if gotProvider != imageProvider {
-		t.Fatalf("provider = %T, want image provider", gotProvider)
-	}
-	if gotModel != "resolved-vision-model" {
-		t.Fatalf("model = %q, want %q", gotModel, "resolved-vision-model")
-	}
-	if len(gotCandidates) != 1 || gotCandidates[0].Model != "resolved-vision-model" {
-		t.Fatalf("candidates = %#v, want resolved-vision-model", gotCandidates)
-	}
+// newImageTestAgentLoop is newTestAgentLoop with a model that reads images, for
+// tests that send image input through the default agent.
+func newImageTestAgentLoop(
+	t *testing.T,
+) (*AgentLoop, *config.Config, *bus.MessageBus, *mockProvider, func()) {
+	t.Helper()
+	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
+	acceptImagesOnTestModel(cfg, al.GetRegistry().GetDefaultAgent())
+	return al, cfg, msgBus, provider, cleanup
 }
 
-func TestSelectCandidates_KeepsTextModelForFileInput(t *testing.T) {
-	textProvider := &mockProvider{}
-	imageProvider := &recordingProvider{}
-	agent := &AgentInstance{
-		ID:            "main",
-		Model:         "text-alias",
-		Provider:      textProvider,
-		Candidates:    []providers.FallbackCandidate{{Provider: "openai", Model: "resolved-text-model"}},
-		ImageModel:    "vision-alias",
-		ImageProvider: imageProvider,
-		ImageCandidates: []providers.FallbackCandidate{
-			{Provider: "openai", Model: "resolved-vision-model"},
-		},
-	}
-	messages := []providers.Message{
-		{Role: "system", Content: "system"},
-		{Role: "user", Content: "please read this [file:/tmp/report.pdf]"},
-	}
-
-	gotProvider, gotCandidates, gotModel := (&AgentLoop{}).selectCandidates(agent, "please read this", messages)
-
-	if gotProvider != textProvider {
-		t.Fatalf("provider = %T, want text provider", gotProvider)
-	}
-	if gotModel != "resolved-text-model" {
-		t.Fatalf("model = %q, want %q", gotModel, "resolved-text-model")
-	}
-	if len(gotCandidates) != 1 || gotCandidates[0].Model != "resolved-text-model" {
-		t.Fatalf("candidates = %#v, want resolved-text-model", gotCandidates)
-	}
+// acceptImagesOnTestModel declares newTestAgentLoop's model image-capable, as a
+// version 4 config would, and points the agent's chain at that entry.
+func acceptImagesOnTestModel(cfg *config.Config, agent *AgentInstance) {
+	acceptsImages := true
+	cfg.ModelList = []config.ModelConfig{{
+		ModelName:    "test-model",
+		Model:        "test-model",
+		Capabilities: &config.ModelCapabilities{Images: &acceptsImages},
+	}}
+	agent.Candidates = []providers.FallbackCandidate{{Model: "test-model", ConfigName: "test-model"}}
 }
 
 func TestSameTargetReplyToMessageID_OnlyForSameChannelAndChat(t *testing.T) {

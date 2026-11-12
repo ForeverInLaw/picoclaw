@@ -104,7 +104,7 @@ func SerializeMessages(messages []Message) []any {
 			})
 		}
 		for _, mediaURL := range m.Media {
-			if isImageURL(mediaURL) {
+			if IsImageURL(mediaURL) {
 				parts = append(parts, map[string]any{
 					"type": "image_url",
 					"image_url": map[string]any{
@@ -143,7 +143,9 @@ func SerializeMessages(messages []Message) []any {
 	return out
 }
 
-func isImageURL(value string) bool {
+// IsImageURL reports whether a media reference is an inline image data URL
+// or a remote http(s) URL that providers pass through as an image.
+func IsImageURL(value string) bool {
 	if strings.HasPrefix(value, "data:image/") {
 		return true
 	}

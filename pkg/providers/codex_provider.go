@@ -354,9 +354,6 @@ func (p *CodexProvider) chat(
 	return reply, nil
 }
 
-// SupportsImageInput remains false until the Responses adapter serializes Media.
-func (p *CodexProvider) SupportsImageInput() bool { return false }
-
 func (p *CodexProvider) GetDefaultModel() string {
 	return codexDefaultModel
 }
@@ -407,6 +404,33 @@ func resolveCodexModel(model string) (string, string) {
 	return codexDefaultModel, "unsupported model family"
 }
 
+// codexUserContent sends text-only turns as a plain string and switches to a
+// Responses content list with input_image parts when the message has images.
+// Image references are data URLs or http(s) URLs, both accepted by image_url.
+func codexUserContent(msg Message) responses.EasyInputMessageContentUnionParam {
+	var parts responses.ResponseInputMessageContentListParam
+	for _, media := range msg.Media {
+		if common.IsImageURL(media) {
+			parts = append(parts, responses.ResponseInputContentUnionParam{
+				OfInputImage: &responses.ResponseInputImageParam{
+					ImageURL: openai.String(media),
+					Detail:   responses.ResponseInputImageDetailAuto,
+				},
+			})
+		}
+	}
+	if len(parts) == 0 {
+		return responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.Content)}
+	}
+	if msg.Content != "" {
+		text := responses.ResponseInputContentUnionParam{
+			OfInputText: &responses.ResponseInputTextParam{Text: msg.Content},
+		}
+		parts = append(responses.ResponseInputMessageContentListParam{text}, parts...)
+	}
+	return responses.EasyInputMessageContentUnionParam{OfInputItemContentList: parts}
+}
+
 func buildCodexParams(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any, enableWebSearch bool,
 ) responses.ResponseNewParams {
@@ -436,7 +460,7 @@ func buildCodexParams(
 				inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 					OfMessage: &responses.EasyInputMessageParam{
 						Role:    responses.EasyInputMessageRoleUser,
-						Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.Content)},
+						Content: codexUserContent(msg),
 					},
 				})
 			}

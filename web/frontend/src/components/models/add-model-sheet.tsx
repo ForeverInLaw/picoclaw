@@ -33,6 +33,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
+import { defaultAcceptsImages, transportCarriesImages } from "./image-input"
 import { ModelCredentialFields } from "./key-pool-model-fields"
 import { ModelProbe } from "./model-probe"
 
@@ -109,6 +110,8 @@ function AddModelForm({
   })
   const saving = save.isPending
   const [setAsDefault, setSetAsDefault] = useState(false)
+  // null follows the protocol default until the user flips the switch.
+  const [imagesChoice, setImagesChoice] = useState<boolean | null>(null)
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof AddForm, string>>
   >({})
@@ -157,6 +160,9 @@ function AddModelForm({
     form.authMethod.trim(),
     form.keyPoolID,
   )
+  const carriesImages = transportCarriesImages(form.model)
+  const acceptsImages =
+    carriesImages && (imagesChoice ?? defaultAcceptsImages(form))
   const configuration: ModelTestConfiguration = {
     model_name: form.modelName.trim(),
     model: form.model.trim(),
@@ -174,6 +180,7 @@ function AddModelForm({
       ? Number(form.requestTimeout)
       : undefined,
     thinking_level: form.thinkingLevel.trim() || undefined,
+    capabilities: { images: acceptsImages },
   }
 
   const handleSave = () => {
@@ -290,6 +297,14 @@ function AddModelForm({
                 placeholder="https://api.example.com/v1"
               />
             </Field>
+
+            <SwitchCardField
+              label={t("models.imageInput.label")}
+              hint={t("models.imageInput.description")}
+              checked={acceptsImages}
+              onCheckedChange={setImagesChoice}
+              disabled={!carriesImages}
+            />
 
             <SwitchCardField
               label={t("models.defaultOnSave.label")}
