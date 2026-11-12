@@ -11,12 +11,16 @@ const imageCapabilityVersion = 4
 
 // migrateImageCapabilities makes image support explicit for configs written
 // before version 4, where an unset flag deferred to the protocol adapter.
-// Anthropic and first-party OpenAI models accept images, as does any model the
-// agent already routes images to. Every other unset entry becomes text-only.
 func (c *Config) migrateImageCapabilities() {
-	if c.sourceVersion >= imageCapabilityVersion {
-		return
+	if c.sourceVersion < imageCapabilityVersion {
+		c.fillImageCapabilities()
 	}
+}
+
+// fillImageCapabilities sets every unset capabilities.images flag. Anthropic
+// and first-party OpenAI models accept images, as does any model the agent
+// already routes images to. Every other unset entry becomes text-only.
+func (c *Config) fillImageCapabilities() {
 	imageRefs := map[string]bool{}
 	for _, ref := range append([]string{c.Agents.Defaults.ImageModel}, c.Agents.Defaults.ImageModelFallbacks...) {
 		if ref = strings.TrimSpace(ref); ref != "" {

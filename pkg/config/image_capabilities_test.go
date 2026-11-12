@@ -70,3 +70,26 @@ func TestVersion4ConfigTreatsUnsetImageFlagAsTextOnly(t *testing.T) {
 		t.Fatal("version 4 model without capabilities.images accepts images")
 	}
 }
+
+func TestDefaultTemplatesSaveWithExplicitImageCapabilities(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := SaveConfig(path, DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := loadImageCapabilityConfig(t, mustRead(t, path))
+
+	accepts := acceptsImagesByName(cfg)
+	if !accepts["claude-sonnet-4.6"] || accepts["llama-3.3-70b"] {
+		t.Fatalf("saved templates lost their image flags: %v", accepts)
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
