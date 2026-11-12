@@ -37,7 +37,7 @@ func (p *contextRetryProvider) Chat(
 }
 
 func TestContextRetryPreservesResolvedCurrentAttachments(t *testing.T) {
-	al, cfg, mb, _, cleanup := newTestAgentLoop(t)
+	al, cfg, mb, _, cleanup := newImageTestAgentLoop(t)
 	defer cleanup()
 	defer mb.Close()
 	defer al.Close()
@@ -81,7 +81,7 @@ func TestContextRetryPreservesResolvedCurrentAttachments(t *testing.T) {
 }
 
 func TestProactiveRebuildRetainsMediaWithoutAccompanyingText(t *testing.T) {
-	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	al, _, mb, _, cleanup := newImageTestAgentLoop(t)
 	defer cleanup()
 	defer mb.Close()
 	defer al.Close()
@@ -148,7 +148,7 @@ var _ LLMInterceptor = (*contextSystemContributor)(nil)
 func TestFinalRequestBudgetsContributorsWithoutDoubleCounting(t *testing.T) {
 	for _, mirror := range []bool{false, true} {
 		t.Run(fmt.Sprintf("mirroredContent=%t", mirror), func(t *testing.T) {
-			al, _, mb, _, cleanup := newTestAgentLoop(t)
+			al, _, mb, _, cleanup := newImageTestAgentLoop(t)
 			defer cleanup()
 			defer mb.Close()
 			defer al.Close()
@@ -253,7 +253,7 @@ func (t *contextResultTool) Execute(ctx context.Context, args map[string]any) *t
 func TestFinalRequestBudgetsToolResultsWithoutReplayingActions(t *testing.T) {
 	for _, oversized := range []bool{false, true} {
 		t.Run(fmt.Sprintf("oversizedActiveTurn=%t", oversized), func(t *testing.T) {
-			al, _, mb, _, cleanup := newTestAgentLoop(t)
+			al, _, mb, _, cleanup := newImageTestAgentLoop(t)
 			defer cleanup()
 			defer mb.Close()
 			defer al.Close()
@@ -310,7 +310,7 @@ func TestFinalRequestBudgetsToolResultsWithoutReplayingActions(t *testing.T) {
 }
 
 func TestContextRetryKeepsCompletedToolResultInActiveTurn(t *testing.T) {
-	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	al, _, mb, _, cleanup := newImageTestAgentLoop(t)
 	defer cleanup()
 	defer mb.Close()
 	defer al.Close()

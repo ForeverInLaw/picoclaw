@@ -21,7 +21,7 @@ import (
 )
 
 func TestImageDocumentWithGenericMIMERetainsVisionInput(t *testing.T) {
-	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	al, _, mb, _, cleanup := newImageTestAgentLoop(t)
 	defer cleanup()
 	defer mb.Close()
 	defer al.Close()

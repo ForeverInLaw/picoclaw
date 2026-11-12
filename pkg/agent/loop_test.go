@@ -82,9 +82,18 @@ func newTestAgentLoop(
 	msgBus = bus.NewMessageBus()
 	provider = &mockProvider{}
 	al = NewAgentLoop(cfg, msgBus, provider)
-	// The mock stands in for a multimodal model, as a version 4 config declares it.
-	acceptImagesOnTestModel(cfg, al.GetRegistry().GetDefaultAgent())
 	return al, cfg, msgBus, provider, func() { os.RemoveAll(tmpDir) }
+}
+
+// newImageTestAgentLoop is newTestAgentLoop with a model that reads images, for
+// tests that send image input through the default agent.
+func newImageTestAgentLoop(
+	t *testing.T,
+) (*AgentLoop, *config.Config, *bus.MessageBus, *mockProvider, func()) {
+	t.Helper()
+	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
+	acceptImagesOnTestModel(cfg, al.GetRegistry().GetDefaultAgent())
+	return al, cfg, msgBus, provider, cleanup
 }
 
 // acceptImagesOnTestModel declares newTestAgentLoop's model image-capable, as a
