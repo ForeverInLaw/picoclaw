@@ -121,7 +121,9 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 			Proxy: http.ProxyURL(proxyURL),
 		}
 	}
-	resp, err := client.Do(req)
+	// Chat file servers drop connections now and then; a lost attachment costs
+	// more than a short retry.
+	resp, err := DoRequestWithRetry(client, req)
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to download file", map[string]any{
 			"error": err.Error(),

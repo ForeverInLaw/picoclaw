@@ -261,46 +261,38 @@ func (c *TelegramChannel) buildTelegramMessagePayload(
 		)
 	}
 
+	// attach records a downloaded file with its marker. A failed download keeps
+	// the marker with a note, so the model reports the attachment as lost
+	// instead of telling the user nothing was sent.
+	attach := func(localPath, filename, contentType, kind string) {
+		marker := "[" + kind + "]"
+		if localPath == "" {
+			marker = "[" + kind + downloadFailedNote + "]"
+		} else {
+			mediaPaths = append(mediaPaths, storeMedia(localPath, filename, contentType))
+		}
+		if content != "" {
+			content += "\n"
+		}
+		content += marker
+	}
 	if len(message.Photo) > 0 {
 		photo := message.Photo[len(message.Photo)-1]
-		photoPath := c.downloadPhoto(ctx, photo.FileID)
-		if photoPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(photoPath, "photo.jpg", "image/jpeg"))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[image: photo]"
-		}
+		attach(c.downloadPhoto(ctx, photo.FileID), "photo.jpg", "image/jpeg", "image: photo")
 	}
 	if message.Voice != nil {
-		voicePath := c.downloadFile(ctx, message.Voice.FileID, ".ogg")
-		if voicePath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(voicePath, "voice.ogg", message.Voice.MimeType))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[voice]"
-		}
+		attach(c.downloadFile(ctx, message.Voice.FileID, ".ogg"), "voice.ogg", message.Voice.MimeType, "voice")
 	}
 	if message.Audio != nil {
-		audioPath := c.downloadFile(ctx, message.Audio.FileID, ".mp3")
-		if audioPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(audioPath, message.Audio.FileName, message.Audio.MimeType))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[audio]"
-		}
+		attach(c.downloadFile(ctx, message.Audio.FileID, ".mp3"), message.Audio.FileName, message.Audio.MimeType, "audio")
 	}
 	if message.Document != nil {
-		docPath := c.downloadFile(ctx, message.Document.FileID, "")
-		if docPath != "" {
-			mediaPaths = append(mediaPaths, storeMedia(docPath, message.Document.FileName, message.Document.MimeType))
-			if content != "" {
-				content += "\n"
-			}
-			content += "[file]"
-		}
+		attach(
+			c.downloadFile(ctx, message.Document.FileID, ""),
+			message.Document.FileName,
+			message.Document.MimeType,
+			"file",
+		)
 	}
 
 	return content, mediaPaths
@@ -596,6 +588,10 @@ func normalizeTelegramBatchContents(contents []string, preferTextFirst bool) []s
 	return normalized
 }
 
+// downloadFailedNote marks an attachment Telegram announced but picoclaw
+// could not download, as in "[image: photo, download failed]".
+const downloadFailedNote = ", download failed"
+
 func isTelegramMediaOnlySegment(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -606,7 +602,7 @@ func isTelegramMediaOnlySegment(content string) bool {
 			trimmed = strings.TrimSpace(trimmed[idx+2:])
 		}
 	}
-	switch trimmed {
+	switch strings.Replace(trimmed, downloadFailedNote+"]", "]", 1) {
 	case "[image: photo]", "[voice]", "[audio]", "[file]":
 		return true
 	default:
