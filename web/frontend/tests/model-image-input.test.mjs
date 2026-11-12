@@ -21,6 +21,12 @@ test("new models default the image switch from their protocol and endpoint", asy
   )
   assert.equal(defaultAcceptsImages(target("groq/llama-3.3-70b")), false)
 
-  assert.equal(transportCarriesImages("claude-cli/claude-code"), false)
+  for (const model of [
+    "claude-cli/x",
+    "claudecli/x",
+    "codexcli/x",
+    "copilot/x",
+  ])
+    assert.equal(transportCarriesImages(model), false)
   assert.equal(transportCarriesImages("openai/zai-org/GLM-5.3-Flash"), true)
 })

@@ -60,14 +60,28 @@ func selectImageCandidates(
 	agent *AgentInstance,
 ) (providers.LLMProvider, []providers.FallbackCandidate, string) {
 	if capable := imageCapableCandidates(cfg, agent.Workspace, agent.Candidates); len(capable) > 0 {
-		return agent.Provider, capable, resolvedCandidateModel(capable, agent.Model)
+		return chainProvider(agent.Provider, agent.Candidates, capable), capable, resolvedCandidateModel(capable, agent.Model)
 	}
 	if agent.ImageProvider != nil {
 		if capable := imageCapableCandidates(cfg, agent.Workspace, agent.ImageCandidates); len(capable) > 0 {
 			logger.InfoCF("agent", "Model routing: image model selected",
 				map[string]any{"agent_id": agent.ID, "image_model": agent.ImageModel})
-			return agent.ImageProvider, capable, resolvedCandidateModel(capable, agent.ImageModel)
+			provider := chainProvider(agent.ImageProvider, agent.ImageCandidates, capable)
+			return provider, capable, resolvedCandidateModel(capable, agent.ImageModel)
 		}
 	}
 	return agent.Provider, agent.Candidates, resolvedCandidateModel(agent.Candidates, agent.Model)
+}
+
+// chainProvider keeps a chain's provider only while it still serves the chain's
+// first candidate. Once filtering drops that model, nil makes every remaining
+// candidate resolve its own provider from model_list.
+func chainProvider(
+	provider providers.LLMProvider,
+	chain, capable []providers.FallbackCandidate,
+) providers.LLMProvider {
+	if len(chain) > 0 && capable[0] == chain[0] {
+		return provider
+	}
+	return nil
 }

@@ -1578,7 +1578,7 @@ func SaveConfig(path string, cfg *Config) error {
 	return saveConfig(path, cfg, true)
 }
 
-// PrepareConfig writes a standalone v3 snapshot without editing the source or
+// PrepareConfig writes a standalone current-version snapshot without editing the source or
 // any shared security sidecar. Callers choose a separate, new output path.
 func PrepareConfig(source, output string) error {
 	cfg, err := LoadConfig(source)

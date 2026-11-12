@@ -2069,10 +2069,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (result turnRes
 
 	activeProvider, activeCandidates := ts.agent.Provider, ts.agent.Candidates
 	activeModel := resolvedCandidateModel(activeCandidates, ts.agent.Model)
-	if !cfg.IsChannelType(ts.channel, "pico") || len(ts.media) == 0 {
-		activeProvider, activeCandidates, activeModel = al.selectCandidates(cfg, ts.agent, ts.userMessage, messages)
+	var resolveCandidateProvider func(context.Context, providers.FallbackCandidate) (providers.LLMProvider, error)
+	// selectChain runs at turn start and again when steering brings in images,
+	// so an image never lands on a chain chosen for text.
+	selectChain := func() {
+		if !cfg.IsChannelType(ts.channel, "pico") || len(ts.media) == 0 {
+			activeProvider, activeCandidates, activeModel = al.selectCandidates(cfg, ts.agent, ts.userMessage, messages)
+		}
+		resolveCandidateProvider = candidateProviderResolver(cfg, ts.agent.Workspace, activeProvider, activeCandidates)
 	}
-	resolveCandidateProvider := candidateProviderResolver(cfg, ts.agent.Workspace, activeProvider, activeCandidates)
+	selectChain()
 
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
@@ -2179,6 +2185,9 @@ turnLoop:
 					TotalContentLen: totalContentLen,
 				},
 			)
+			if requestHasImageInput(resolvedPending) {
+				selectChain()
+			}
 			pendingMessages = nil
 		}
 

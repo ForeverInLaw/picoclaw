@@ -45,8 +45,9 @@ func TestImageTurnKeepsOnlyImageCapableModelsFromPrimaryChain(t *testing.T) {
 
 	provider, candidates, model := (&AgentLoop{}).selectCandidates(cfg, agent, "what is this?", imageTurn)
 
-	if provider != agent.Provider || model != "vision" || len(candidates) != 1 || candidates[0].Model != "vision" {
-		t.Fatalf("got provider %T, model %q, candidates %#v; want primary provider serving vision", provider, model, candidates)
+	// The primary provider served "text", so "vision" resolves its own provider.
+	if provider != nil || model != "vision" || len(candidates) != 1 || candidates[0].Model != "vision" {
+		t.Fatalf("got provider %T, model %q, candidates %#v; want vision alone with its own provider", provider, model, candidates)
 	}
 }
 

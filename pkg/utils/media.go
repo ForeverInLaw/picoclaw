@@ -121,40 +121,21 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 			Proxy: http.ProxyURL(proxyURL),
 		}
 	}
-	// Chat file servers drop connections now and then; a lost attachment costs
-	// more than a short retry.
-	resp, err := DoRequestWithRetry(client, req)
+	// Chat file servers drop connections now and then, mid-body included; a lost
+	// attachment costs more than a short retry of the whole download.
+	for attempt := range maxRetries {
+		if attempt > 0 {
+			time.Sleep(retryDelayUnit * time.Duration(attempt))
+		}
+		var retryable bool
+		if retryable, err = downloadOnce(client, req, localPath); err == nil || !retryable {
+			break
+		}
+	}
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to download file", map[string]any{
 			"error": err.Error(),
 			"url":   urlStr,
-		})
-		return ""
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		logger.ErrorCF(opts.LoggerPrefix, "File download returned non-200 status", map[string]any{
-			"status": resp.StatusCode,
-			"url":    urlStr,
-		})
-		return ""
-	}
-
-	out, err := os.Create(localPath)
-	if err != nil {
-		logger.ErrorCF(opts.LoggerPrefix, "Failed to create local file", map[string]any{
-			"error": err.Error(),
-		})
-		return ""
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		out.Close()
-		os.Remove(localPath)
-		logger.ErrorCF(opts.LoggerPrefix, "Failed to write file", map[string]any{
-			"error": err.Error(),
 		})
 		return ""
 	}
@@ -164,6 +145,32 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 	})
 
 	return localPath
+}
+
+// downloadOnce writes one response body to localPath and removes a partial
+// file. retryable reports whether another attempt could succeed.
+func downloadOnce(client *http.Client, req *http.Request, localPath string) (retryable bool, err error) {
+	resp, err := client.Do(req)
+	if err != nil {
+		return true, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return shouldRetry(resp.StatusCode), fmt.Errorf("download returned status %d", resp.StatusCode)
+	}
+	out, err := os.Create(localPath)
+	if err != nil {
+		return false, err
+	}
+	_, err = io.Copy(out, resp.Body)
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(localPath)
+		return true, err
+	}
+	return false, nil
 }
 
 // DownloadFileSimple is a simplified version of DownloadFile without options
