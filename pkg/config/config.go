@@ -979,11 +979,6 @@ type ModelConfig struct {
 	keyPool *KeyPool
 }
 
-// AcceptsImages reports whether image input may be sent to this model.
-func (c *ModelConfig) AcceptsImages() bool {
-	return c != nil && c.Capabilities != nil && c.Capabilities.Images != nil && *c.Capabilities.Images
-}
-
 const DefaultModelInactivityTimeout = 60 * time.Second
 
 // InactivityTimeout is the maximum wait without decoded model progress.

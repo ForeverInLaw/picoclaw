@@ -1,6 +1,5 @@
-// Protocols whose adapters cannot carry image payloads over their transport
-// (see SupportsImageInput in pkg/providers). Their image switch stays off.
-// Aliases follow CreateProviderFromConfig in pkg/providers/factory_provider.go.
+// Mirrors TextOnlyTransport in pkg/config/image_capabilities.go: protocols,
+// aliases included, whose transport cannot carry images. Their switch stays off.
 const TEXT_ONLY_PROTOCOLS = new Set([
   "claude-cli",
   "claudecli",

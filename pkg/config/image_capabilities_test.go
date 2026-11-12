@@ -93,3 +93,12 @@ func mustRead(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+func TestTextOnlyTransportIgnoresImageFlag(t *testing.T) {
+	accepts := true
+	m := ModelConfig{Model: "claudecli/claude-code", Capabilities: &ModelCapabilities{Images: &accepts}}
+
+	if m.AcceptsImages() {
+		t.Fatal("a CLI transport accepted images because of its flag")
+	}
+}

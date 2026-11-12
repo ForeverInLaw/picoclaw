@@ -9,6 +9,38 @@ import (
 // is written explicitly for every model entry.
 const imageCapabilityVersion = 4
 
+// textOnlyTransports lists the protocols, aliases included, whose adapters
+// cannot carry image payloads (SupportsImageInput is false in pkg/providers).
+var textOnlyTransports = map[string]bool{
+	"antigravity":    true,
+	"claude-cli":     true,
+	"claudecli":      true,
+	"codex-cli":      true,
+	"codexcli":       true,
+	"github-copilot": true,
+	"copilot":        true,
+}
+
+// TextOnlyTransport reports whether a protocol's adapter cannot carry images.
+func TextOnlyTransport(protocol string) bool { return textOnlyTransports[protocol] }
+
+// modelProtocol returns the protocol prefix of a model reference; an
+// unprefixed model uses the OpenAI protocol.
+func modelProtocol(model string) string {
+	protocol, _, found := strings.Cut(strings.TrimSpace(model), "/")
+	if !found {
+		return "openai"
+	}
+	return protocol
+}
+
+// AcceptsImages reports whether image input may be sent to this model: its
+// flag is set and its transport can carry images.
+func (c *ModelConfig) AcceptsImages() bool {
+	return c != nil && c.Capabilities != nil && c.Capabilities.Images != nil && *c.Capabilities.Images &&
+		!TextOnlyTransport(modelProtocol(c.Model))
+}
+
 // migrateImageCapabilities makes image support explicit for configs written
 // before version 4, where an unset flag deferred to the protocol adapter.
 func (c *Config) migrateImageCapabilities() {
@@ -47,11 +79,7 @@ func (c *Config) fillImageCapabilities() {
 // whose current models all take image input. OpenAI-compatible third-party
 // endpoints are excluded because the protocol says nothing about the model.
 func hasNativeImageInput(m *ModelConfig) bool {
-	protocol, _, found := strings.Cut(m.Model, "/")
-	if !found {
-		protocol = "openai"
-	}
-	switch protocol {
+	switch modelProtocol(m.Model) {
 	case "anthropic":
 		return true
 	case "openai":
