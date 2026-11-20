@@ -385,13 +385,15 @@ func TestDrainBusLimitsObservedChatterSeparatelyFromRequests(t *testing.T) {
 		return <-done
 	}
 
-	if queued := drain(pendingLoad{answerable: maxPendingRequests}); len(queued) != 1 || queued[0].Content != "chatter" {
+	queued := drain(pendingLoad{answerable: maxPendingRequests})
+	if len(queued) != 1 || queued[0].Content != "chatter" {
 		t.Fatalf("full request capacity queued %+v, want only the chatter", queued)
 	}
 	if busy := finalOutbound(t, mb); busy.ChatID != request.ChatID {
 		t.Fatalf("busy reply went to %q, want %q", busy.ChatID, request.ChatID)
 	}
-	if queued := drain(pendingLoad{observed: maxPendingObserved}); len(queued) != 1 || queued[0].Content != "request" {
+	queued = drain(pendingLoad{observed: maxPendingObserved})
+	if len(queued) != 1 || queued[0].Content != "request" {
 		t.Fatalf("full observed capacity queued %+v, want only the request", queued)
 	}
 }
