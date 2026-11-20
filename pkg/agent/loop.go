@@ -475,7 +475,8 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			drainDone = done
 			// An observed message has no answer to steer, so its arrivals keep their own envelopes.
 			steer := !isObserveOnlyMessage(msg)
-			go func() { done <- al.drainBus(drainCtx, ctx, activeScope, activeAgentID, len(queued), steer) }()
+			pending := countAnswerableMessages(queued)
+			go func() { done <- al.drainBus(drainCtx, ctx, activeScope, activeAgentID, pending, steer) }()
 		}
 
 		// Process message
@@ -647,6 +648,7 @@ func (al *AgentLoop) drainBus(
 	steer bool,
 ) []bus.InboundMessage {
 	var queued []bus.InboundMessage
+	answerable := 0
 	for {
 		var msg bus.InboundMessage
 		select {
@@ -666,9 +668,13 @@ func (al *AgentLoop) drainBus(
 		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
 		if !steer || !scopeOK || msgScope != activeScope || isInlineMessage(msg) || isObserveOnlyMessage(msg) ||
 			strings.Contains(activeScope, ":telegram:inline:user:") {
-			if pending+len(queued) >= maxPendingRequests {
-				al.rejectBusyRequest(requestCtx, msg)
-				continue
+			// Observed messages need no model call or reply, so they bypass the request capacity.
+			if !isObserveOnlyMessage(msg) {
+				if pending+answerable >= maxPendingRequests {
+					al.rejectBusyRequest(requestCtx, msg)
+					continue
+				}
+				answerable++
 			}
 			queued = append(queued, msg)
 			continue
@@ -1661,6 +1667,17 @@ func (al *AgentLoop) messageConversationKey(
 // conversation record, such as group chatter that does not address the bot.
 func isObserveOnlyMessage(msg bus.InboundMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(msg.Metadata["observe_only"]), "true")
+}
+
+// countAnswerableMessages counts queued messages that hold request capacity.
+func countAnswerableMessages(msgs []bus.InboundMessage) int {
+	count := 0
+	for _, msg := range msgs {
+		if !isObserveOnlyMessage(msg) {
+			count++
+		}
+	}
+	return count
 }
 
 func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, string, bool) {
