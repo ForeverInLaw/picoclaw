@@ -366,29 +366,33 @@ func TestRunRecordsGroupChatterDuringActiveTurnWithoutAnsweringIt(t *testing.T) 
 	}
 }
 
-func TestDrainBusKeepsObservedChatterWhenRequestCapacityIsFull(t *testing.T) {
+func TestDrainBusLimitsObservedChatterSeparatelyFromRequests(t *testing.T) {
 	al, _, mb, _, cleanup := newTestAgentLoop(t)
 	t.Cleanup(cleanup)
-	chatter := directIngressMessage("chatter past capacity")
+	chatter := directIngressMessage("chatter")
 	chatter.ChatID, chatter.Peer = "-123", bus.Peer{Kind: "group", ID: "-123"}
 	chatter.Metadata = map[string]string{"observe_only": "true"}
-	request := directIngressMessage("request past capacity")
+	request := directIngressMessage("request")
 	request.SenderID, request.ChatID, request.Peer = "telegram:43", "43", bus.Peer{Kind: "direct", ID: "43"}
-	publishIncoming(t, mb, chatter)
-	publishIncoming(t, mb, request)
+	drain := func(load pendingLoad) []bus.InboundMessage {
+		publishIncoming(t, mb, chatter)
+		publishIncoming(t, mb, request)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan []bus.InboundMessage, 1)
+		go func() { done <- al.drainBus(ctx, ctx, "active-scope", "main", load, true) }()
+		awaitInboundDrain(t, mb)
+		cancel()
+		return <-done
+	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan []bus.InboundMessage, 1)
-	go func() { done <- al.drainBus(ctx, ctx, "active-scope", "main", maxPendingRequests, true) }()
-	awaitInboundDrain(t, mb)
-	cancel()
-	queued := <-done
-
-	if len(queued) != 1 || queued[0].Content != chatter.Content {
-		t.Fatalf("queued = %+v, want only the observed chatter", queued)
+	if queued := drain(pendingLoad{answerable: maxPendingRequests}); len(queued) != 1 || queued[0].Content != "chatter" {
+		t.Fatalf("full request capacity queued %+v, want only the chatter", queued)
 	}
 	if busy := finalOutbound(t, mb); busy.ChatID != request.ChatID {
 		t.Fatalf("busy reply went to %q, want %q", busy.ChatID, request.ChatID)
+	}
+	if queued := drain(pendingLoad{observed: maxPendingObserved}); len(queued) != 1 || queued[0].Content != "request" {
+		t.Fatalf("full observed capacity queued %+v, want only the request", queued)
 	}
 }
 

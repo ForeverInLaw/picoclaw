@@ -112,6 +112,7 @@ type continuationTarget struct {
 
 const (
 	maxPendingRequests        = 64
+	maxPendingObserved        = 512
 	defaultResponse           = "The model returned an empty response. This may indicate a provider error or token limit."
 	toolLimitResponse         = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
 	sessionKeyAgentPrefix     = "agent:"
@@ -475,8 +476,8 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			drainDone = done
 			// An observed message has no answer to steer, so its arrivals keep their own envelopes.
 			steer := !isObserveOnlyMessage(msg)
-			pending := countAnswerableMessages(queued)
-			go func() { done <- al.drainBus(drainCtx, ctx, activeScope, activeAgentID, pending, steer) }()
+			load := pendingLoadOf(queued)
+			go func() { done <- al.drainBus(drainCtx, ctx, activeScope, activeAgentID, load, steer) }()
 		}
 
 		// Process message
@@ -638,17 +639,45 @@ func (al *AgentLoop) drainBusToSteering(
 	if len(inherited) > 0 {
 		pending = inherited[0]
 	}
-	return al.drainBus(ctx, ctx, activeScope, activeAgentID, pending, true)
+	return al.drainBus(ctx, ctx, activeScope, activeAgentID, pendingLoad{answerable: pending}, true)
+}
+
+// pendingLoad counts queued messages against their separate capacities:
+// requests that need an answer, and observed messages kept only for the record.
+type pendingLoad struct{ answerable, observed int }
+
+func pendingLoadOf(msgs []bus.InboundMessage) pendingLoad {
+	var load pendingLoad
+	for _, msg := range msgs {
+		if isObserveOnlyMessage(msg) {
+			load.observed++
+		} else {
+			load.answerable++
+		}
+	}
+	return load
+}
+
+// admit reserves capacity for msg, or reports that its queue is full.
+func (load *pendingLoad) admit(msg bus.InboundMessage) bool {
+	count, limit := &load.answerable, maxPendingRequests
+	if isObserveOnlyMessage(msg) {
+		count, limit = &load.observed, maxPendingObserved
+	}
+	if *count >= limit {
+		return false
+	}
+	*count++
+	return true
 }
 
 func (al *AgentLoop) drainBus(
 	ctx, requestCtx context.Context,
 	activeScope, activeAgentID string,
-	pending int,
+	load pendingLoad,
 	steer bool,
 ) []bus.InboundMessage {
 	var queued []bus.InboundMessage
-	answerable := 0
 	for {
 		var msg bus.InboundMessage
 		select {
@@ -668,13 +697,9 @@ func (al *AgentLoop) drainBus(
 		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
 		if !steer || !scopeOK || msgScope != activeScope || isInlineMessage(msg) || isObserveOnlyMessage(msg) ||
 			strings.Contains(activeScope, ":telegram:inline:user:") {
-			// Observed messages need no model call or reply, so they bypass the request capacity.
-			if !isObserveOnlyMessage(msg) {
-				if pending+answerable >= maxPendingRequests {
-					al.rejectBusyRequest(requestCtx, msg)
-					continue
-				}
-				answerable++
+			if !load.admit(msg) {
+				al.rejectBusyRequest(requestCtx, msg)
+				continue
 			}
 			queued = append(queued, msg)
 			continue
@@ -706,7 +731,12 @@ func (al *AgentLoop) drainBus(
 }
 
 func (al *AgentLoop) rejectBusyRequest(ctx context.Context, msg bus.InboundMessage) {
-	if isObserveOnlyMessage(msg) || constants.IsInternalChannel(msg.Channel) {
+	if isObserveOnlyMessage(msg) {
+		logger.WarnCF("agent", "Dropped observed message: pending queue is full",
+			map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "message_id": msg.MessageID})
+		return
+	}
+	if constants.IsInternalChannel(msg.Channel) {
 		return
 	}
 	// A congested answer channel must not keep reset commands behind busy replies.
@@ -1667,17 +1697,6 @@ func (al *AgentLoop) messageConversationKey(
 // conversation record, such as group chatter that does not address the bot.
 func isObserveOnlyMessage(msg bus.InboundMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(msg.Metadata["observe_only"]), "true")
-}
-
-// countAnswerableMessages counts queued messages that hold request capacity.
-func countAnswerableMessages(msgs []bus.InboundMessage) int {
-	count := 0
-	for _, msg := range msgs {
-		if !isObserveOnlyMessage(msg) {
-			count++
-		}
-	}
-	return count
 }
 
 func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, string, bool) {
