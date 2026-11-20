@@ -331,6 +331,41 @@ func TestRunBoundsAggregatePendingRequestsAndKeepsResetResponsive(t *testing.T) 
 	}
 }
 
+func TestRunRecordsGroupChatterDuringActiveTurnWithoutAnsweringIt(t *testing.T) {
+	al, mb, provider := startIngressLoop(t)
+	addressed := directIngressMessage("bot, answer me")
+	addressed.ChatID, addressed.Peer, addressed.MessageID = "-123", bus.Peer{Kind: "group", ID: "-123"}, "31"
+	chatter := addressed
+	chatter.SenderID, chatter.MessageID, chatter.Content = "telegram:77", "32", "unrelated chatter"
+	chatter.Metadata = map[string]string{"observe_only": "true"}
+
+	publishIncoming(t, mb, addressed)
+	request := inboundRequest(t, provider)
+	publishIncoming(t, mb, chatter)
+	awaitInboundDrain(t, mb)
+	close(request.release)
+
+	if out := finalOutbound(t, mb); out.ReplyToMessageID != addressed.MessageID {
+		t.Fatalf("reply target = %q, want %q", out.ReplyToMessageID, addressed.MessageID)
+	}
+	scope, _, _ := al.resolveSteeringTarget(chatter)
+	agent := al.registry.GetDefaultAgent()
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(conversationInput(agent.Sessions.GetHistory(scope)), chatter.Content) {
+		if time.Now().After(deadline) {
+			t.Fatal("observed chatter was not recorded in the group history")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case extra := <-provider.requests:
+		t.Fatalf("observed chatter triggered a model call: %q", extra.messages[len(extra.messages)-1].Content)
+	case out := <-mb.OutboundChan():
+		t.Fatalf("observed chatter produced a reply: %+v", out)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestRunQueuesSelectedInlineRequestsWithTheirOwnTransportAndContext(t *testing.T) {
 	cases := []struct {
 		name          string

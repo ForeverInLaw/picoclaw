@@ -473,7 +473,9 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			drainCancel = cancel
 			done := make(chan []bus.InboundMessage, 1)
 			drainDone = done
-			go func() { done <- al.drainBus(drainCtx, ctx, activeScope, activeAgentID, len(queued), true) }()
+			// An observed message has no answer to steer, so its arrivals keep their own envelopes.
+			steer := !isObserveOnlyMessage(msg)
+			go func() { done <- al.drainBus(drainCtx, ctx, activeScope, activeAgentID, len(queued), steer) }()
 		}
 
 		// Process message
@@ -662,7 +664,7 @@ func (al *AgentLoop) drainBus(
 		}
 
 		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
-		if !steer || !scopeOK || msgScope != activeScope || isInlineMessage(msg) ||
+		if !steer || !scopeOK || msgScope != activeScope || isInlineMessage(msg) || isObserveOnlyMessage(msg) ||
 			strings.Contains(activeScope, ":telegram:inline:user:") {
 			if pending+len(queued) >= maxPendingRequests {
 				al.rejectBusyRequest(requestCtx, msg)
@@ -698,7 +700,7 @@ func (al *AgentLoop) drainBus(
 }
 
 func (al *AgentLoop) rejectBusyRequest(ctx context.Context, msg bus.InboundMessage) {
-	if strings.EqualFold(msg.Metadata["observe_only"], "true") || constants.IsInternalChannel(msg.Channel) {
+	if isObserveOnlyMessage(msg) || constants.IsInternalChannel(msg.Channel) {
 		return
 	}
 	// A congested answer channel must not keep reset commands behind busy replies.
@@ -1479,7 +1481,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	// For audio messages the placeholder was deferred by the channel.
 	// Now that transcription (and optional feedback) is done, send it.
-	observeOnly := strings.EqualFold(strings.TrimSpace(msg.Metadata["observe_only"]), "true")
+	observeOnly := isObserveOnlyMessage(msg)
 
 	if hadAudio && !observeOnly && al.channelManager != nil {
 		al.channelManager.SendPlaceholder(bus.WithStreamReplyTo(ctx, msg.MessageID), msg.Channel, msg.ChatID)
@@ -1653,6 +1655,12 @@ func (al *AgentLoop) messageConversationKey(
 		return route.SessionKey, nil
 	}
 	return resolveScopeKey(route, msg.SessionKey), nil
+}
+
+// isObserveOnlyMessage reports whether a channel delivered msg only for the
+// conversation record, such as group chatter that does not address the bot.
+func isObserveOnlyMessage(msg bus.InboundMessage) bool {
+	return strings.EqualFold(strings.TrimSpace(msg.Metadata["observe_only"]), "true")
 }
 
 func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, string, bool) {
