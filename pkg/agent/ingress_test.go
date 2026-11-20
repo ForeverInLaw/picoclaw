@@ -331,6 +331,73 @@ func TestRunBoundsAggregatePendingRequestsAndKeepsResetResponsive(t *testing.T) 
 	}
 }
 
+func TestRunRecordsGroupChatterDuringActiveTurnWithoutAnsweringIt(t *testing.T) {
+	al, mb, provider := startIngressLoop(t)
+	addressed := directIngressMessage("bot, answer me")
+	addressed.ChatID, addressed.Peer, addressed.MessageID = "-123", bus.Peer{Kind: "group", ID: "-123"}, "31"
+	chatter := addressed
+	chatter.SenderID, chatter.MessageID, chatter.Content = "telegram:77", "32", "unrelated chatter"
+	chatter.Metadata = map[string]string{"observe_only": "true"}
+
+	publishIncoming(t, mb, addressed)
+	request := inboundRequest(t, provider)
+	publishIncoming(t, mb, chatter)
+	awaitInboundDrain(t, mb)
+	close(request.release)
+
+	if out := finalOutbound(t, mb); out.ReplyToMessageID != addressed.MessageID {
+		t.Fatalf("reply target = %q, want %q", out.ReplyToMessageID, addressed.MessageID)
+	}
+	scope, _, _ := al.resolveSteeringTarget(chatter)
+	agent := al.registry.GetDefaultAgent()
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(conversationInput(agent.Sessions.GetHistory(scope)), chatter.Content) {
+		if time.Now().After(deadline) {
+			t.Fatal("observed chatter was not recorded in the group history")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case extra := <-provider.requests:
+		t.Fatalf("observed chatter triggered a model call: %q", extra.messages[len(extra.messages)-1].Content)
+	case out := <-mb.OutboundChan():
+		t.Fatalf("observed chatter produced a reply: %+v", out)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestDrainBusLimitsObservedChatterSeparatelyFromRequests(t *testing.T) {
+	al, _, mb, _, cleanup := newTestAgentLoop(t)
+	t.Cleanup(cleanup)
+	chatter := directIngressMessage("chatter")
+	chatter.ChatID, chatter.Peer = "-123", bus.Peer{Kind: "group", ID: "-123"}
+	chatter.Metadata = map[string]string{"observe_only": "true"}
+	request := directIngressMessage("request")
+	request.SenderID, request.ChatID, request.Peer = "telegram:43", "43", bus.Peer{Kind: "direct", ID: "43"}
+	drain := func(load pendingLoad) []bus.InboundMessage {
+		publishIncoming(t, mb, chatter)
+		publishIncoming(t, mb, request)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan []bus.InboundMessage, 1)
+		go func() { done <- al.drainBus(ctx, ctx, "active-scope", "main", load, true) }()
+		awaitInboundDrain(t, mb)
+		cancel()
+		return <-done
+	}
+
+	queued := drain(pendingLoad{answerable: maxPendingRequests})
+	if len(queued) != 1 || queued[0].Content != "chatter" {
+		t.Fatalf("full request capacity queued %+v, want only the chatter", queued)
+	}
+	if busy := finalOutbound(t, mb); busy.ChatID != request.ChatID {
+		t.Fatalf("busy reply went to %q, want %q", busy.ChatID, request.ChatID)
+	}
+	queued = drain(pendingLoad{observed: maxPendingObserved})
+	if len(queued) != 1 || queued[0].Content != "request" {
+		t.Fatalf("full observed capacity queued %+v, want only the request", queued)
+	}
+}
+
 func TestRunQueuesSelectedInlineRequestsWithTheirOwnTransportAndContext(t *testing.T) {
 	cases := []struct {
 		name          string
